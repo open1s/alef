@@ -32,6 +32,9 @@ pub fn extract(config: &SkifConfig, config_path: &Path, clean: bool) -> anyhow::
     // Replace references to types not in the API surface with String
     sanitize_unknown_types(&mut api);
 
+    // Deduplicate types, enums, and functions by name
+    dedup_api_surface(&mut api);
+
     cache::write_ir_cache(&api, &source_hash)?;
     info!(
         "Extracted {} types, {} functions, {} enums",
@@ -492,6 +495,30 @@ fn sanitize_type_ref(ty: &mut TypeRef, known_types: &HashSet<String>, known_enum
         }
         _ => {}
     }
+}
+
+/// Deduplicate API surface items by name to prevent conflicting definitions.
+/// This resolves:
+/// 1. Type-enum collisions: If a name exists in both types and enums, keep only the enum
+/// 2. Duplicate types: Keep only the first occurrence of each type name
+/// 3. Duplicate enums: Keep only the first occurrence of each enum name
+/// 4. Duplicate functions: Keep only the first occurrence of each function name
+fn dedup_api_surface(api: &mut ApiSurface) {
+    // Remove types that collide with enums (enums win)
+    let enum_names: HashSet<String> = api.enums.iter().map(|e| e.name.clone()).collect();
+    api.types.retain(|t| !enum_names.contains(&t.name));
+
+    // Dedup types by name (keep first)
+    let mut seen_types: HashSet<String> = HashSet::new();
+    api.types.retain(|t| seen_types.insert(t.name.clone()));
+
+    // Dedup enums by name (keep first)
+    let mut seen_enums: HashSet<String> = HashSet::new();
+    api.enums.retain(|e| seen_enums.insert(e.name.clone()));
+
+    // Dedup functions by name (keep first)
+    let mut seen_fns: HashSet<String> = HashSet::new();
+    api.functions.retain(|f| seen_fns.insert(f.name.clone()));
 }
 
 fn apply_filters(mut api: ApiSurface, config: &SkifConfig) -> ApiSurface {
