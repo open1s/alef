@@ -67,8 +67,8 @@ impl Backend for NapiBackend {
         builder.add_import(&core_import);
 
         // Clippy allows for generated code
-        builder.add_item("#![allow(clippy::too_many_arguments)]");
-        builder.add_item("#![allow(clippy::missing_errors_doc)]");
+        builder.add_inner_attribute("allow(clippy::too_many_arguments)");
+        builder.add_inner_attribute("allow(clippy::missing_errors_doc)");
 
         // Custom module declarations (NAPI auto-exports, no explicit registration needed)
         let custom_mods = config.custom_modules.for_language(Language::Node);

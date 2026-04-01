@@ -83,9 +83,9 @@ impl Backend for Pyo3Backend {
             builder.add_import("std::sync::Arc");
         }
 
-        // Clippy allows for generated code
-        builder.add_item("#![allow(clippy::too_many_arguments)]");
-        builder.add_item("#![allow(clippy::missing_errors_doc)]");
+        // Clippy allows for generated FFI code
+        builder.add_inner_attribute("allow(clippy::too_many_arguments)");
+        builder.add_inner_attribute("allow(clippy::missing_errors_doc)");
 
         // Custom module declarations
         let custom_mods = config.custom_modules.for_language(Language::Python);

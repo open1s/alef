@@ -23,6 +23,17 @@ impl RustFileBuilder {
         self
     }
 
+    /// Add a crate-level inner attribute (e.g., `#![allow(clippy::...)]`).
+    /// These are placed at the very top of the file, before imports.
+    pub fn add_inner_attribute(&mut self, attr: &str) {
+        // Append to doc_header since it comes first
+        if let Some(ref mut header) = self.doc_header {
+            header.push_str(&format!("#![{attr}]\n"));
+        } else {
+            self.doc_header = Some(format!("#![{attr}]\n"));
+        }
+    }
+
     /// Add a use import line.
     pub fn add_import(&mut self, import: &str) {
         if !self.imports.iter().any(|i| i == import) {
