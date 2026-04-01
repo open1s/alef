@@ -69,8 +69,17 @@ impl Backend for PhpBackend {
             builder.add_item(&gen_tokio_runtime());
         }
 
+        // Check if we have opaque types and add Arc import if needed
+        let has_opaque = api.types.iter().any(|t| t.is_opaque);
+        if has_opaque {
+            builder.add_import("std::sync::Arc");
+        }
+
         for typ in &api.types {
-            if !typ.is_opaque {
+            if typ.is_opaque {
+                builder.add_item(&generators::gen_opaque_struct(typ, &cfg));
+                builder.add_item(&gen_opaque_struct_methods(typ, &mapper));
+            } else {
                 builder.add_item(&generators::gen_struct(typ, &mapper, &cfg));
                 builder.add_item(&gen_struct_methods(typ, &mapper));
             }
@@ -122,6 +131,31 @@ impl Backend for PhpBackend {
             generated_header: false,
         }])
     }
+}
+
+/// Generate ext-php-rs methods for an opaque struct (delegates to self.inner).
+fn gen_opaque_struct_methods(typ: &TypeDef, mapper: &PhpMapper) -> String {
+    let mut impl_builder = ImplBuilder::new(&typ.name);
+    impl_builder.add_attr("php_impl");
+
+    let (instance, statics) = partition_methods(&typ.methods);
+
+    for method in &instance {
+        if method.is_async {
+            impl_builder.add_method(&gen_async_instance_method(method, mapper));
+        } else {
+            impl_builder.add_method(&gen_instance_method(method, mapper));
+        }
+    }
+    for method in &statics {
+        if method.is_async {
+            impl_builder.add_method(&gen_async_static_method(method, mapper));
+        } else {
+            impl_builder.add_method(&gen_static_method(method, mapper));
+        }
+    }
+
+    impl_builder.build()
 }
 
 /// Generate ext-php-rs methods for a struct.
@@ -274,9 +308,7 @@ fn gen_module_init(api: &ApiSurface, _config: &SkifConfig) -> String {
     ];
 
     for typ in &api.types {
-        if !typ.is_opaque {
-            lines.push(format!("        .add_class::<{}>()", typ.name));
-        }
+        lines.push(format!("        .add_class::<{}>()", typ.name));
     }
     for func in &api.functions {
         let func_name = if func.is_async {

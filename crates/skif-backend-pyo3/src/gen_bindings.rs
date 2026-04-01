@@ -68,8 +68,20 @@ impl Backend for Pyo3Backend {
             builder.add_import("pyo3_async_runtimes");
         }
 
+        // Check if we have opaque types and add Arc import if needed
+        let has_opaque = api.types.iter().any(|t| t.is_opaque);
+        if has_opaque {
+            builder.add_import("std::sync::Arc");
+        }
+
         for typ in &api.types {
-            if !typ.is_opaque {
+            if typ.is_opaque {
+                builder.add_item(&generators::gen_opaque_struct(typ, &cfg));
+                let impl_block = generators::gen_opaque_impl_block(typ, &mapper, &cfg);
+                if !impl_block.is_empty() {
+                    builder.add_item(&impl_block);
+                }
+            } else {
                 builder.add_item(&generators::gen_struct(typ, &mapper, &cfg));
                 let impl_block = generators::gen_impl_block(typ, &mapper, &cfg);
                 if !impl_block.is_empty() {
@@ -173,9 +185,7 @@ fn gen_module_init(module_name: &str, api: &ApiSurface) -> String {
     }
 
     for typ in &api.types {
-        if !typ.is_opaque {
-            lines.push(format!("    m.add_class::<{}>()?;", typ.name));
-        }
+        lines.push(format!("    m.add_class::<{}>()?;", typ.name));
     }
     for enum_def in &api.enums {
         lines.push(format!("    m.add_class::<{}>()?;", enum_def.name));

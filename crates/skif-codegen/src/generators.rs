@@ -90,6 +90,67 @@ pub fn gen_struct(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfi
     sb.build()
 }
 
+/// Generate an opaque wrapper struct with `inner: Arc<core::Type>`.
+pub fn gen_opaque_struct(typ: &TypeDef, cfg: &RustBindingConfig) -> String {
+    let mut out = String::with_capacity(512);
+    if !cfg.struct_derives.is_empty() {
+        writeln!(out, "#[derive(Clone)]").ok();
+    }
+    for attr in cfg.struct_attrs {
+        writeln!(out, "#[{attr}]").ok();
+    }
+    writeln!(out, "pub struct {} {{", typ.name).ok();
+    writeln!(out, "    inner: std::sync::Arc<{}::{}>,", cfg.core_import, typ.name).ok();
+    write!(out, "}}").ok();
+    out
+}
+
+/// Generate an opaque wrapper struct with `inner: Arc<core::Type>` and a `Js` prefix.
+pub fn gen_opaque_struct_prefixed(typ: &TypeDef, cfg: &RustBindingConfig, prefix: &str) -> String {
+    let mut out = String::with_capacity(512);
+    if !cfg.struct_derives.is_empty() {
+        writeln!(out, "#[derive(Clone)]").ok();
+    }
+    for attr in cfg.struct_attrs {
+        writeln!(out, "#[{attr}]").ok();
+    }
+    writeln!(out, "pub struct {}{} {{", prefix, typ.name).ok();
+    writeln!(out, "    inner: std::sync::Arc<{}::{}>,", cfg.core_import, typ.name).ok();
+    write!(out, "}}").ok();
+    out
+}
+
+/// Generate a full impl block for an opaque type, delegating methods to `self.inner`.
+pub fn gen_opaque_impl_block(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfig) -> String {
+    let (instance, statics) = partition_methods(&typ.methods);
+    if instance.is_empty() && statics.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    if let Some(block_attr) = cfg.method_block_attr {
+        writeln!(out, "#[{block_attr}]").ok();
+    }
+    writeln!(out, "impl {} {{", typ.name).ok();
+
+    // Instance methods — delegate to self.inner
+    for m in &instance {
+        out.push_str(&gen_method(m, mapper, cfg, &typ.name, true));
+        out.push_str("\n\n");
+    }
+
+    // Static methods
+    for m in &statics {
+        out.push_str(&gen_static_method(m, mapper, cfg, &typ.name));
+        out.push_str("\n\n");
+    }
+
+    let trimmed = out.trim_end();
+    let mut result = trimmed.to_string();
+    result.push_str("\n}");
+    result
+}
+
 /// Generate a constructor method.
 pub fn gen_constructor(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfig) -> String {
     let map_fn = |ty: &skif_core::ir::TypeRef| mapper.map_type(ty);
@@ -114,7 +175,16 @@ pub fn gen_constructor(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBinding
 }
 
 /// Generate an instance method.
-pub fn gen_method(method: &MethodDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfig, type_name: &str) -> String {
+///
+/// When `is_opaque` is true, generates delegation to `self.inner` via Arc clone
+/// instead of converting self to core type.
+pub fn gen_method(
+    method: &MethodDef,
+    mapper: &dyn TypeMapper,
+    cfg: &RustBindingConfig,
+    type_name: &str,
+    is_opaque: bool,
+) -> String {
     let map_fn = |ty: &skif_core::ir::TypeRef| mapper.map_type(ty);
     let params = function_params(&method.params, &map_fn);
     let return_type = mapper.map_type(&method.return_type);
@@ -123,40 +193,60 @@ pub fn gen_method(method: &MethodDef, mapper: &dyn TypeMapper, cfg: &RustBinding
     let call_args = gen_call_args(&method.params);
     let core_import = cfg.core_import;
 
+    // Build the core call expression: opaque types delegate to self.inner directly,
+    // non-opaque types convert self to core type first.
+    let make_core_call = |method_name: &str| -> String {
+        if is_opaque {
+            format!("self.inner.{method_name}({call_args})")
+        } else {
+            format!("{core_import}::{type_name}::from(self.clone()).{method_name}({call_args})")
+        }
+    };
+
+    // For async opaque methods, we clone the Arc before moving into the future.
+    let make_async_core_call = |method_name: &str| -> String {
+        if is_opaque {
+            format!("inner.{method_name}({call_args})")
+        } else {
+            format!("{core_import}::{type_name}::from(self.clone()).{method_name}({call_args})")
+        }
+    };
+
     // Generate the body: convert self to core type, call method, convert result back
     let body = if method.is_async {
+        // For opaque types with Pyo3FutureIntoPy, we need to clone the Arc before moving.
+        let inner_clone_line = if is_opaque {
+            "let inner = self.inner.clone();\n        "
+        } else {
+            ""
+        };
+        let core_call_str = make_async_core_call(&method.name);
+
         match cfg.async_pattern {
             AsyncPattern::Pyo3FutureIntoPy => {
-                let core_call = format!(
-                    "{core_import}::{type_name}::from(self.clone()).{method_name}({call_args})",
-                    method_name = method.name
-                );
                 let result_handling = if method.error_type.is_some() {
                     format!(
-                        "let result = {core_call}.await\n            \
+                        "let result = {core_call_str}.await\n            \
                          .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;"
                     )
                 } else {
-                    format!("let result = {core_call}.await;")
+                    format!("let result = {core_call_str}.await;")
                 };
                 format!(
-                    "pyo3_async_runtimes::tokio::future_into_py(py, async move {{\n            \
+                    "{inner_clone_line}pyo3_async_runtimes::tokio::future_into_py(py, async move {{\n            \
                      {result_handling}\n            \
                      Ok({return_type}::from(result))\n        }})"
                 )
             }
             AsyncPattern::WasmNativeAsync => {
-                let core_call = format!(
-                    "{core_import}::{type_name}::from(self.clone()).{method_name}({call_args})",
-                    method_name = method.name
-                );
+                let core_call_sync = make_core_call(&method.name);
                 let result_handling = if method.error_type.is_some() {
                     format!(
-                        "let result = {core_call}.await\n        \
+                        "let result = {core_call_sync}.await\n        \
                          .map_err(|e| JsValue::from_str(&e.to_string()))?;"
                     )
                 } else {
-                    format!("let result = {core_call}.await;")
+                    format!("let result = {core_call_sync}.await;")
                 };
                 format!(
                     "{result_handling}\n        \
@@ -164,17 +254,14 @@ pub fn gen_method(method: &MethodDef, mapper: &dyn TypeMapper, cfg: &RustBinding
                 )
             }
             AsyncPattern::NapiNativeAsync => {
-                let core_call = format!(
-                    "{core_import}::{type_name}::from(self.clone()).{method_name}({call_args})",
-                    method_name = method.name
-                );
+                let core_call_sync = make_core_call(&method.name);
                 let result_handling = if method.error_type.is_some() {
                     format!(
-                        "let result = {core_call}.await\n            \
+                        "let result = {core_call_sync}.await\n            \
                          .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;"
                     )
                 } else {
-                    format!("let result = {core_call}.await;")
+                    format!("let result = {core_call_sync}.await;")
                 };
                 format!(
                     "{result_handling}\n            \
@@ -182,29 +269,23 @@ pub fn gen_method(method: &MethodDef, mapper: &dyn TypeMapper, cfg: &RustBinding
                 )
             }
             AsyncPattern::TokioBlockOn => {
-                let core_call = format!(
-                    "{core_import}::{type_name}::from(self.clone()).{method_name}({call_args})",
-                    method_name = method.name
-                );
+                let core_call_sync = make_core_call(&method.name);
                 if method.error_type.is_some() {
                     format!(
                         "let rt = tokio::runtime::Runtime::new()?;\n        \
-                         rt.block_on(async {{ {core_call}.await.map_err(|e| e.into()) }})"
+                         rt.block_on(async {{ {core_call_sync}.await.map_err(|e| e.into()) }})"
                     )
                 } else {
                     format!(
                         "let rt = tokio::runtime::Runtime::new()?;\n        \
-                         rt.block_on(async {{ {core_call}.await }})"
+                         rt.block_on(async {{ {core_call_sync}.await }})"
                     )
                 }
             }
             AsyncPattern::None => "todo!(\"async not supported by backend\")".to_string(),
         }
     } else {
-        let core_call = format!(
-            "{}::{}::from(self.clone()).{}({call_args})",
-            core_import, type_name, method.name
-        );
+        let core_call = make_core_call(&method.name);
         if method.error_type.is_some() {
             format!("{core_call}.map_err(|e| e.into())")
         } else {
@@ -602,7 +683,7 @@ pub fn gen_impl_block(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingC
 
     // Instance methods
     for m in &instance {
-        out.push_str(&gen_method(m, mapper, cfg, &typ.name));
+        out.push_str(&gen_method(m, mapper, cfg, &typ.name, false));
         out.push_str("\n\n");
     }
 

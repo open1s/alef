@@ -44,8 +44,23 @@ impl Backend for WasmBackend {
         builder.add_import("std::collections::HashMap");
         builder.add_import(&core_import);
 
+        // Check if we have opaque types and add Arc import if needed
+        let has_opaque = api
+            .types
+            .iter()
+            .any(|t| t.is_opaque && !exclude_types.contains(&t.name));
+        if has_opaque {
+            builder.add_import("std::sync::Arc");
+        }
+
         for typ in &api.types {
-            if !typ.is_opaque && !exclude_types.contains(&typ.name) {
+            if exclude_types.contains(&typ.name) {
+                continue;
+            }
+            if typ.is_opaque {
+                builder.add_item(&gen_opaque_struct(typ));
+                builder.add_item(&gen_opaque_struct_methods(typ, &mapper));
+            } else {
                 builder.add_item(&gen_struct(typ, &mapper));
                 builder.add_item(&gen_struct_methods(typ, &mapper, &exclude_types));
             }
@@ -90,6 +105,110 @@ impl Backend for WasmBackend {
             content,
             generated_header: false,
         }])
+    }
+}
+
+/// Generate an opaque wasm-bindgen struct with inner Arc.
+fn gen_opaque_struct(typ: &TypeDef) -> String {
+    let js_name = format!("Js{}", typ.name);
+    let mut struct_builder = StructBuilder::new(&js_name);
+    struct_builder.add_attr("wasm_bindgen");
+    struct_builder.add_derive("Clone");
+
+    // We can't use StructBuilder for private fields, so build manually
+    let mut out = String::with_capacity(256);
+    writeln!(out, "#[derive(Clone)]").ok();
+    writeln!(out, "#[wasm_bindgen]").ok();
+    writeln!(out, "pub struct {} {{", js_name).ok();
+    writeln!(out, "    inner: std::sync::Arc<skif_core::{}>,", typ.name).ok();
+    write!(out, "}}").ok();
+    out
+}
+
+/// Generate wasm-bindgen methods for an opaque struct.
+fn gen_opaque_struct_methods(typ: &TypeDef, mapper: &WasmMapper) -> String {
+    let js_name = format!("Js{}", typ.name);
+    let mut impl_builder = ImplBuilder::new(&js_name);
+    impl_builder.add_attr("wasm_bindgen");
+
+    for method in &typ.methods {
+        impl_builder.add_method(&gen_opaque_method(method, mapper, &typ.name));
+    }
+
+    impl_builder.build()
+}
+
+/// Generate a method for an opaque wasm-bindgen struct that delegates to self.inner.
+fn gen_opaque_method(method: &MethodDef, mapper: &WasmMapper, _type_name: &str) -> String {
+    let params: Vec<String> = method
+        .params
+        .iter()
+        .map(|p| format!("{}: {}", p.name, mapper.map_type(&p.ty)))
+        .collect();
+
+    let return_type = mapper.map_type(&method.return_type);
+    let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
+
+    let call_args: Vec<String> = method
+        .params
+        .iter()
+        .map(|p| {
+            if matches!(p.ty, skif_core::ir::TypeRef::Named(_)) {
+                format!("{}.into()", p.name)
+            } else {
+                p.name.clone()
+            }
+        })
+        .collect();
+    let args_str = call_args.join(", ");
+
+    if method.is_async {
+        let body = if method.error_type.is_some() {
+            format!(
+                "let result = self.inner.{}({}).await\n        \
+                 .map_err(|e| JsValue::from_str(&e.to_string()))?;\n    \
+                 Ok({}::from(result))",
+                method.name, args_str, return_type
+            )
+        } else {
+            format!(
+                "let result = self.inner.{}({}).await;\n    \
+                 Ok({}::from(result))",
+                method.name, args_str, return_type
+            )
+        };
+        format!(
+            "pub async fn {}(&self, {}) -> {} {{\n    \
+             {body}\n}}",
+            method.name,
+            params.join(", "),
+            return_annotation
+        )
+    } else if method.is_static {
+        format!(
+            "#[wasm_bindgen(static)]\npub fn {}({}) -> {} {{\n    \
+             todo!(\"call into core implementation\")\n}}",
+            method.name,
+            params.join(", "),
+            return_annotation
+        )
+    } else {
+        let body = if method.error_type.is_some() {
+            format!(
+                "self.inner.{}({})\n        .map(|r| {}::from(r))\n        \
+                 .map_err(|e| JsValue::from_str(&e.to_string()))",
+                method.name, args_str, return_type
+            )
+        } else {
+            format!("{}::from(self.inner.{}({}))", return_type, method.name, args_str)
+        };
+        format!(
+            "pub fn {}(&self, {}) -> {} {{\n    \
+             {body}\n}}",
+            method.name,
+            params.join(", "),
+            return_annotation
+        )
     }
 }
 

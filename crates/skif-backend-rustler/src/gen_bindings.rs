@@ -40,8 +40,16 @@ impl Backend for RustlerBackend {
 
         let (_module_name, module_prefix) = get_module_info(api, config);
 
+        // Check if we have opaque types and add Arc import if needed
+        let has_opaque = api.types.iter().any(|t| t.is_opaque);
+        if has_opaque {
+            builder.add_import("std::sync::Arc");
+        }
+
         for typ in &api.types {
-            if !typ.is_opaque {
+            if typ.is_opaque {
+                builder.add_item(&gen_opaque_resource(typ, &core_import));
+            } else {
                 builder.add_item(&gen_struct(typ, &mapper, &module_prefix));
             }
         }
@@ -59,13 +67,11 @@ impl Backend for RustlerBackend {
         }
 
         for typ in &api.types {
-            if !typ.is_opaque {
-                for method in &typ.methods {
-                    if method.is_async {
-                        builder.add_item(&gen_nif_async_method(&typ.name, method, &mapper));
-                    } else {
-                        builder.add_item(&gen_nif_method(&typ.name, method, &mapper));
-                    }
+            for method in &typ.methods {
+                if method.is_async {
+                    builder.add_item(&gen_nif_async_method(&typ.name, method, &mapper));
+                } else {
+                    builder.add_item(&gen_nif_method(&typ.name, method, &mapper));
                 }
             }
         }
@@ -114,6 +120,17 @@ fn get_module_info(_api: &ApiSurface, config: &SkifConfig) -> (String, String) {
         app_name.to_pascal_case()
     };
     (app_name, module_prefix)
+}
+
+/// Generate an opaque Rustler resource struct with inner Arc.
+fn gen_opaque_resource(typ: &TypeDef, core_import: &str) -> String {
+    let mut out = String::with_capacity(256);
+    out.push_str("#[derive(Clone)]\n");
+    out.push_str(&format!("pub struct {} {{\n", typ.name));
+    out.push_str(&format!("    inner: std::sync::Arc<{}::{}>,\n", core_import, typ.name));
+    out.push_str("}\n\n");
+    out.push_str(&format!("impl rustler::Resource for {} {{}}", typ.name));
+    out
 }
 
 /// Generate a Rustler NIF struct definition using the shared TypeMapper.
@@ -258,15 +275,13 @@ fn gen_nif_init(api: &ApiSurface) -> String {
     }
 
     for typ in &api.types {
-        if !typ.is_opaque {
-            for method in &typ.methods {
-                let method_name = if method.is_async {
-                    format!("{}_{}_async", typ.name.to_lowercase(), method.name)
-                } else {
-                    format!("{}_{}", typ.name.to_lowercase(), method.name)
-                };
-                exports.push(method_name);
-            }
+        for method in &typ.methods {
+            let method_name = if method.is_async {
+                format!("{}_{}_async", typ.name.to_lowercase(), method.name)
+            } else {
+                format!("{}_{}", typ.name.to_lowercase(), method.name)
+            };
+            exports.push(method_name);
         }
     }
 

@@ -72,11 +72,20 @@ impl Backend for NapiBackend {
             builder.add_item(&gen_tokio_runtime());
         }
 
+        // Check if we have opaque types and add Arc import if needed
+        let has_opaque = api.types.iter().any(|t| t.is_opaque);
+        if has_opaque {
+            builder.add_import("std::sync::Arc");
+        }
+
         // NAPI has some unique patterns: Js-prefixed names, Option-wrapped fields,
         // and custom constructor. Use shared generators for enums and functions,
         // but keep struct/method generation custom.
         for typ in &api.types {
-            if !typ.is_opaque {
+            if typ.is_opaque {
+                builder.add_item(&skif_codegen::generators::gen_opaque_struct_prefixed(typ, &cfg, "Js"));
+                builder.add_item(&gen_opaque_struct_methods(typ, &mapper, &cfg));
+            } else {
                 builder.add_item(&gen_struct(typ, &mapper));
                 builder.add_item(&gen_struct_methods(typ, &mapper, &cfg));
             }
@@ -150,6 +159,74 @@ fn gen_struct_methods(typ: &TypeDef, mapper: &NapiMapper, _cfg: &RustBindingConf
     }
 
     impl_builder.build()
+}
+
+/// Generate NAPI methods for an opaque struct (delegates to self.inner).
+fn gen_opaque_struct_methods(typ: &TypeDef, mapper: &NapiMapper, _cfg: &RustBindingConfig) -> String {
+    let mut impl_builder = ImplBuilder::new(&format!("Js{}", typ.name));
+    impl_builder.add_attr("napi");
+
+    let (instance, statics) = partition_methods(&typ.methods);
+
+    for method in &instance {
+        impl_builder.add_method(&gen_opaque_instance_method(method, mapper));
+    }
+    for method in &statics {
+        impl_builder.add_method(&gen_static_method(method, mapper));
+    }
+
+    impl_builder.build()
+}
+
+/// Generate an opaque instance method that delegates to self.inner.
+fn gen_opaque_instance_method(method: &MethodDef, mapper: &NapiMapper) -> String {
+    let params = function_params(&method.params, &|ty| mapper.map_type(ty));
+    let return_type = mapper.map_type(&method.return_type);
+    let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
+
+    let call_args: Vec<String> = method
+        .params
+        .iter()
+        .map(|p| {
+            if matches!(p.ty, skif_core::ir::TypeRef::Named(_)) {
+                if p.optional {
+                    format!("{}.map(Into::into)", p.name)
+                } else {
+                    format!("{}.into()", p.name)
+                }
+            } else {
+                p.name.clone()
+            }
+        })
+        .collect();
+    let args_str = call_args.join(", ");
+
+    let async_kw = if method.is_async { "async " } else { "" };
+
+    let body = if method.is_async {
+        let err_map = if method.error_type.is_some() {
+            "\n        .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?"
+        } else {
+            ""
+        };
+        format!(
+            "let result = self.inner.{}({}).await{};",
+            method.name, args_str, err_map
+        )
+    } else {
+        let err_map = if method.error_type.is_some() {
+            ".map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?"
+        } else {
+            ""
+        };
+        format!("let result = self.inner.{}({}){};", method.name, args_str, err_map)
+    };
+
+    format!(
+        "#[napi]\npub {async_kw}fn {}(&self, {params}) -> {return_annotation} {{\n    \
+         {body}\n    Ok({return_type}::from(result))\n}}",
+        method.name
+    )
 }
 
 /// Generate a constructor with all params wrapped in Option.

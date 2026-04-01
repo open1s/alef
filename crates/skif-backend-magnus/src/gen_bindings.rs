@@ -5,6 +5,7 @@ use skif_codegen::type_mapper::TypeMapper;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
 use skif_core::config::{Language, SkifConfig, resolve_output_dir};
 use skif_core::ir::{ApiSurface, EnumDef, FieldDef, FunctionDef, MethodDef, TypeDef};
+use std::fmt::Write;
 use std::path::PathBuf;
 
 pub struct MagnusBackend;
@@ -38,8 +39,17 @@ impl Backend for MagnusBackend {
         builder.add_import("std::collections::HashMap");
         builder.add_import(&core_import);
 
+        // Check if we have opaque types and add Arc import if needed
+        let has_opaque = api.types.iter().any(|t| t.is_opaque);
+        if has_opaque {
+            builder.add_import("std::sync::Arc");
+        }
+
         for typ in &api.types {
-            if !typ.is_opaque {
+            if typ.is_opaque {
+                builder.add_item(&gen_opaque_struct(typ, &core_import));
+                builder.add_item(&gen_opaque_struct_methods(typ, &mapper));
+            } else {
                 builder.add_item(&gen_struct(typ, &mapper));
                 builder.add_item(&gen_struct_methods(typ, &mapper));
             }
@@ -126,6 +136,68 @@ fn get_module_name(crate_name: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Generate an opaque Magnus-wrapped struct with inner Arc.
+fn gen_opaque_struct(typ: &TypeDef, core_import: &str) -> String {
+    let module_name = "Kreuzberg";
+    let class_path = format!("{}::{}", module_name, typ.name);
+
+    let mut out = String::with_capacity(256);
+    writeln!(out, "#[derive(Clone)]").ok();
+    writeln!(out, r#"#[magnus::wrap(class = "{}")]"#, class_path).ok();
+    writeln!(out, "pub struct {} {{", typ.name).ok();
+    writeln!(out, "    inner: std::sync::Arc<{}::{}>,", core_import, typ.name).ok();
+    write!(out, "}}").ok();
+    out
+}
+
+/// Generate Magnus methods for an opaque struct (delegates to self.inner).
+fn gen_opaque_struct_methods(typ: &TypeDef, mapper: &MagnusMapper) -> String {
+    let mut impl_builder = ImplBuilder::new(&typ.name);
+
+    for method in &typ.methods {
+        if !method.is_static {
+            if method.is_async {
+                impl_builder.add_method(&gen_opaque_async_instance_method(method, mapper));
+            } else {
+                impl_builder.add_method(&gen_opaque_instance_method(method, mapper));
+            }
+        }
+    }
+
+    impl_builder.build()
+}
+
+/// Generate an opaque sync instance method for Magnus (delegates to self.inner).
+fn gen_opaque_instance_method(method: &MethodDef, mapper: &MagnusMapper) -> String {
+    let params = function_params(&method.params, &|ty| mapper.map_type(ty));
+    let return_type = mapper.map_type(&method.return_type);
+    let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
+
+    format!(
+        "fn {}(&self, {params}) -> {return_annotation} {{\n        \
+         todo!(\"delegate to self.inner\")\n    }}",
+        method.name
+    )
+}
+
+/// Generate an opaque async instance method for Magnus (block on runtime, delegates to self.inner).
+fn gen_opaque_async_instance_method(method: &MethodDef, mapper: &MagnusMapper) -> String {
+    let params = function_params(&method.params, &|ty| mapper.map_type(ty));
+    let return_type = mapper.map_type(&method.return_type);
+    let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
+
+    format!(
+        "fn {}_async(&self, {params}) -> {return_annotation} {{\n        \
+         let rt = tokio::runtime::Runtime::new()\n            \
+         .map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))?;\n        \
+         rt.block_on(async {{\n            \
+         todo!(\"delegate to self.inner\")\n        \
+         }}).map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))\n    \
+         }}",
+        method.name
+    )
 }
 
 /// Generate a Magnus-wrapped struct definition using the shared TypeMapper.
@@ -283,21 +355,21 @@ fn gen_module_init(module_name: &str, api: &ApiSurface) -> String {
     ];
 
     for typ in &api.types {
-        if !typ.is_opaque {
+        lines.push(format!(
+            r#"    let class = module.define_class("{}", ruby.class_object())?;"#,
+            typ.name
+        ));
+
+        if !typ.is_opaque && !typ.fields.is_empty() {
+            let arg_count = typ.fields.len();
             lines.push(format!(
-                r#"    let class = module.define_class("{}", ruby.class_object())?;"#,
-                typ.name
+                r#"    class.define_singleton_method("new", function!({name}::new, {count}))?;"#,
+                name = typ.name,
+                count = arg_count
             ));
+        }
 
-            if !typ.fields.is_empty() {
-                let arg_count = typ.fields.len();
-                lines.push(format!(
-                    r#"    class.define_singleton_method("new", function!({name}::new, {count}))?;"#,
-                    name = typ.name,
-                    count = arg_count
-                ));
-            }
-
+        if !typ.is_opaque {
             for field in &typ.fields {
                 lines.push(format!(
                     r#"    class.define_method("{name}", method!({typ_name}::{name}, 0))?;"#,
@@ -305,27 +377,27 @@ fn gen_module_init(module_name: &str, api: &ApiSurface) -> String {
                     typ_name = typ.name
                 ));
             }
-
-            for method in &typ.methods {
-                if !method.is_static {
-                    let method_name = if method.is_async {
-                        format!("{}_async", method.name)
-                    } else {
-                        method.name.clone()
-                    };
-                    let param_count = method.params.len();
-                    lines.push(format!(
-                        r#"    class.define_method("{name}", method!({typ_name}::{fn_name}, {count}))?;"#,
-                        name = method_name,
-                        typ_name = typ.name,
-                        fn_name = method_name,
-                        count = param_count
-                    ));
-                }
-            }
-
-            lines.push("".to_string());
         }
+
+        for method in &typ.methods {
+            if !method.is_static {
+                let method_name = if method.is_async {
+                    format!("{}_async", method.name)
+                } else {
+                    method.name.clone()
+                };
+                let param_count = method.params.len();
+                lines.push(format!(
+                    r#"    class.define_method("{name}", method!({typ_name}::{fn_name}, {count}))?;"#,
+                    name = method_name,
+                    typ_name = typ.name,
+                    fn_name = method_name,
+                    count = param_count
+                ));
+            }
+        }
+
+        lines.push("".to_string());
     }
 
     for func in &api.functions {

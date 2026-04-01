@@ -14,7 +14,10 @@ pub fn gen_stubs(api: &ApiSurface) -> String {
 
     // Generate type stubs
     for typ in &api.types {
-        if !typ.is_opaque {
+        if typ.is_opaque {
+            lines.push(gen_opaque_type_stub(typ));
+            lines.push("".to_string());
+        } else {
             lines.push(gen_type_stub(typ));
             lines.push("".to_string());
         }
@@ -49,6 +52,36 @@ fn get_module_name(crate_name: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Generate a Ruby type stub for an opaque type (no fields, only methods).
+fn gen_opaque_type_stub(typ: &TypeDef) -> String {
+    let mut lines = vec![];
+
+    lines.push(format!("  class {}", typ.name));
+
+    if !typ.doc.is_empty() {
+        lines.push(format!(r#"    # {}"#, typ.doc));
+        lines.push("".to_string());
+    }
+
+    // Instance methods
+    for method in &typ.methods {
+        if !method.is_static {
+            lines.push(gen_method_stub(method, false));
+        }
+    }
+
+    // Static methods
+    for method in &typ.methods {
+        if method.is_static {
+            lines.push(gen_method_stub(method, true));
+        }
+    }
+
+    lines.push("  end".to_string());
+
+    lines.join("\n")
 }
 
 /// Generate a Ruby type stub for a struct.

@@ -12,7 +12,10 @@ pub fn gen_stubs(api: &ApiSurface) -> String {
 
     // Generate type stubs
     for typ in &api.types {
-        if !typ.is_opaque {
+        if typ.is_opaque {
+            lines.push(gen_opaque_type_stub(typ));
+            lines.push("".to_string());
+        } else {
             lines.push(gen_type_stub(typ));
             lines.push("".to_string());
         }
@@ -28,6 +31,39 @@ pub fn gen_stubs(api: &ApiSurface) -> String {
     for func in &api.functions {
         lines.push(gen_function_stub(func));
         lines.push("".to_string());
+    }
+
+    lines.join("\n")
+}
+
+/// Generate a Python type stub for an opaque type (no fields, only methods).
+fn gen_opaque_type_stub(typ: &TypeDef) -> String {
+    let mut lines = vec![];
+
+    if !typ.doc.is_empty() {
+        lines.push(format!("class {}:", typ.name));
+        lines.push(format!(r#"    """{}""""#, typ.doc));
+    } else {
+        lines.push(format!("class {}:", typ.name));
+    }
+
+    // Instance methods
+    for method in &typ.methods {
+        if !method.is_static {
+            lines.push(gen_method_stub(method, false));
+        }
+    }
+
+    // Static methods
+    for method in &typ.methods {
+        if method.is_static {
+            lines.push(gen_method_stub(method, true));
+        }
+    }
+
+    // If no methods at all, add pass
+    if typ.methods.is_empty() {
+        lines.push("    pass".to_string());
     }
 
     lines.join("\n")
