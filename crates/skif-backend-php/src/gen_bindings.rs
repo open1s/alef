@@ -1,6 +1,6 @@
 use crate::type_map::PhpMapper;
 use skif_codegen::builder::{ImplBuilder, RustFileBuilder};
-use skif_codegen::generators::{self, RustBindingConfig};
+use skif_codegen::generators::{self, AsyncPattern, RustBindingConfig};
 use skif_codegen::shared::{constructor_parts, function_params, partition_methods};
 use skif_codegen::type_mapper::TypeMapper;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
@@ -26,6 +26,7 @@ impl PhpBackend {
             signature_prefix: "",
             signature_suffix: "",
             core_import,
+            async_pattern: AsyncPattern::TokioBlockOn,
         }
     }
 }
@@ -41,7 +42,7 @@ impl Backend for PhpBackend {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            supports_async: false,
+            supports_async: true,
             supports_classes: true,
             supports_enums: true,
             supports_option: true,
@@ -60,6 +61,14 @@ impl Backend for PhpBackend {
         builder.add_import("std::collections::HashMap");
         builder.add_import(&core_import);
 
+        // Check if any function or method is async
+        let has_async =
+            api.functions.iter().any(|f| f.is_async) || api.types.iter().any(|t| t.methods.iter().any(|m| m.is_async));
+
+        if has_async {
+            builder.add_item(&gen_tokio_runtime());
+        }
+
         for typ in &api.types {
             if !typ.is_opaque {
                 builder.add_item(&generators::gen_struct(typ, &mapper, &cfg));
@@ -72,7 +81,11 @@ impl Backend for PhpBackend {
         }
 
         for func in &api.functions {
-            builder.add_item(&gen_function(func, &mapper));
+            if func.is_async {
+                builder.add_item(&gen_async_function(func, &mapper));
+            } else {
+                builder.add_item(&gen_function(func, &mapper));
+            }
         }
 
         // From/Into conversions
@@ -130,10 +143,18 @@ fn gen_struct_methods(typ: &TypeDef, mapper: &PhpMapper) -> String {
     let (instance, statics) = partition_methods(&typ.methods);
 
     for method in &instance {
-        impl_builder.add_method(&gen_instance_method(method, mapper));
+        if method.is_async {
+            impl_builder.add_method(&gen_async_instance_method(method, mapper));
+        } else {
+            impl_builder.add_method(&gen_instance_method(method, mapper));
+        }
     }
     for method in &statics {
-        impl_builder.add_method(&gen_static_method(method, mapper));
+        if method.is_async {
+            impl_builder.add_method(&gen_async_static_method(method, mapper));
+        } else {
+            impl_builder.add_method(&gen_static_method(method, mapper));
+        }
     }
 
     impl_builder.build()
@@ -187,9 +208,60 @@ fn gen_function(func: &FunctionDef, mapper: &PhpMapper) -> String {
 
     format!(
         "#[php_function]\npub fn {}({params}) -> {return_annotation} {{\n    \
-         todo!(\"call into core implementation\")\n\
+         todo!(\"call into core\")\n\
          }}",
         func.name
+    )
+}
+
+/// Generate an async free function binding for PHP (block on runtime).
+fn gen_async_function(func: &FunctionDef, mapper: &PhpMapper) -> String {
+    let params = function_params(&func.params, &|ty| mapper.map_type(ty));
+    let return_type = mapper.map_type(&func.return_type);
+    let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
+
+    // Append "_async" to the function name for PHP (since it's not truly async)
+    format!(
+        "#[php_function]\npub fn {}_async({params}) -> {return_annotation} {{\n    \
+         WORKER_RUNTIME.block_on(async {{\n        \
+         todo!(\"call into core\")\n    \
+         }}).map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))\n\
+         }}",
+        func.name
+    )
+}
+
+/// Generate an async instance method binding for PHP (block on runtime).
+fn gen_async_instance_method(method: &MethodDef, mapper: &PhpMapper) -> String {
+    let params = function_params(&method.params, &|ty| mapper.map_type(ty));
+    let return_type = mapper.map_type(&method.return_type);
+    let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
+
+    // Append "_async" to the method name for PHP
+    format!(
+        "pub fn {}_async(&self, {params}) -> {return_annotation} {{\n    \
+         WORKER_RUNTIME.block_on(async {{\n        \
+         todo!(\"call into core\")\n    \
+         }}).map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))\n\
+         }}",
+        method.name
+    )
+}
+
+/// Generate an async static method binding for PHP (block on runtime).
+fn gen_async_static_method(method: &MethodDef, mapper: &PhpMapper) -> String {
+    let params = function_params(&method.params, &|ty| mapper.map_type(ty));
+    let return_type = mapper.map_type(&method.return_type);
+    let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
+
+    // Append "_async" to the method name for PHP
+    format!(
+        "pub fn {}_async({params}) -> {return_annotation} {{\n    \
+         WORKER_RUNTIME.block_on(async {{\n        \
+         todo!(\"call into core\")\n    \
+         }}).map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))\n\
+         }}",
+        method.name
     )
 }
 
@@ -207,7 +279,12 @@ fn gen_module_init(api: &ApiSurface, _config: &SkifConfig) -> String {
         }
     }
     for func in &api.functions {
-        lines.push(format!("        .add_function({})", func.name));
+        let func_name = if func.is_async {
+            format!("{}_async", func.name)
+        } else {
+            func.name.clone()
+        };
+        lines.push(format!("        .add_function({})", func_name));
     }
 
     lines.push("        .build();".to_string());
@@ -215,4 +292,15 @@ fn gen_module_init(api: &ApiSurface, _config: &SkifConfig) -> String {
     lines.push("}".to_string());
 
     lines.join("\n")
+}
+
+/// Generate a global Tokio runtime for PHP async support.
+fn gen_tokio_runtime() -> String {
+    "static WORKER_RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> = std::sync::LazyLock::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect(\"Failed to create Tokio runtime\")
+});"
+    .to_string()
 }

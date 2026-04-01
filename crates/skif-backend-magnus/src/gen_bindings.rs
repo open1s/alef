@@ -20,7 +20,7 @@ impl Backend for MagnusBackend {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            supports_async: false,
+            supports_async: true,
             supports_classes: true,
             supports_enums: true,
             supports_option: true,
@@ -51,6 +51,9 @@ impl Backend for MagnusBackend {
 
         for func in &api.functions {
             builder.add_item(&gen_function(func, &mapper));
+            if func.is_async {
+                builder.add_item(&gen_async_function(func, &mapper));
+            }
         }
 
         // From/Into conversions
@@ -165,8 +168,12 @@ fn gen_struct_methods(typ: &TypeDef, mapper: &MagnusMapper) -> String {
     }
 
     for method in &typ.methods {
-        if !method.is_static && !method.is_async {
-            impl_builder.add_method(&gen_instance_method(method, mapper));
+        if !method.is_static {
+            if method.is_async {
+                impl_builder.add_method(&gen_async_instance_method(method, mapper));
+            } else {
+                impl_builder.add_method(&gen_instance_method(method, mapper));
+            }
         }
     }
 
@@ -195,7 +202,26 @@ fn gen_instance_method(method: &MethodDef, mapper: &MagnusMapper) -> String {
 
     format!(
         "fn {}(&self, {params}) -> {return_annotation} {{\n        \
-         todo!(\"call into core implementation\")\n    }}",
+         todo!(\"call into core\")\n    }}",
+        method.name
+    )
+}
+
+/// Generate an async instance method binding for Magnus (block on runtime).
+fn gen_async_instance_method(method: &MethodDef, mapper: &MagnusMapper) -> String {
+    let params = function_params(&method.params, &|ty| mapper.map_type(ty));
+    let return_type = mapper.map_type(&method.return_type);
+    let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
+
+    // Append "_async" to the method name for Ruby
+    format!(
+        "fn {}_async(&self, {params}) -> {return_annotation} {{\n        \
+         let rt = tokio::runtime::Runtime::new()\n            \
+         .map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))?;\n        \
+         rt.block_on(async {{\n            \
+         todo!(\"call into core\")\n        \
+         }}).map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))\n    \
+         }}",
         method.name
     )
 }
@@ -223,7 +249,26 @@ fn gen_function(func: &FunctionDef, mapper: &MagnusMapper) -> String {
 
     format!(
         "fn {}({params}) -> {return_annotation} {{\n    \
-         todo!(\"call into core implementation\")\n}}",
+         todo!(\"call into core\")\n}}",
+        func.name
+    )
+}
+
+/// Generate an async free function binding for Magnus (block on runtime).
+fn gen_async_function(func: &FunctionDef, mapper: &MagnusMapper) -> String {
+    let params = function_params(&func.params, &|ty| mapper.map_type(ty));
+    let return_type = mapper.map_type(&func.return_type);
+    let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
+
+    // Append "_async" to the function name for Ruby
+    format!(
+        "fn {}_async({params}) -> {return_annotation} {{\n    \
+         let rt = tokio::runtime::Runtime::new()\n        \
+         .map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))?;\n    \
+         rt.block_on(async {{\n        \
+         todo!(\"call into core\")\n    \
+         }}).map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))\n\
+         }}",
         func.name
     )
 }
@@ -262,12 +307,18 @@ fn gen_module_init(module_name: &str, api: &ApiSurface) -> String {
             }
 
             for method in &typ.methods {
-                if !method.is_static && !method.is_async {
+                if !method.is_static {
+                    let method_name = if method.is_async {
+                        format!("{}_async", method.name)
+                    } else {
+                        method.name.clone()
+                    };
                     let param_count = method.params.len();
                     lines.push(format!(
-                        r#"    class.define_method("{name}", method!({typ_name}::{name}, {count}))?;"#,
-                        name = method.name,
+                        r#"    class.define_method("{name}", method!({typ_name}::{fn_name}, {count}))?;"#,
+                        name = method_name,
                         typ_name = typ.name,
+                        fn_name = method_name,
                         count = param_count
                     ));
                 }
@@ -278,14 +329,18 @@ fn gen_module_init(module_name: &str, api: &ApiSurface) -> String {
     }
 
     for func in &api.functions {
-        if !func.is_async {
-            let param_count = func.params.len();
-            lines.push(format!(
-                r#"    module.define_module_function("{name}", function!({name}, {count}))?;"#,
-                name = func.name,
-                count = param_count
-            ));
-        }
+        let func_name = if func.is_async {
+            format!("{}_async", func.name)
+        } else {
+            func.name.clone()
+        };
+        let param_count = func.params.len();
+        lines.push(format!(
+            r#"    module.define_module_function("{name}", function!({fn_name}, {count}))?;"#,
+            name = func_name,
+            fn_name = func_name,
+            count = param_count
+        ));
     }
 
     lines.push("".to_string());

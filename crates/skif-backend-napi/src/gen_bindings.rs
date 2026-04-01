@@ -1,6 +1,6 @@
 use crate::type_map::NapiMapper;
 use skif_codegen::builder::{ImplBuilder, RustFileBuilder, StructBuilder};
-use skif_codegen::generators::RustBindingConfig;
+use skif_codegen::generators::{AsyncPattern, RustBindingConfig};
 use skif_codegen::shared::{constructor_parts, function_params, partition_methods};
 use skif_codegen::type_mapper::TypeMapper;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
@@ -27,6 +27,7 @@ impl NapiBackend {
             signature_prefix: "",
             signature_suffix: "",
             core_import,
+            async_pattern: AsyncPattern::NapiNativeAsync,
         }
     }
 }
@@ -62,6 +63,14 @@ impl Backend for NapiBackend {
         builder.add_import("std::collections::HashMap");
         builder.add_import("serde_json");
         builder.add_import(&core_import);
+
+        // Check if any function or method is async
+        let has_async =
+            api.functions.iter().any(|f| f.is_async) || api.types.iter().any(|t| t.methods.iter().any(|m| m.is_async));
+
+        if has_async {
+            builder.add_item(&gen_tokio_runtime());
+        }
 
         // NAPI has some unique patterns: Js-prefixed names, Option-wrapped fields,
         // and custom constructor. Use shared generators for enums and functions,
@@ -169,7 +178,7 @@ fn gen_instance_method(method: &MethodDef, mapper: &NapiMapper) -> String {
     let async_kw = if method.is_async { "async " } else { "" };
     format!(
         "#[napi]\npub {async_kw}fn {}(&self, {params}) -> {return_annotation} {{\n    \
-         todo!(\"call into core implementation\")\n}}",
+         todo!(\"call into core\")\n}}",
         method.name
     )
 }
@@ -183,7 +192,7 @@ fn gen_static_method(method: &MethodDef, mapper: &NapiMapper) -> String {
     let async_kw = if method.is_async { "async " } else { "" };
     format!(
         "#[napi]\npub {async_kw}fn {}({params}) -> {return_annotation} {{\n    \
-         todo!(\"call into core implementation\")\n}}",
+         todo!(\"call into core\")\n}}",
         method.name
     )
 }
@@ -213,7 +222,7 @@ fn gen_function(func: &FunctionDef, mapper: &NapiMapper) -> String {
     let async_kw = if func.is_async { "async " } else { "" };
     format!(
         "#[napi]\npub {async_kw}fn {}({params}) -> {return_annotation} {{\n    \
-         todo!(\"call into core implementation\")\n}}",
+         todo!(\"call into core\")\n}}",
         func.name
     )
 }
@@ -292,4 +301,15 @@ fn gen_enum_from_core_to_js_binding(enum_def: &EnumDef, core_import: &str) -> St
     writeln!(out, "    }}").unwrap();
     write!(out, "}}").unwrap();
     out
+}
+
+/// Generate a global Tokio runtime for NAPI async support.
+fn gen_tokio_runtime() -> String {
+    "static WORKER_POOL: std::sync::LazyLock<tokio::runtime::Runtime> = std::sync::LazyLock::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect(\"Failed to create Tokio runtime\")
+});"
+    .to_string()
 }

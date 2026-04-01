@@ -1,6 +1,6 @@
 use crate::type_map::Pyo3Mapper;
 use skif_codegen::builder::RustFileBuilder;
-use skif_codegen::generators::{self, RustBindingConfig};
+use skif_codegen::generators::{self, AsyncPattern, RustBindingConfig};
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
 use skif_core::config::{Language, SkifConfig, resolve_output_dir};
 use skif_core::ir::ApiSurface;
@@ -24,6 +24,7 @@ impl Pyo3Backend {
             signature_prefix: "    #[pyo3(signature = (",
             signature_suffix: "))]",
             core_import,
+            async_pattern: AsyncPattern::Pyo3FutureIntoPy,
         }
     }
 }
@@ -60,6 +61,13 @@ impl Backend for Pyo3Backend {
         builder.add_import("std::collections::HashMap");
         builder.add_import(&core_import);
 
+        // Check if we have async functions and add imports if needed
+        let has_async =
+            api.functions.iter().any(|f| f.is_async) || api.types.iter().any(|t| t.methods.iter().any(|m| m.is_async));
+        if has_async {
+            builder.add_import("pyo3_async_runtimes");
+        }
+
         for typ in &api.types {
             if !typ.is_opaque {
                 builder.add_item(&generators::gen_struct(typ, &mapper, &cfg));
@@ -92,6 +100,11 @@ impl Backend for Pyo3Backend {
                 e,
                 &core_import,
             ));
+        }
+
+        // Async runtime initialization (if needed)
+        if has_async {
+            builder.add_item(&gen_async_runtime_init());
         }
 
         // Module init
@@ -134,12 +147,30 @@ impl Backend for Pyo3Backend {
     }
 }
 
+/// Generate the async runtime initialization function.
+fn gen_async_runtime_init() -> String {
+    r#"#[pyfunction]
+pub fn init_async_runtime(py: Python) -> PyResult<()> {
+    pyo3_async_runtimes::tokio::init_once(py);
+    Ok(())
+}"#
+    .to_string()
+}
+
 /// Generate the module initialization function.
 fn gen_module_init(module_name: &str, api: &ApiSurface) -> String {
     let mut lines = vec![
         "#[pymodule]".to_string(),
         format!("fn {module_name}(m: &Bound<'_, PyModule>) -> PyResult<()> {{"),
     ];
+
+    // Check if we have async functions
+    let has_async =
+        api.functions.iter().any(|f| f.is_async) || api.types.iter().any(|t| t.methods.iter().any(|m| m.is_async));
+
+    if has_async {
+        lines.push("    m.add_function(wrap_pyfunction!(init_async_runtime, m)?)?;".to_string());
+    }
 
     for typ in &api.types {
         if !typ.is_opaque {

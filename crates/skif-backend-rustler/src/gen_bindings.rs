@@ -51,13 +51,21 @@ impl Backend for RustlerBackend {
         }
 
         for func in &api.functions {
-            builder.add_item(&gen_nif_function(func, &mapper));
+            if func.is_async {
+                builder.add_item(&gen_nif_async_function(func, &mapper));
+            } else {
+                builder.add_item(&gen_nif_function(func, &mapper));
+            }
         }
 
         for typ in &api.types {
             if !typ.is_opaque {
                 for method in &typ.methods {
-                    builder.add_item(&gen_nif_method(&typ.name, method, &mapper));
+                    if method.is_async {
+                        builder.add_item(&gen_nif_async_method(&typ.name, method, &mapper));
+                    } else {
+                        builder.add_item(&gen_nif_method(&typ.name, method, &mapper));
+                    }
                 }
             }
         }
@@ -151,7 +159,27 @@ fn gen_nif_function(func: &FunctionDef, mapper: &RustlerMapper) -> String {
 
     format!(
         "#[rustler::nif]\npub fn {}({params}) -> {return_annotation} {{\n    \
-         todo!(\"call into core implementation\")\n}}",
+         todo!(\"call into core\")\n}}",
+        func.name
+    )
+}
+
+/// Generate a Rustler NIF async free function (sync wrapper scheduled on DirtyCpu).
+fn gen_nif_async_function(func: &FunctionDef, mapper: &RustlerMapper) -> String {
+    let params = function_params(&func.params, &|ty| mapper.map_type(ty));
+    let return_type = mapper.map_type(&func.return_type);
+    let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
+
+    // Append "_async" to function name for Rustler
+    format!(
+        "#[rustler::nif(schedule = \"DirtyCpu\")]\npub fn {}_async({params}) -> {return_annotation} {{\n    \
+         let rt = tokio::runtime::Runtime::new()\n        \
+         .map_err(|e| e.to_string())?;\n    \
+         rt.block_on(async {{\n        \
+         todo!(\"call into core\")\n    \
+         }}).map_err(|e| e.to_string())\n        \
+         .map(ExtractionResult::from)\n\
+         }}",
         func.name
     )
 }
@@ -176,7 +204,40 @@ fn gen_nif_method(struct_name: &str, method: &MethodDef, mapper: &RustlerMapper)
 
     format!(
         "#[rustler::nif]\npub fn {}({}) -> {} {{\n    \
-         todo!(\"call into core implementation\")\n}}",
+         todo!(\"call into core\")\n}}",
+        method_fn_name,
+        params.join(", "),
+        return_annotation
+    )
+}
+
+/// Generate a Rustler NIF async method for a struct (sync wrapper scheduled on DirtyCpu).
+fn gen_nif_async_method(struct_name: &str, method: &MethodDef, mapper: &RustlerMapper) -> String {
+    let method_fn_name = format!("{}_{}_async", struct_name.to_lowercase(), method.name);
+
+    let mut params = if method.receiver.is_some() {
+        vec![format!("resource: ResourceArc<{}>", struct_name)]
+    } else {
+        vec![]
+    };
+
+    for p in &method.params {
+        let param_type = mapper.map_type(&p.ty);
+        params.push(format!("{}: {}", p.name, param_type));
+    }
+
+    let return_type = mapper.map_type(&method.return_type);
+    let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
+
+    format!(
+        "#[rustler::nif(schedule = \"DirtyCpu\")]\npub fn {}({}) -> {} {{\n    \
+         let rt = tokio::runtime::Runtime::new()\n        \
+         .map_err(|e| e.to_string())?;\n    \
+         rt.block_on(async {{\n        \
+         todo!(\"call into core\")\n    \
+         }}).map_err(|e| e.to_string())\n        \
+         .map(ExtractionResult::from)\n\
+         }}",
         method_fn_name,
         params.join(", "),
         return_annotation
@@ -188,13 +249,23 @@ fn gen_nif_init(api: &ApiSurface) -> String {
     let mut exports = vec![];
 
     for func in &api.functions {
-        exports.push(func.name.clone());
+        let func_name = if func.is_async {
+            format!("{}_async", func.name)
+        } else {
+            func.name.clone()
+        };
+        exports.push(func_name);
     }
 
     for typ in &api.types {
         if !typ.is_opaque {
             for method in &typ.methods {
-                exports.push(format!("{}_{}", typ.name.to_lowercase(), method.name));
+                let method_name = if method.is_async {
+                    format!("{}_{}_async", typ.name.to_lowercase(), method.name)
+                } else {
+                    format!("{}_{}", typ.name.to_lowercase(), method.name)
+                };
+                exports.push(method_name);
             }
         }
     }

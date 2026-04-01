@@ -129,7 +129,7 @@ fn gen_struct_methods(typ: &TypeDef, mapper: &WasmMapper, exclude_types: &[Strin
 
     if !exclude_types.contains(&typ.name) {
         for method in &typ.methods {
-            impl_builder.add_method(&gen_method(method, mapper));
+            impl_builder.add_method(&gen_method(method, mapper, &typ.name));
         }
     }
 
@@ -176,7 +176,7 @@ fn gen_setter(field: &FieldDef, mapper: &WasmMapper) -> String {
 }
 
 /// Generate a method binding for a struct method.
-fn gen_method(method: &MethodDef, mapper: &WasmMapper) -> String {
+fn gen_method(method: &MethodDef, mapper: &WasmMapper, type_name: &str) -> String {
     let params: Vec<String> = method
         .params
         .iter()
@@ -185,11 +185,43 @@ fn gen_method(method: &MethodDef, mapper: &WasmMapper) -> String {
 
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
+    let core_import = "skif_core";
 
     if method.is_async {
+        // For WASM, native async fn automatically becomes a Promise
+        let call_args = method
+            .params
+            .iter()
+            .map(|p| {
+                if matches!(p.ty, skif_core::ir::TypeRef::Named(_)) {
+                    format!("{}.into()", p.name)
+                } else {
+                    p.name.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let core_call = format!(
+            "{core_import}::{type_name}::from(self.clone()).{method_name}({call_args})",
+            method_name = method.name
+        );
+        let body = if method.error_type.is_some() {
+            format!(
+                "let result = {core_call}.await\n        \
+                 .map_err(|e| JsValue::from_str(&e.to_string()))?;\n    \
+                 Ok({}::from(result))",
+                return_type
+            )
+        } else {
+            format!(
+                "let result = {core_call}.await;\n    \
+                 Ok({}::from(result))",
+                return_type
+            )
+        };
         format!(
             "pub async fn {}(&self, {}) -> {} {{\n    \
-             todo!(\"call into core implementation\")\n}}",
+             {body}\n}}",
             method.name,
             params.join(", "),
             return_annotation
@@ -240,11 +272,40 @@ fn gen_function(func: &FunctionDef, mapper: &WasmMapper) -> String {
 
     let return_type = mapper.map_type(&func.return_type);
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
+    let core_import = "skif_core";
 
     if func.is_async {
+        // For WASM, native async fn automatically becomes a Promise
+        let call_args = func
+            .params
+            .iter()
+            .map(|p| {
+                if matches!(p.ty, skif_core::ir::TypeRef::Named(_)) {
+                    format!("{}.into()", p.name)
+                } else {
+                    p.name.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let core_call = format!("{core_import}::{}({call_args})", func.name);
+        let body = if func.error_type.is_some() {
+            format!(
+                "let result = {core_call}.await\n        \
+                 .map_err(|e| JsValue::from_str(&e.to_string()))?;\n    \
+                 Ok({}::from(result))",
+                return_type
+            )
+        } else {
+            format!(
+                "let result = {core_call}.await;\n    \
+                 Ok({}::from(result))",
+                return_type
+            )
+        };
         format!(
             "#[wasm_bindgen]\npub async fn {}({}) -> {} {{\n    \
-             todo!(\"call into core implementation\")\n}}",
+             {body}\n}}",
             func.name,
             params.join(", "),
             return_annotation

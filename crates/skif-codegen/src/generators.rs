@@ -4,6 +4,21 @@ use crate::type_mapper::TypeMapper;
 use skif_core::ir::{EnumDef, FunctionDef, MethodDef, ParamDef, TypeDef, TypeRef};
 use std::fmt::Write;
 
+/// Async support pattern for the backend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AsyncPattern {
+    /// No async support
+    None,
+    /// PyO3: pyo3_async_runtimes::tokio::future_into_py
+    Pyo3FutureIntoPy,
+    /// NAPI-RS: native async fn → auto-Promise
+    NapiNativeAsync,
+    /// wasm-bindgen: native async fn → auto-Promise
+    WasmNativeAsync,
+    /// Block on Tokio runtime (Ruby, PHP)
+    TokioBlockOn,
+}
+
 /// Configuration for Rust binding code generation.
 pub struct RustBindingConfig<'a> {
     /// Attrs applied to generated structs, e.g. `["pyclass(frozen)"]`.
@@ -32,6 +47,8 @@ pub struct RustBindingConfig<'a> {
     pub signature_suffix: &'a str,
     /// Core crate import path, e.g. `"liter_llm"`. Used to generate calls into core.
     pub core_import: &'a str,
+    /// Async pattern supported by this backend.
+    pub async_pattern: AsyncPattern,
 }
 
 /// Build call argument expressions from parameters, applying `.into()` on Named types.
@@ -103,7 +120,109 @@ pub fn gen_method(method: &MethodDef, mapper: &dyn TypeMapper, cfg: &RustBinding
     let return_type = mapper.map_type(&method.return_type);
     let ret = mapper.wrap_return(&return_type, method.error_type.is_some());
 
-    let self_param = if params.is_empty() { "&self" } else { "&self, " };
+    let call_args = gen_call_args(&method.params);
+    let core_import = cfg.core_import;
+
+    // Generate the body: convert self to core type, call method, convert result back
+    let body = if method.is_async {
+        match cfg.async_pattern {
+            AsyncPattern::Pyo3FutureIntoPy => {
+                let core_call = format!(
+                    "{core_import}::{type_name}::from(self.clone()).{method_name}({call_args})",
+                    method_name = method.name
+                );
+                let result_handling = if method.error_type.is_some() {
+                    format!(
+                        "let result = {core_call}.await\n            \
+                         .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;"
+                    )
+                } else {
+                    format!("let result = {core_call}.await;")
+                };
+                format!(
+                    "pyo3_async_runtimes::tokio::future_into_py(py, async move {{\n            \
+                     {result_handling}\n            \
+                     Ok({return_type}::from(result))\n        }})"
+                )
+            }
+            AsyncPattern::WasmNativeAsync => {
+                let core_call = format!(
+                    "{core_import}::{type_name}::from(self.clone()).{method_name}({call_args})",
+                    method_name = method.name
+                );
+                let result_handling = if method.error_type.is_some() {
+                    format!(
+                        "let result = {core_call}.await\n        \
+                         .map_err(|e| JsValue::from_str(&e.to_string()))?;"
+                    )
+                } else {
+                    format!("let result = {core_call}.await;")
+                };
+                format!(
+                    "{result_handling}\n        \
+                     Ok({return_type}::from(result))"
+                )
+            }
+            AsyncPattern::NapiNativeAsync => {
+                let core_call = format!(
+                    "{core_import}::{type_name}::from(self.clone()).{method_name}({call_args})",
+                    method_name = method.name
+                );
+                let result_handling = if method.error_type.is_some() {
+                    format!(
+                        "let result = {core_call}.await\n            \
+                         .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;"
+                    )
+                } else {
+                    format!("let result = {core_call}.await;")
+                };
+                format!(
+                    "{result_handling}\n            \
+                     Ok({return_type}::from(result))"
+                )
+            }
+            AsyncPattern::TokioBlockOn => {
+                let core_call = format!(
+                    "{core_import}::{type_name}::from(self.clone()).{method_name}({call_args})",
+                    method_name = method.name
+                );
+                if method.error_type.is_some() {
+                    format!(
+                        "let rt = tokio::runtime::Runtime::new()?;\n        \
+                         rt.block_on(async {{ {core_call}.await.map_err(|e| e.into()) }})"
+                    )
+                } else {
+                    format!(
+                        "let rt = tokio::runtime::Runtime::new()?;\n        \
+                         rt.block_on(async {{ {core_call}.await }})"
+                    )
+                }
+            }
+            AsyncPattern::None => "todo!(\"async not supported by backend\")".to_string(),
+        }
+    } else {
+        let core_call = format!(
+            "{}::{}::from(self.clone()).{}({call_args})",
+            core_import, type_name, method.name
+        );
+        if method.error_type.is_some() {
+            format!("{core_call}.map_err(|e| e.into())")
+        } else {
+            core_call
+        }
+    };
+
+    let self_param = if params.is_empty() && !method.is_async {
+        "&self"
+    } else if params.is_empty() && method.is_async && cfg.async_pattern == AsyncPattern::Pyo3FutureIntoPy {
+        "py: Python<'_>, &self"
+    } else if method.is_async && cfg.async_pattern == AsyncPattern::Pyo3FutureIntoPy {
+        "py: Python<'_>, &self, "
+    } else if params.is_empty() {
+        "&self"
+    } else {
+        "&self, "
+    };
 
     // Wrap long signature if necessary
     let (sig_start, sig_params, sig_end) = if self_param.len() + params.len() > 100 {
@@ -133,23 +252,6 @@ pub fn gen_method(method: &MethodDef, mapper: &dyn TypeMapper, cfg: &RustBinding
         )
     };
 
-    let call_args = gen_call_args(&method.params);
-    let core_import = cfg.core_import;
-    // Generate the body: convert self to core type, call method, convert result back
-    let body = if method.is_async {
-        "todo!(\"async method bridging not yet implemented\")".to_string()
-    } else {
-        let core_call = format!(
-            "{}::{}::from(self.clone()).{}({call_args})",
-            core_import, type_name, method.name
-        );
-        if method.error_type.is_some() {
-            format!("{core_call}.map_err(|e| e.into())")
-        } else {
-            core_call
-        }
-    };
-
     let mut out = String::new();
     if cfg.needs_signature {
         let sig = function_sig_defaults(&method.params);
@@ -177,6 +279,82 @@ pub fn gen_static_method(
     let return_type = mapper.map_type(&method.return_type);
     let ret = mapper.wrap_return(&return_type, method.error_type.is_some());
 
+    let call_args = gen_call_args(&method.params);
+    let core_import = cfg.core_import;
+
+    let body = if method.is_async {
+        match cfg.async_pattern {
+            AsyncPattern::Pyo3FutureIntoPy => {
+                let core_call = format!("{core_import}::{type_name}::{}({call_args})", method.name);
+                let result_handling = if method.error_type.is_some() {
+                    format!(
+                        "let result = {core_call}.await\n            \
+                         .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;"
+                    )
+                } else {
+                    format!("let result = {core_call}.await;")
+                };
+                format!(
+                    "pyo3_async_runtimes::tokio::future_into_py(py, async move {{\n            \
+                     {result_handling}\n            \
+                     Ok({return_type}::from(result))\n        }})"
+                )
+            }
+            AsyncPattern::WasmNativeAsync => {
+                let core_call = format!("{core_import}::{type_name}::{}({call_args})", method.name);
+                let result_handling = if method.error_type.is_some() {
+                    format!(
+                        "let result = {core_call}.await\n        \
+                         .map_err(|e| JsValue::from_str(&e.to_string()))?;"
+                    )
+                } else {
+                    format!("let result = {core_call}.await;")
+                };
+                format!(
+                    "{result_handling}\n        \
+                     Ok({return_type}::from(result))"
+                )
+            }
+            AsyncPattern::NapiNativeAsync => {
+                let core_call = format!("{core_import}::{type_name}::{}({call_args})", method.name);
+                let result_handling = if method.error_type.is_some() {
+                    format!(
+                        "let result = {core_call}.await\n            \
+                         .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;"
+                    )
+                } else {
+                    format!("let result = {core_call}.await;")
+                };
+                format!(
+                    "{result_handling}\n            \
+                     Ok({return_type}::from(result))"
+                )
+            }
+            AsyncPattern::TokioBlockOn => {
+                let core_call = format!("{core_import}::{type_name}::{}({call_args})", method.name);
+                if method.error_type.is_some() {
+                    format!(
+                        "let rt = tokio::runtime::Runtime::new()?;\n        \
+                         rt.block_on(async {{ {core_call}.await.map_err(|e| e.into()) }})"
+                    )
+                } else {
+                    format!(
+                        "let rt = tokio::runtime::Runtime::new()?;\n        \
+                         rt.block_on(async {{ {core_call}.await }})"
+                    )
+                }
+            }
+            AsyncPattern::None => "todo!(\"async not supported by backend\")".to_string(),
+        }
+    } else {
+        let core_call = format!("{core_import}::{type_name}::{}({call_args})", method.name);
+        if method.error_type.is_some() {
+            format!("{core_call}.map_err(|e| e.into())")
+        } else {
+            core_call
+        }
+    };
+
     // Wrap long signature if necessary
     let (sig_start, sig_params, sig_end) = if params.len() > 100 {
         let wrapped_params = method
@@ -192,25 +370,29 @@ pub fn gen_static_method(
             })
             .collect::<Vec<_>>()
             .join(",\n        ");
-        (
-            format!("pub fn {}(\n        ", method.name),
-            wrapped_params,
-            "\n    ) -> ".to_string(),
-        )
-    } else {
-        (format!("pub fn {}(", method.name), params, ") -> ".to_string())
-    };
-
-    let call_args = gen_call_args(&method.params);
-    let core_import = cfg.core_import;
-    let body = if method.is_async {
-        "todo!(\"async method bridging not yet implemented\")".to_string()
-    } else {
-        let core_call = format!("{core_import}::{type_name}::{}({call_args})", method.name);
-        if method.error_type.is_some() {
-            format!("{core_call}.map_err(|e| e.into())")
+        // For async PyO3, add py parameter
+        if method.is_async && cfg.async_pattern == AsyncPattern::Pyo3FutureIntoPy {
+            (
+                format!("pub fn {}(py: Python<'_>,\n        ", method.name),
+                wrapped_params,
+                "\n    ) -> ".to_string(),
+            )
         } else {
-            core_call
+            (
+                format!("pub fn {}(\n        ", method.name),
+                wrapped_params,
+                "\n    ) -> ".to_string(),
+            )
+        }
+    } else {
+        if method.is_async && cfg.async_pattern == AsyncPattern::Pyo3FutureIntoPy {
+            (
+                format!("pub fn {}(py: Python<'_>, ", method.name),
+                params,
+                ") -> ".to_string(),
+            )
+        } else {
+            (format!("pub fn {}(", method.name), params, ") -> ".to_string())
         }
     };
 
@@ -256,9 +438,89 @@ pub fn gen_function(func: &FunctionDef, mapper: &dyn TypeMapper, cfg: &RustBindi
     let return_type = mapper.map_type(&func.return_type);
     let ret = mapper.wrap_return(&return_type, func.error_type.is_some());
 
-    let async_kw = if func.is_async { "async " } else { "" };
+    let call_args = gen_call_args(&func.params);
+    let core_import = cfg.core_import;
+
+    // Generate the body based on async pattern
+    let body = if func.is_async {
+        match cfg.async_pattern {
+            AsyncPattern::Pyo3FutureIntoPy => {
+                let core_call = format!("{core_import}::{}({call_args})", func.name);
+                let result_handling = if func.error_type.is_some() {
+                    format!(
+                        "let result = {core_call}.await\n            \
+                         .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;",
+                        core_call = core_call
+                    )
+                } else {
+                    format!("let result = {core_call}.await;")
+                };
+                format!(
+                    "pyo3_async_runtimes::tokio::future_into_py(py, async move {{\n            \
+                     {result_handling}\n            \
+                     Ok({return_type}::from(result))\n        }})"
+                )
+            }
+            AsyncPattern::WasmNativeAsync => {
+                let core_call = format!("{core_import}::{}({call_args})", func.name);
+                let result_handling = if func.error_type.is_some() {
+                    format!(
+                        "let result = {core_call}.await\n        \
+                         .map_err(|e| JsValue::from_str(&e.to_string()))?;",
+                        core_call = core_call
+                    )
+                } else {
+                    format!("let result = {core_call}.await;")
+                };
+                format!(
+                    "{result_handling}\n        \
+                     Ok({return_type}::from(result))"
+                )
+            }
+            AsyncPattern::NapiNativeAsync => {
+                let core_call = format!("{core_import}::{}({call_args})", func.name);
+                let result_handling = if func.error_type.is_some() {
+                    format!(
+                        "let result = {core_call}.await\n            \
+                         .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;",
+                        core_call = core_call
+                    )
+                } else {
+                    format!("let result = {core_call}.await;")
+                };
+                format!(
+                    "{result_handling}\n            \
+                     Ok({return_type}::from(result))"
+                )
+            }
+            AsyncPattern::TokioBlockOn => {
+                let core_call = format!("{core_import}::{}({call_args})", func.name);
+
+                if func.error_type.is_some() {
+                    format!(
+                        "let rt = tokio::runtime::Runtime::new()?;\n    \
+                         rt.block_on(async {{ {core_call}.await.map_err(|e| e.into()) }})"
+                    )
+                } else {
+                    format!(
+                        "let rt = tokio::runtime::Runtime::new()?;\n    \
+                         rt.block_on(async {{ {core_call}.await }})"
+                    )
+                }
+            }
+            AsyncPattern::None => "todo!(\"async not supported by backend\")".to_string(),
+        }
+    } else {
+        let core_call = format!("{core_import}::{}({call_args})", func.name);
+        if func.error_type.is_some() {
+            format!("{core_call}.map_err(|e| e.into())")
+        } else {
+            core_call
+        }
+    };
 
     // Wrap long signature if necessary
+    let async_kw = if func.is_async { "async " } else { "" };
     let (func_sig, _params_formatted) = if params.len() > 100 {
         let wrapped_params = func
             .params
@@ -273,29 +535,34 @@ pub fn gen_function(func: &FunctionDef, mapper: &dyn TypeMapper, cfg: &RustBindi
             })
             .collect::<Vec<_>>()
             .join(",\n    ");
-        (
-            format!(
-                "pub {async_kw}fn {}(\n    {}\n) -> {ret}",
-                func.name,
-                wrapped_params,
-                ret = ret
-            ),
-            "",
-        )
-    } else {
-        (format!("pub {async_kw}fn {}({params}) -> {ret}", func.name), "")
-    };
 
-    let call_args = gen_call_args(&func.params);
-    let core_import = cfg.core_import;
-    let body = if func.is_async {
-        "todo!(\"async function bridging not yet implemented\")".to_string()
-    } else {
-        let core_call = format!("{core_import}::{}({call_args})", func.name);
-        if func.error_type.is_some() {
-            format!("{core_call}.map_err(|e| e.into())")
+        // For async PyO3, we need special signature handling
+        if func.is_async && cfg.async_pattern == AsyncPattern::Pyo3FutureIntoPy {
+            (
+                format!(
+                    "pub fn {}(py: Python<'_>,\n    {}\n) -> {ret}",
+                    func.name,
+                    wrapped_params,
+                    ret = ret
+                ),
+                "",
+            )
         } else {
-            core_call
+            (
+                format!(
+                    "pub {async_kw}fn {}(\n    {}\n) -> {ret}",
+                    func.name,
+                    wrapped_params,
+                    ret = ret
+                ),
+                "",
+            )
+        }
+    } else {
+        if func.is_async && cfg.async_pattern == AsyncPattern::Pyo3FutureIntoPy {
+            (format!("pub fn {}(py: Python<'_>, {params}) -> {ret}", func.name), "")
+        } else {
+            (format!("pub {async_kw}fn {}({params}) -> {ret}", func.name), "")
         }
     };
 
