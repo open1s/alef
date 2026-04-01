@@ -1,14 +1,67 @@
-use skif_core::ir::{EnumDef, TypeDef, TypeRef};
+use skif_core::ir::{ApiSurface, EnumDef, TypeDef, TypeRef};
+use std::collections::HashSet;
 use std::fmt::Write;
 
-/// Check if a type can have From/Into safely generated.
-pub fn can_generate_conversion(typ: &TypeDef) -> bool {
-    // Skip opaque types — conversion is via Arc, not From
-    if typ.is_opaque {
-        return false;
+/// Build the set of types that can have From/Into safely generated.
+/// This is transitive: a type is convertible only if all its Named field types
+/// are also convertible (or are enums).
+pub fn convertible_types(surface: &ApiSurface) -> HashSet<String> {
+    let known_enums: HashSet<&str> = surface.enums.iter().map(|e| e.name.as_str()).collect();
+
+    // Start with all non-opaque types as candidates
+    let mut convertible: HashSet<String> = surface
+        .types
+        .iter()
+        .filter(|t| !t.is_opaque)
+        .map(|t| t.name.clone())
+        .collect();
+
+    // Iteratively remove types whose fields reference non-convertible Named types
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let snapshot: Vec<String> = convertible.iter().cloned().collect();
+        for type_name in &snapshot {
+            if let Some(typ) = surface.types.iter().find(|t| t.name == *type_name) {
+                let ok = typ
+                    .fields
+                    .iter()
+                    .all(|f| is_field_convertible_with_set(&f.ty, &convertible, &known_enums));
+                if !ok && convertible.remove(type_name) {
+                    changed = true;
+                }
+            }
+        }
     }
-    // All fields must be simple types (no generic params, no trait objects, no Json)
-    typ.fields.iter().all(|f| is_convertible_type(&f.ty))
+    convertible
+}
+
+/// Check if a specific type is in the convertible set.
+pub fn can_generate_conversion(typ: &TypeDef, convertible: &HashSet<String>) -> bool {
+    convertible.contains(&typ.name)
+}
+
+fn is_field_convertible_with_set(ty: &TypeRef, convertible: &HashSet<String>, known_enums: &HashSet<&str>) -> bool {
+    match ty {
+        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
+        TypeRef::Json => false,
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => {
+            is_field_convertible_with_set(inner, convertible, known_enums)
+        }
+        TypeRef::Map(k, v) => {
+            is_field_convertible_with_set(k, convertible, known_enums)
+                && is_field_convertible_with_set(v, convertible, known_enums)
+        }
+        TypeRef::Named(name) => {
+            if name.len() <= 2 {
+                return false;
+            }
+            if name.contains('<') || name.contains("dyn ") {
+                return false;
+            }
+            convertible.contains(name.as_str()) || known_enums.contains(name.as_str())
+        }
+    }
 }
 
 /// Check if an enum can have From/Into safely generated.
@@ -17,14 +70,16 @@ pub fn can_generate_enum_conversion(enum_def: &EnumDef) -> bool {
     enum_def.variants.iter().all(|v| v.fields.is_empty())
 }
 
-fn is_convertible_type(ty: &TypeRef) -> bool {
+fn is_field_convertible(ty: &TypeRef, known_types: &HashSet<&str>, known_enums: &HashSet<&str>) -> bool {
     match ty {
         TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
         TypeRef::Json => false, // Needs backend-specific conversion
-        TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_convertible_type(inner),
-        TypeRef::Map(k, v) => is_convertible_type(k) && is_convertible_type(v),
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_field_convertible(inner, known_types, known_enums),
+        TypeRef::Map(k, v) => {
+            is_field_convertible(k, known_types, known_enums) && is_field_convertible(v, known_types, known_enums)
+        }
         TypeRef::Named(name) => {
-            // Skip single-letter generic params and known trait types
+            // Skip single-letter generic params
             if name.len() <= 2 {
                 return false;
             }
@@ -32,7 +87,8 @@ fn is_convertible_type(ty: &TypeRef) -> bool {
             if name.contains('<') || name.contains("dyn ") {
                 return false;
             }
-            true
+            // The Named type must actually exist in the API surface
+            known_types.contains(name.as_str()) || known_enums.contains(name.as_str())
         }
     }
 }

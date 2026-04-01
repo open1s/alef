@@ -96,9 +96,10 @@ impl Backend for Pyo3Backend {
             builder.add_item(&generators::gen_function(f, &mapper, &cfg));
         }
 
+        let convertible = skif_codegen::conversions::convertible_types(api);
         // From/Into conversions
         for typ in &api.types {
-            if skif_codegen::conversions::can_generate_conversion(typ) {
+            if skif_codegen::conversions::can_generate_conversion(typ, &convertible) {
                 builder.add_item(&skif_codegen::conversions::gen_from_binding_to_core(typ, &core_import));
                 builder.add_item(&skif_codegen::conversions::gen_from_core_to_binding(typ, &core_import));
             }

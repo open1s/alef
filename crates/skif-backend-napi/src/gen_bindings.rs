@@ -99,9 +99,10 @@ impl Backend for NapiBackend {
             builder.add_item(&gen_function(func, &mapper));
         }
 
+        let convertible = skif_codegen::conversions::convertible_types(api);
         // From/Into conversions (NAPI uses Js prefix, so we need custom generation)
         for typ in &api.types {
-            if skif_codegen::conversions::can_generate_conversion(typ) {
+            if skif_codegen::conversions::can_generate_conversion(typ, &convertible) {
                 builder.add_item(&gen_from_js_binding_to_core(typ, &core_import));
                 builder.add_item(&gen_from_core_to_js_binding(typ, &core_import));
             }

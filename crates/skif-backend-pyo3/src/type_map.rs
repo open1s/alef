@@ -7,7 +7,7 @@ pub struct Pyo3Mapper;
 
 impl TypeMapper for Pyo3Mapper {
     fn json(&self) -> Cow<'static, str> {
-        Cow::Borrowed("Py<PyDict>")
+        Cow::Borrowed("String") // JSON as string, user deserializes
     }
 
     fn error_wrapper(&self) -> &str {

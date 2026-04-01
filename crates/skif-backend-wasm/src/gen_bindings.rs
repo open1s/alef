@@ -78,9 +78,12 @@ impl Backend for WasmBackend {
             }
         }
 
+        let convertible = skif_codegen::conversions::convertible_types(api);
         // From/Into conversions (WASM uses Js prefix, so we need custom generation)
         for typ in &api.types {
-            if skif_codegen::conversions::can_generate_conversion(typ) && !exclude_types.contains(&typ.name) {
+            if skif_codegen::conversions::can_generate_conversion(typ, &convertible)
+                && !exclude_types.contains(&typ.name)
+            {
                 builder.add_item(&gen_from_js_binding_to_core(typ, &core_import));
                 builder.add_item(&gen_from_core_to_js_binding(typ, &core_import));
             }

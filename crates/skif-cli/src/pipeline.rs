@@ -1,6 +1,7 @@
 use skif_core::backend::GeneratedFile;
 use skif_core::config::{Language, SkifConfig};
-use skif_core::ir::ApiSurface;
+use skif_core::ir::{ApiSurface, TypeDef, TypeRef};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::cache;
@@ -451,11 +452,12 @@ fn apply_filters(mut api: ApiSurface, config: &SkifConfig) -> ApiSurface {
     let exclude = &config.exclude;
     let include = &config.include;
 
-    // Apply includes first (whitelist)
+    // Apply includes first (whitelist), expanding to transitively referenced types
     if !include.types.is_empty() {
-        api.types.retain(|t| include.types.contains(&t.name));
-        api.enums.retain(|e| include.types.contains(&e.name));
-        api.errors.retain(|e| include.types.contains(&e.name));
+        let expanded = expand_include_list(&api, &include.types);
+        api.types.retain(|t| expanded.contains(&t.name));
+        api.enums.retain(|e| expanded.contains(&e.name));
+        api.errors.retain(|e| expanded.contains(&e.name));
     }
     if !include.functions.is_empty() {
         api.functions.retain(|f| include.functions.contains(&f.name));
@@ -468,4 +470,59 @@ fn apply_filters(mut api: ApiSurface, config: &SkifConfig) -> ApiSurface {
     api.errors.retain(|e| !exclude.types.contains(&e.name));
 
     api
+}
+
+/// Expand the include list by transitively discovering all types referenced by fields,
+/// method parameters, and return types of the included types.
+fn expand_include_list(api: &ApiSurface, include_types: &[String]) -> HashSet<String> {
+    let mut needed: HashSet<String> = include_types.iter().cloned().collect();
+    let mut changed = true;
+
+    // Build a map of all available types for lookup
+    let all_types: HashMap<String, &TypeDef> = api.types.iter().map(|t| (t.name.clone(), t)).collect();
+    let all_enums: HashSet<String> = api.enums.iter().map(|e| e.name.clone()).collect();
+
+    while changed {
+        changed = false;
+        let current: Vec<String> = needed.iter().cloned().collect();
+        for type_name in &current {
+            if let Some(typ) = all_types.get(type_name) {
+                for field in &typ.fields {
+                    collect_named_types(&field.ty, &mut needed, &all_types, &all_enums, &mut changed);
+                }
+                for method in &typ.methods {
+                    collect_named_types(&method.return_type, &mut needed, &all_types, &all_enums, &mut changed);
+                    for param in &method.params {
+                        collect_named_types(&param.ty, &mut needed, &all_types, &all_enums, &mut changed);
+                    }
+                }
+            }
+        }
+    }
+    needed
+}
+
+/// Recursively collect all named type references from a TypeRef into the needed set.
+fn collect_named_types(
+    ty: &TypeRef,
+    needed: &mut HashSet<String>,
+    all_types: &HashMap<String, &TypeDef>,
+    all_enums: &HashSet<String>,
+    changed: &mut bool,
+) {
+    match ty {
+        TypeRef::Named(name) => {
+            if (all_types.contains_key(name) || all_enums.contains(name)) && needed.insert(name.clone()) {
+                *changed = true;
+            }
+        }
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => {
+            collect_named_types(inner, needed, all_types, all_enums, changed);
+        }
+        TypeRef::Map(k, v) => {
+            collect_named_types(k, needed, all_types, all_enums, changed);
+            collect_named_types(v, needed, all_types, all_enums, changed);
+        }
+        _ => {}
+    }
 }
