@@ -153,7 +153,9 @@ fn gen_struct_type(typ: &TypeDef) -> String {
     let mut out = String::with_capacity(1024);
 
     if !typ.doc.is_empty() {
-        writeln!(out, "// {} {}", typ.name, typ.doc).ok();
+        for line in typ.doc.lines() {
+            writeln!(out, "// {}", line.trim()).ok();
+        }
     } else {
         writeln!(out, "// {} is a type.", typ.name).ok();
     }
@@ -174,7 +176,9 @@ fn gen_struct_type(typ: &TypeDef) -> String {
         };
 
         if !field.doc.is_empty() {
-            writeln!(out, "    // {} {}", to_go_name(&field.name), field.doc).ok();
+            for line in field.doc.lines() {
+                writeln!(out, "    // {}", line.trim()).ok();
+            }
         }
         writeln!(out, "    {} {} `{}`", to_go_name(&field.name), field_type, json_tag).ok();
     }
@@ -190,7 +194,9 @@ fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
     let func_go_name = to_go_name(&func.name);
 
     if !func.doc.is_empty() {
-        writeln!(out, "// {} {}", func_go_name, func.doc).ok();
+        for line in func.doc.lines() {
+            writeln!(out, "// {}", line.trim()).ok();
+        }
     } else {
         writeln!(out, "// {} calls the FFI function.", func_go_name).ok();
     }
@@ -290,7 +296,9 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str) -> St
     let method_go_name = to_go_name(&method.name);
 
     if !method.doc.is_empty() {
-        writeln!(out, "// {} {}", method_go_name, method.doc).ok();
+        for line in method.doc.lines() {
+            writeln!(out, "// {}", line.trim()).ok();
+        }
     } else {
         writeln!(out, "// {} is a method.", method_go_name).ok();
     }

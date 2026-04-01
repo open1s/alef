@@ -97,10 +97,11 @@ fn gen_type_stub(typ: &TypeDef) -> String {
 
     // Add field type annotations
     for field in &typ.fields {
-        let field_type = if field.optional {
-            format!("{} | None", python_type(&field.ty))
+        let type_str = python_type(&field.ty);
+        let field_type = if field.optional && !type_str.contains("| None") {
+            format!("{} | None", type_str)
         } else {
-            python_type(&field.ty)
+            type_str
         };
         lines.push(format!("    {}: {}", field.name, field_type));
     }
@@ -127,46 +128,54 @@ fn gen_type_stub(typ: &TypeDef) -> String {
 
 /// Generate __init__ signature stub for a struct.
 fn gen_type_init_stub(typ: &TypeDef) -> String {
-    let params: Vec<String> = typ
-        .fields
+    // Partition fields into required (non-optional) and optional
+    let (required, optional): (Vec<_>, Vec<_>) = typ.fields.iter().partition(|f| !f.optional);
+
+    // Generate required params first, then optional params
+    let mut params: Vec<String> = required
         .iter()
         .map(|f| {
-            let param_type = if f.optional {
-                format!("{} | None", python_type(&f.ty))
-            } else {
-                python_type(&f.ty)
-            };
-
-            if f.optional {
-                format!("{}: {} = None", f.name, param_type)
-            } else {
-                format!("{}: {}", f.name, param_type)
-            }
+            let param_type = python_type(&f.ty);
+            format!("{}: {}", f.name, param_type)
         })
         .collect();
+
+    params.extend(optional.iter().map(|f| {
+        let type_str = python_type(&f.ty);
+        let param_type = if !type_str.contains("| None") {
+            format!("{} | None", type_str)
+        } else {
+            type_str
+        };
+        format!("{}: {} = None", f.name, param_type)
+    }));
 
     format!("    def __init__(self, {}) -> None: ...", params.join(", "))
 }
 
 /// Generate a method stub.
 fn gen_method_stub(method: &MethodDef, is_static: bool) -> String {
-    let params: Vec<String> = method
-        .params
+    // Partition params into required (non-optional) and optional
+    let (required, optional): (Vec<_>, Vec<_>) = method.params.iter().partition(|p| !p.optional);
+
+    // Generate required params first, then optional params
+    let mut params: Vec<String> = required
         .iter()
         .map(|p| {
-            let param_type = if p.optional {
-                format!("{} | None", python_type(&p.ty))
-            } else {
-                python_type(&p.ty)
-            };
-
-            if p.optional {
-                format!("{}: {} = None", p.name, param_type)
-            } else {
-                format!("{}: {}", p.name, param_type)
-            }
+            let param_type = python_type(&p.ty);
+            format!("{}: {}", p.name, param_type)
         })
         .collect();
+
+    params.extend(optional.iter().map(|p| {
+        let type_str = python_type(&p.ty);
+        let param_type = if !type_str.contains("| None") {
+            format!("{} | None", type_str)
+        } else {
+            type_str
+        };
+        format!("{}: {} = None", p.name, param_type)
+    }));
 
     let return_type = python_type(&method.return_type);
     let indent = "    ";
@@ -223,23 +232,27 @@ fn gen_enum_stub(enum_def: &EnumDef) -> String {
 
 /// Generate a function stub.
 fn gen_function_stub(func: &FunctionDef) -> String {
-    let params: Vec<String> = func
-        .params
+    // Partition params into required (non-optional) and optional
+    let (required, optional): (Vec<_>, Vec<_>) = func.params.iter().partition(|p| !p.optional);
+
+    // Generate required params first, then optional params
+    let mut params: Vec<String> = required
         .iter()
         .map(|p| {
-            let param_type = if p.optional {
-                format!("{} | None", python_type(&p.ty))
-            } else {
-                python_type(&p.ty)
-            };
-
-            if p.optional {
-                format!("{}: {} = None", p.name, param_type)
-            } else {
-                format!("{}: {}", p.name, param_type)
-            }
+            let param_type = python_type(&p.ty);
+            format!("{}: {}", p.name, param_type)
         })
         .collect();
+
+    params.extend(optional.iter().map(|p| {
+        let type_str = python_type(&p.ty);
+        let param_type = if !type_str.contains("| None") {
+            format!("{} | None", type_str)
+        } else {
+            type_str
+        };
+        format!("{}: {} = None", p.name, param_type)
+    }));
 
     let return_type = python_type(&func.return_type);
     let safe_name = python_safe_name(&func.name);

@@ -137,17 +137,22 @@ impl Backend for NapiBackend {
     }
 }
 
-/// Generate a NAPI struct with Js-prefixed name and all fields wrapped in Option.
+/// Generate a NAPI struct with Js-prefixed name and fields wrapped in Option only if optional.
 fn gen_struct(typ: &TypeDef, mapper: &NapiMapper) -> String {
     let mut struct_builder = StructBuilder::new(&format!("Js{}", typ.name));
     struct_builder.add_attr("napi");
     struct_builder.add_derive("Clone");
 
     for field in &typ.fields {
-        let field_type = format!("Option<{}>", mapper.map_type(&field.ty));
+        let mapped_type = mapper.map_type(&field.ty);
+        let field_type = if field.optional {
+            format!("Option<{}>", mapped_type)
+        } else {
+            mapped_type
+        };
         let js_name = to_node_name(&field.name);
         let attrs = if js_name != field.name {
-            vec![format!("#[napi(js_name = \"{}\")]", js_name)]
+            vec![format!("napi(js_name = \"{}\")", js_name)]
         } else {
             vec![]
         };
@@ -257,12 +262,20 @@ fn gen_opaque_instance_method(method: &MethodDef, mapper: &NapiMapper) -> String
     )
 }
 
-/// Generate a constructor with all params wrapped in Option.
+/// Generate a constructor with params wrapped in Option only if optional.
 fn gen_constructor(typ: &TypeDef, mapper: &NapiMapper) -> String {
     let params: Vec<String> = typ
         .fields
         .iter()
-        .map(|f| format!("{}: Option<{}>", f.name, mapper.map_type(&f.ty)))
+        .map(|f| {
+            let mapped_type = mapper.map_type(&f.ty);
+            let param_type = if f.optional {
+                format!("Option<{}>", mapped_type)
+            } else {
+                mapped_type
+            };
+            format!("{}: {}", f.name, param_type)
+        })
         .collect();
 
     let (_, _, assignments) = constructor_parts(&typ.fields, &|ty| mapper.map_type(ty));

@@ -6,9 +6,20 @@ use skif_codegen::shared::constructor_parts;
 use skif_codegen::type_mapper::TypeMapper;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
 use skif_core::config::{Language, SkifConfig, resolve_output_dir};
-use skif_core::ir::{ApiSurface, EnumDef, FieldDef, FunctionDef, MethodDef, TypeDef};
+use skif_core::ir::{ApiSurface, EnumDef, FieldDef, FunctionDef, MethodDef, TypeDef, TypeRef};
 use std::fmt::Write;
 use std::path::PathBuf;
+
+/// Check if a TypeRef is a Copy type that shouldn't be cloned.
+fn is_copy_type(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Primitive(_) => true, // All primitives are Copy
+        TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Json => false,
+        TypeRef::Optional(_) | TypeRef::Vec(_) | TypeRef::Map(_, _) => false,
+        TypeRef::Named(_) => false, // Custom types are not Copy
+        TypeRef::Unit => true,
+    }
+}
 
 pub struct WasmBackend;
 
@@ -226,12 +237,13 @@ fn gen_opaque_method(method: &MethodDef, mapper: &WasmMapper, _type_name: &str) 
     }
 }
 
-/// Generate a wasm-bindgen struct definition using the shared TypeMapper.
+/// Generate a wasm-bindgen struct definition with private fields.
 fn gen_struct(typ: &TypeDef, mapper: &WasmMapper) -> String {
     let js_name = format!("Js{}", typ.name);
-    let mut struct_builder = StructBuilder::new(&js_name);
-    struct_builder.add_attr("wasm_bindgen");
-    struct_builder.add_derive("Clone");
+    let mut out = String::with_capacity(512);
+    writeln!(out, "#[derive(Clone)]").ok();
+    writeln!(out, "#[wasm_bindgen]").ok();
+    writeln!(out, "pub struct {} {{", js_name).ok();
 
     for field in &typ.fields {
         let field_type = if field.optional {
@@ -239,10 +251,12 @@ fn gen_struct(typ: &TypeDef, mapper: &WasmMapper) -> String {
         } else {
             mapper.map_type(&field.ty)
         };
-        struct_builder.add_field(&field.name, &field_type, vec![]);
+        // Fields are private (no pub)
+        writeln!(out, "    {}: {},", field.name, field_type).ok();
     }
 
-    struct_builder.build()
+    writeln!(out, "}}").ok();
+    out
 }
 
 /// Generate wasm-bindgen methods for a struct.
@@ -295,9 +309,16 @@ fn gen_getter(field: &FieldDef, mapper: &WasmMapper) -> String {
         String::new()
     };
 
+    // Only clone non-Copy types; Copy types are returned directly
+    let return_expr = if is_copy_type(&field.ty) {
+        format!("self.{}", field.name)
+    } else {
+        format!("self.{}.clone()", field.name)
+    };
+
     format!(
-        "#[wasm_bindgen(getter{js_name_attr})]\npub fn {}(&self) -> {} {{\n    self.{}.clone()\n}}",
-        field.name, field_type, field.name
+        "#[wasm_bindgen(getter{js_name_attr})]\npub fn {}(&self) -> {} {{\n    {}\n}}",
+        field.name, field_type, return_expr
     )
 }
 
