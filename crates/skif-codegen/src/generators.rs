@@ -232,7 +232,9 @@ pub fn gen_method(
 
     // For opaque types with non-trivial params, generate todo!() stub
     // since auto-delegation would produce type mismatches.
-    let opaque_can_delegate = !is_opaque || crate::shared::can_auto_delegate(method);
+    // Only auto-delegate methods where ALL params and return type are simple.
+    // For non-opaque types, we also need a From impl to exist — use the same check.
+    let opaque_can_delegate = crate::shared::can_auto_delegate(method);
 
     // Build the core call expression: opaque types delegate to self.inner directly,
     // non-opaque types convert self to core type first.
@@ -447,7 +449,11 @@ pub fn gen_static_method(
     let call_args = gen_call_args(&method.params);
     let core_import = cfg.core_import;
 
-    let body = if method.is_async {
+    let can_delegate = crate::shared::can_auto_delegate(method);
+
+    let body = if !can_delegate {
+        format!("todo!(\"wire up {type_name}::{}\")", method.name)
+    } else if method.is_async {
         match cfg.async_pattern {
             AsyncPattern::Pyo3FutureIntoPy => {
                 let core_call = format!("{core_import}::{type_name}::{}({call_args})", method.name);
@@ -616,8 +622,12 @@ pub fn gen_function(func: &FunctionDef, mapper: &dyn TypeMapper, cfg: &RustBindi
         }
     };
 
+    let can_delegate = crate::shared::can_auto_delegate_function(func);
+
     // Generate the body based on async pattern
-    let body = if func.is_async {
+    let body = if !can_delegate {
+        format!("todo!(\"wire up {}\")", func.name)
+    } else if func.is_async {
         match cfg.async_pattern {
             AsyncPattern::Pyo3FutureIntoPy => {
                 let core_call = format!("{core_fn_path}({call_args})");

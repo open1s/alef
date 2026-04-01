@@ -1,10 +1,18 @@
 use skif_core::ir::{FieldDef, MethodDef, ParamDef, TypeRef};
 
+/// Check if a free function can be auto-delegated to the core crate.
+pub fn can_auto_delegate_function(func: &skif_core::ir::FunctionDef) -> bool {
+    func.error_type.is_none() && func.params.iter().all(|p| is_simple_type(&p.ty)) && is_simple_type(&func.return_type)
+}
+
 /// Check if all params and return type are simple enough for auto-delegation.
-/// Simple = primitives, String, Bytes, bool, Vec<primitive>, Option<primitive>.
+/// Simple = primitives, String, Bytes, bool, Vec<primitive>, Option<primitive>, Unit.
 /// Non-simple = Named types (need conversion), Json, complex nested.
+/// Also checks that the method has no error type (Result wrapping needs care).
 pub fn can_auto_delegate(method: &MethodDef) -> bool {
-    method.params.iter().all(|p| is_simple_type(&p.ty)) && is_simple_type(&method.return_type)
+    method.error_type.is_none()
+        && method.params.iter().all(|p| is_simple_type(&p.ty))
+        && is_simple_type(&method.return_type)
 }
 
 fn is_simple_type(ty: &TypeRef) -> bool {
