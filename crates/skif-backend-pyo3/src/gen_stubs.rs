@@ -119,7 +119,7 @@ fn gen_method_stub(method: &MethodDef, is_static: bool) -> String {
         .collect();
 
     let return_type = python_type(&method.return_type);
-    let indent = if is_static { "    " } else { "    " };
+    let indent = "    ";
 
     if is_static {
         format!(

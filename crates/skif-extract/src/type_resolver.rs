@@ -16,29 +16,24 @@ pub fn resolve_type(ty: &syn::Type) -> TypeRef {
         syn::Type::Slice(slice) => resolve_slice_type(&slice.elem),
         // dyn Trait → Named(TraitName), trait objects are opaque
         syn::Type::TraitObject(trait_obj) => {
-            if let Some(bound) = trait_obj.bounds.first() {
-                if let syn::TypeParamBound::Trait(trait_bound) = bound {
-                    if let Some(seg) = trait_bound.path.segments.last() {
-                        return TypeRef::Named(seg.ident.to_string());
-                    }
+            if let Some(syn::TypeParamBound::Trait(trait_bound)) = trait_obj.bounds.first() {
+                if let Some(seg) = trait_bound.path.segments.last() {
+                    return TypeRef::Named(seg.ident.to_string());
                 }
             }
             TypeRef::Named("DynObject".to_string())
         }
         // impl Trait → resolve generic if Into<T> or AsRef<T>, otherwise Named(TraitName)
         syn::Type::ImplTrait(impl_trait) => {
-            if let Some(bound) = impl_trait.bounds.first() {
-                if let syn::TypeParamBound::Trait(trait_bound) = bound {
-                    if let Some(seg) = trait_bound.path.segments.last() {
-                        let trait_name = seg.ident.to_string();
-                        // For Into<T> and AsRef<T>, extract and resolve the inner type T
-                        if trait_name == "Into" || trait_name == "AsRef" {
-                            if let Some(inner_ty) = extract_single_generic_arg(seg) {
-                                return inner_ty;
-                            }
+            if let Some(syn::TypeParamBound::Trait(trait_bound)) = impl_trait.bounds.first() {
+                if let Some(seg) = trait_bound.path.segments.last() {
+                    let trait_name = seg.ident.to_string();
+                    if trait_name == "Into" || trait_name == "AsRef" {
+                        if let Some(inner_ty) = extract_single_generic_arg(seg) {
+                            return inner_ty;
                         }
-                        return TypeRef::Named(trait_name);
                     }
+                    return TypeRef::Named(trait_name);
                 }
             }
             TypeRef::Named("ImplTrait".to_string())

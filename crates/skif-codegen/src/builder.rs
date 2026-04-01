@@ -25,7 +25,7 @@ impl RustFileBuilder {
 
     /// Add a use import line.
     pub fn add_import(&mut self, import: &str) {
-        if !self.imports.contains(&import.to_string()) {
+        if !self.imports.iter().any(|i| i == import) {
             self.imports.push(import.to_string());
         }
     }

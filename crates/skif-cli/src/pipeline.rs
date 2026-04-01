@@ -45,6 +45,17 @@ pub fn generate(
     languages: &[Language],
     clean: bool,
 ) -> anyhow::Result<Vec<(Language, Vec<GeneratedFile>)>> {
+    // Validate that Go/Java/C# have FFI in the languages list
+    let has_ffi = languages.contains(&Language::Ffi);
+    for &lang in languages {
+        if (lang == Language::Go || lang == Language::Java || lang == Language::Csharp) && !has_ffi {
+            tracing::warn!(
+                "Language {:?} requires FFI to be in the languages list for proper code generation",
+                lang
+            );
+        }
+    }
+
     let ir_json = serde_json::to_string(api)?;
     let config_toml = toml::to_string(config).unwrap_or_default();
     let mut results = vec![];

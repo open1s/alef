@@ -32,15 +32,6 @@ pub fn csharp_type(ty: &TypeRef) -> String {
     }
 }
 
-/// Maps a TypeRef to its C# type for nullable values.
-#[allow(dead_code)]
-pub fn csharp_nullable_type(ty: &TypeRef) -> String {
-    match ty {
-        TypeRef::Optional(_) => csharp_type(ty),
-        _ => format!("{}?", csharp_type(ty)),
-    }
-}
-
 /// Returns the default value for a type in C#.
 pub fn csharp_default_value(ty: &TypeRef) -> String {
     match ty {

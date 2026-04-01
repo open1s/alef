@@ -34,27 +34,3 @@ impl TypeMapper for NapiMapper {
         "Result"
     }
 }
-
-/// Maps a TypeRef to its JavaScript representation for type stubs.
-#[allow(dead_code)]
-pub fn javascript_type(ty: &skif_core::ir::TypeRef) -> String {
-    use skif_core::ir::TypeRef;
-    match ty {
-        TypeRef::Primitive(prim) => match prim {
-            PrimitiveType::Bool => "boolean".to_string(),
-            PrimitiveType::F32 | PrimitiveType::F64 => "number".to_string(),
-            _ => "number".to_string(),
-        },
-        TypeRef::String => "string".to_string(),
-        TypeRef::Bytes => "Buffer".to_string(),
-        TypeRef::Optional(inner) => format!("{} | null", javascript_type(inner)),
-        TypeRef::Vec(inner) => format!("{}[]", javascript_type(inner)),
-        TypeRef::Map(k, v) => {
-            format!("Map<{}, {}>", javascript_type(k), javascript_type(v))
-        }
-        TypeRef::Named(name) => name.clone(),
-        TypeRef::Path => "string".to_string(),
-        TypeRef::Json => "Record<string, any>".to_string(),
-        TypeRef::Unit => "void".to_string(),
-    }
-}

@@ -18,6 +18,10 @@ pub fn compute_source_hash(sources: &[PathBuf], config_path: &Path) -> anyhow::R
 /// Check if cached IR is still valid.
 pub fn is_ir_cached(source_hash: &str) -> bool {
     let hash_path = Path::new(CACHE_DIR).join("ir.hash");
+    let ir_path = Path::new(CACHE_DIR).join("ir.json");
+    if !ir_path.exists() {
+        return false;
+    }
     match fs::read_to_string(&hash_path) {
         Ok(cached) => cached.trim() == source_hash,
         Err(_) => false,

@@ -71,24 +71,7 @@ fn c_primitive(prim: &PrimitiveType) -> String {
     }
 }
 
-/// Returns `true` if the type is a pointer type in FFI (needs null-check).
-/// Useful for downstream backends (Go, Java, C#) that consume the FFI layer.
-#[allow(dead_code)]
-pub fn is_pointer_type(ty: &TypeRef) -> bool {
-    matches!(
-        ty,
-        TypeRef::String
-            | TypeRef::Bytes
-            | TypeRef::Path
-            | TypeRef::Json
-            | TypeRef::Named(_)
-            | TypeRef::Vec(_)
-            | TypeRef::Map(_, _)
-    )
-}
-
 /// Returns `true` if the return type is void in C.
-#[allow(dead_code)]
 pub fn is_void_return(ty: &TypeRef) -> bool {
     matches!(ty, TypeRef::Unit)
 }

@@ -41,34 +41,28 @@ impl Backend for FfiBackend {
             "crates/{name}-ffi/src/",
         );
 
-        let mut files = Vec::new();
+        let parent_dir = PathBuf::from(&output_dir)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf();
 
-        // 1. Generate lib.rs with all extern "C" functions
-        files.push(GeneratedFile {
-            path: PathBuf::from(&output_dir).join("lib.rs"),
-            content: gen_lib_rs(api, &prefix),
-            generated_header: false, // Already in builder
-        });
-
-        // 2. Generate cbindgen.toml
-        files.push(GeneratedFile {
-            path: PathBuf::from(&output_dir)
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("."))
-                .join("cbindgen.toml"),
-            content: gen_cbindgen_toml(&prefix),
-            generated_header: false,
-        });
-
-        // 3. Generate build.rs
-        files.push(GeneratedFile {
-            path: PathBuf::from(&output_dir)
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("."))
-                .join("build.rs"),
-            content: gen_build_rs(&header_name),
-            generated_header: false,
-        });
+        let files = vec![
+            GeneratedFile {
+                path: PathBuf::from(&output_dir).join("lib.rs"),
+                content: gen_lib_rs(api, &prefix),
+                generated_header: false,
+            },
+            GeneratedFile {
+                path: parent_dir.join("cbindgen.toml"),
+                content: gen_cbindgen_toml(&prefix),
+                generated_header: false,
+            },
+            GeneratedFile {
+                path: parent_dir.join("build.rs"),
+                content: gen_build_rs(&header_name),
+                generated_header: false,
+            },
+        ];
 
         Ok(files)
     }
@@ -580,8 +574,6 @@ fn gen_free_function(func: &FunctionDef, prefix: &str) -> String {
     let has_error = func.error_type.is_some();
     let ret_type = if has_error && is_void_return(&func.return_type) {
         "i32".to_string()
-    } else if has_error {
-        c_return_type(&func.return_type)
     } else {
         c_return_type(&func.return_type)
     };
