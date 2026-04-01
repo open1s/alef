@@ -169,13 +169,13 @@ pub fn gen_opaque_impl_block(
 
     // Instance methods — delegate to self.inner
     for m in &instance {
-        out.push_str(&gen_method(m, mapper, cfg, &typ.name, true, opaque_types));
+        out.push_str(&gen_method(m, mapper, cfg, typ, true, opaque_types));
         out.push_str("\n\n");
     }
 
     // Static methods
     for m in &statics {
-        out.push_str(&gen_static_method(m, mapper, cfg, &typ.name));
+        out.push_str(&gen_static_method(m, mapper, cfg, typ));
         out.push_str("\n\n");
     }
 
@@ -218,17 +218,20 @@ pub fn gen_method(
     method: &MethodDef,
     mapper: &dyn TypeMapper,
     cfg: &RustBindingConfig,
-    type_name: &str,
+    typ: &TypeDef,
     is_opaque: bool,
     opaque_types: &AHashSet<String>,
 ) -> String {
+    let type_name = &typ.name;
+    // Use the full rust_path (with hyphens replaced by underscores) for core type references
+    let core_type_path = typ.rust_path.replace('-', "_");
+
     let map_fn = |ty: &skif_core::ir::TypeRef| mapper.map_type(ty);
     let params = function_params(&method.params, &map_fn);
     let return_type = mapper.map_type(&method.return_type);
     let ret = mapper.wrap_return(&return_type, method.error_type.is_some());
 
     let call_args = gen_call_args(&method.params);
-    let core_import = cfg.core_import;
 
     // For opaque types with non-trivial params, generate todo!() stub
     // since auto-delegation would produce type mismatches.
@@ -242,7 +245,7 @@ pub fn gen_method(
         if is_opaque {
             format!("self.inner.{method_name}({call_args})")
         } else {
-            format!("{core_import}::{type_name}::from(self.clone()).{method_name}({call_args})")
+            format!("{core_type_path}::from(self.clone()).{method_name}({call_args})")
         }
     };
 
@@ -251,7 +254,7 @@ pub fn gen_method(
         if is_opaque {
             format!("inner.{method_name}({call_args})")
         } else {
-            format!("{core_import}::{type_name}::from(self.clone()).{method_name}({call_args})")
+            format!("{core_type_path}::from(self.clone()).{method_name}({call_args})")
         }
     };
 
@@ -439,15 +442,17 @@ pub fn gen_static_method(
     method: &MethodDef,
     mapper: &dyn TypeMapper,
     cfg: &RustBindingConfig,
-    type_name: &str,
+    typ: &TypeDef,
 ) -> String {
+    let type_name = &typ.name;
+    // Use the full rust_path (with hyphens replaced by underscores) for core type references
+    let core_type_path = typ.rust_path.replace('-', "_");
     let map_fn = |ty: &skif_core::ir::TypeRef| mapper.map_type(ty);
     let params = function_params(&method.params, &map_fn);
     let return_type = mapper.map_type(&method.return_type);
     let ret = mapper.wrap_return(&return_type, method.error_type.is_some());
 
     let call_args = gen_call_args(&method.params);
-    let core_import = cfg.core_import;
 
     let can_delegate = crate::shared::can_auto_delegate(method);
 
@@ -456,7 +461,7 @@ pub fn gen_static_method(
     } else if method.is_async {
         match cfg.async_pattern {
             AsyncPattern::Pyo3FutureIntoPy => {
-                let core_call = format!("{core_import}::{type_name}::{}({call_args})", method.name);
+                let core_call = format!("{core_type_path}::{}({call_args})", method.name);
                 let result_handling = if method.error_type.is_some() {
                     format!(
                         "let result = {core_call}.await\n            \
@@ -472,7 +477,7 @@ pub fn gen_static_method(
                 )
             }
             AsyncPattern::WasmNativeAsync => {
-                let core_call = format!("{core_import}::{type_name}::{}({call_args})", method.name);
+                let core_call = format!("{core_type_path}::{}({call_args})", method.name);
                 let result_handling = if method.error_type.is_some() {
                     format!(
                         "let result = {core_call}.await\n        \
@@ -487,7 +492,7 @@ pub fn gen_static_method(
                 )
             }
             AsyncPattern::NapiNativeAsync => {
-                let core_call = format!("{core_import}::{type_name}::{}({call_args})", method.name);
+                let core_call = format!("{core_type_path}::{}({call_args})", method.name);
                 let result_handling = if method.error_type.is_some() {
                     format!(
                         "let result = {core_call}.await\n            \
@@ -502,7 +507,7 @@ pub fn gen_static_method(
                 )
             }
             AsyncPattern::TokioBlockOn => {
-                let core_call = format!("{core_import}::{type_name}::{}({call_args})", method.name);
+                let core_call = format!("{core_type_path}::{}({call_args})", method.name);
                 if method.error_type.is_some() {
                     format!(
                         "let rt = tokio::runtime::Runtime::new()?;\n        \
@@ -518,7 +523,7 @@ pub fn gen_static_method(
             AsyncPattern::None => "todo!(\"async not supported by backend\")".to_string(),
         }
     } else {
-        let core_call = format!("{core_import}::{type_name}::{}({call_args})", method.name);
+        let core_call = format!("{core_type_path}::{}({call_args})", method.name);
         if method.error_type.is_some() {
             format!("{core_call}.map_err(|e| e.into())")
         } else {
@@ -788,13 +793,13 @@ pub fn gen_impl_block(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingC
 
     // Instance methods
     for m in &instance {
-        out.push_str(&gen_method(m, mapper, cfg, &typ.name, false, &empty_opaque));
+        out.push_str(&gen_method(m, mapper, cfg, typ, false, &empty_opaque));
         out.push_str("\n\n");
     }
 
     // Static methods
     for m in &statics {
-        out.push_str(&gen_static_method(m, mapper, cfg, &typ.name));
+        out.push_str(&gen_static_method(m, mapper, cfg, typ));
         out.push_str("\n\n");
     }
 

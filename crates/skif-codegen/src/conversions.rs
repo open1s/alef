@@ -4,9 +4,15 @@ use std::fmt::Write;
 
 /// Build the set of types that can have From/Into safely generated.
 /// This is transitive: a type is convertible only if all its Named field types
-/// are also convertible (or are enums).
+/// are also convertible (or are enums with From/Into support).
 pub fn convertible_types(surface: &ApiSurface) -> AHashSet<String> {
-    let known_enums: AHashSet<&str> = surface.enums.iter().map(|e| e.name.as_str()).collect();
+    // Build set of enums that have From/Into impls (unit-variant enums only)
+    let convertible_enums: AHashSet<&str> = surface
+        .enums
+        .iter()
+        .filter(|e| can_generate_enum_conversion(e))
+        .map(|e| e.name.as_str())
+        .collect();
 
     // Start with all non-opaque types as candidates
     let mut convertible: AHashSet<String> = surface
@@ -26,7 +32,7 @@ pub fn convertible_types(surface: &ApiSurface) -> AHashSet<String> {
                 let ok = typ
                     .fields
                     .iter()
-                    .all(|f| is_field_convertible_with_set(&f.ty, &convertible, &known_enums));
+                    .all(|f| is_field_convertible_with_set(&f.ty, &convertible, &convertible_enums));
                 if !ok && convertible.remove(type_name) {
                     changed = true;
                 }
@@ -41,21 +47,25 @@ pub fn can_generate_conversion(typ: &TypeDef, convertible: &AHashSet<String>) ->
     convertible.contains(&typ.name)
 }
 
-fn is_field_convertible_with_set(ty: &TypeRef, _convertible: &AHashSet<String>, known_enums: &AHashSet<&str>) -> bool {
+fn is_field_convertible_with_set(
+    ty: &TypeRef,
+    convertible: &AHashSet<String>,
+    convertible_enums: &AHashSet<&str>,
+) -> bool {
     match ty {
         TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
         TypeRef::Json => false,
         TypeRef::Optional(inner) | TypeRef::Vec(inner) => {
-            is_field_convertible_with_set(inner, _convertible, known_enums)
+            is_field_convertible_with_set(inner, convertible, convertible_enums)
         }
         TypeRef::Map(k, v) => {
-            is_field_convertible_with_set(k, _convertible, known_enums)
-                && is_field_convertible_with_set(v, _convertible, known_enums)
+            is_field_convertible_with_set(k, convertible, convertible_enums)
+                && is_field_convertible_with_set(v, convertible, convertible_enums)
         }
-        // Named types are only safe if they are enums (simple variant matching).
-        // Other Named types may have been sanitized (e.g., Duration -> u64) and the
-        // generated .into() would produce type mismatches.
-        TypeRef::Named(name) => known_enums.contains(name.as_str()),
+        // Named types are only safe if they are:
+        // 1. Enums with From/Into support (unit-variant enums), OR
+        // 2. Non-opaque types in the convertible set
+        TypeRef::Named(name) => convertible_enums.contains(name.as_str()) || convertible.contains(name),
     }
 }
 
