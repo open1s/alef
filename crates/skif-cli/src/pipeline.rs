@@ -27,7 +27,10 @@ pub fn extract(config: &SkifConfig, config_path: &Path, clean: bool) -> anyhow::
     let api = skif_extract::extractor::extract(&sources, &config.crate_config.name, &version, workspace_root)?;
 
     // Apply global filters (includes and excludes)
-    let api = apply_filters(api, config);
+    let mut api = apply_filters(api, config);
+
+    // Replace references to types not in the API surface with String
+    sanitize_unknown_types(&mut api);
 
     cache::write_ir_cache(&api, &source_hash)?;
     info!(
@@ -446,6 +449,49 @@ fn to_pascal_case(s: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Replace `TypeRef::Named(name)` references that don't exist in the API surface
+/// with `TypeRef::String`. This handles trait objects, generic bounds, and other types
+/// that were extracted but filtered out or never existed as concrete types.
+fn sanitize_unknown_types(api: &mut ApiSurface) {
+    let known_types: HashSet<String> = api.types.iter().map(|t| t.name.clone()).collect();
+    let known_enums: HashSet<String> = api.enums.iter().map(|e| e.name.clone()).collect();
+
+    for typ in &mut api.types {
+        for field in &mut typ.fields {
+            sanitize_type_ref(&mut field.ty, &known_types, &known_enums);
+        }
+        for method in &mut typ.methods {
+            for param in &mut method.params {
+                sanitize_type_ref(&mut param.ty, &known_types, &known_enums);
+            }
+            sanitize_type_ref(&mut method.return_type, &known_types, &known_enums);
+        }
+    }
+    for func in &mut api.functions {
+        for param in &mut func.params {
+            sanitize_type_ref(&mut param.ty, &known_types, &known_enums);
+        }
+        sanitize_type_ref(&mut func.return_type, &known_types, &known_enums);
+    }
+}
+
+fn sanitize_type_ref(ty: &mut TypeRef, known_types: &HashSet<String>, known_enums: &HashSet<String>) {
+    match ty {
+        TypeRef::Named(name) => {
+            if !known_types.contains(name.as_str()) && !known_enums.contains(name.as_str()) {
+                *ty = TypeRef::String;
+            }
+        }
+        TypeRef::Optional(inner) => sanitize_type_ref(inner, known_types, known_enums),
+        TypeRef::Vec(inner) => sanitize_type_ref(inner, known_types, known_enums),
+        TypeRef::Map(k, v) => {
+            sanitize_type_ref(k, known_types, known_enums);
+            sanitize_type_ref(v, known_types, known_enums);
+        }
+        _ => {}
+    }
 }
 
 fn apply_filters(mut api: ApiSurface, config: &SkifConfig) -> ApiSurface {

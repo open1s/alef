@@ -4,6 +4,7 @@ use skif_codegen::generators::{self, AsyncPattern, RustBindingConfig};
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
 use skif_core::config::{Language, SkifConfig, resolve_output_dir};
 use skif_core::ir::ApiSurface;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 pub struct Pyo3Backend;
@@ -69,15 +70,20 @@ impl Backend for Pyo3Backend {
         }
 
         // Check if we have opaque types and add Arc import if needed
-        let has_opaque = api.types.iter().any(|t| t.is_opaque);
-        if has_opaque {
+        let opaque_types: HashSet<String> = api
+            .types
+            .iter()
+            .filter(|t| t.is_opaque)
+            .map(|t| t.name.clone())
+            .collect();
+        if !opaque_types.is_empty() {
             builder.add_import("std::sync::Arc");
         }
 
         for typ in &api.types {
             if typ.is_opaque {
                 builder.add_item(&generators::gen_opaque_struct(typ, &cfg));
-                let impl_block = generators::gen_opaque_impl_block(typ, &mapper, &cfg);
+                let impl_block = generators::gen_opaque_impl_block(typ, &mapper, &cfg, &opaque_types);
                 if !impl_block.is_empty() {
                     builder.add_item(&impl_block);
                 }

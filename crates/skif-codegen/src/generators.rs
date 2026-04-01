@@ -2,6 +2,7 @@ use crate::builder::StructBuilder;
 use crate::shared::{constructor_parts, function_params, function_sig_defaults, partition_methods};
 use crate::type_mapper::TypeMapper;
 use skif_core::ir::{EnumDef, FunctionDef, MethodDef, ParamDef, TypeDef, TypeRef};
+use std::collections::HashSet;
 use std::fmt::Write;
 
 /// Async support pattern for the backend.
@@ -54,13 +55,17 @@ pub struct RustBindingConfig<'a> {
 /// Wrap a core-call result for opaque delegation methods.
 ///
 /// - `TypeRef::Named(n)` where `n == type_name` → re-wrap in `Self { inner: Arc::new(...) }`
-/// - `TypeRef::Named(n)` where `n != type_name` → convert via `{n}::from(...)`
+/// - `TypeRef::Named(n)` where `n` is another opaque type → wrap in `{n} { inner: Arc::new(...) }`
+/// - `TypeRef::Named(n)` where `n` is a non-opaque type → convert via `{n}::from(...)`
 /// - Everything else (primitives, String, Vec, etc.) → pass through unchanged
 /// - `TypeRef::Unit` → pass through unchanged
-fn wrap_opaque_return(expr: &str, return_type: &TypeRef, type_name: &str) -> String {
+fn wrap_opaque_return(expr: &str, return_type: &TypeRef, type_name: &str, opaque_types: &HashSet<String>) -> String {
     match return_type {
         TypeRef::Named(n) if n == type_name => {
             format!("Self {{ inner: std::sync::Arc::new({expr}) }}")
+        }
+        TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
+            format!("{n} {{ inner: std::sync::Arc::new({expr}) }}")
         }
         TypeRef::Named(n) => {
             format!("{n}::from({expr})")
@@ -139,7 +144,15 @@ pub fn gen_opaque_struct_prefixed(typ: &TypeDef, cfg: &RustBindingConfig, prefix
 }
 
 /// Generate a full impl block for an opaque type, delegating methods to `self.inner`.
-pub fn gen_opaque_impl_block(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfig) -> String {
+///
+/// `opaque_types` is the set of type names that are opaque wrappers (use `Arc<inner>`).
+/// This is needed so that return-type wrapping uses the correct pattern for cross-type returns.
+pub fn gen_opaque_impl_block(
+    typ: &TypeDef,
+    mapper: &dyn TypeMapper,
+    cfg: &RustBindingConfig,
+    opaque_types: &HashSet<String>,
+) -> String {
     let (instance, statics) = partition_methods(&typ.methods);
     if instance.is_empty() && statics.is_empty() {
         return String::new();
@@ -153,7 +166,7 @@ pub fn gen_opaque_impl_block(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustB
 
     // Instance methods — delegate to self.inner
     for m in &instance {
-        out.push_str(&gen_method(m, mapper, cfg, &typ.name, true));
+        out.push_str(&gen_method(m, mapper, cfg, &typ.name, true, opaque_types));
         out.push_str("\n\n");
     }
 
@@ -196,12 +209,15 @@ pub fn gen_constructor(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBinding
 ///
 /// When `is_opaque` is true, generates delegation to `self.inner` via Arc clone
 /// instead of converting self to core type.
+///
+/// `opaque_types` is the set of opaque type names, used for correct return wrapping.
 pub fn gen_method(
     method: &MethodDef,
     mapper: &dyn TypeMapper,
     cfg: &RustBindingConfig,
     type_name: &str,
     is_opaque: bool,
+    opaque_types: &HashSet<String>,
 ) -> String {
     let map_fn = |ty: &skif_core::ir::TypeRef| mapper.map_type(ty);
     let params = function_params(&method.params, &map_fn);
@@ -237,7 +253,7 @@ pub fn gen_method(
     //   - Named(other) → OtherType::from(result)
     //   - primitives/String/Vec/Unit → pass through
     let async_result_wrap = if is_opaque {
-        wrap_opaque_return("result", &method.return_type, type_name)
+        wrap_opaque_return("result", &method.return_type, type_name, opaque_types)
     } else {
         format!("{return_type}::from(result)")
     };
@@ -300,7 +316,7 @@ pub fn gen_method(
             AsyncPattern::TokioBlockOn => {
                 let core_call_sync = make_core_call(&method.name);
                 if method.error_type.is_some() {
-                    let wrap = wrap_opaque_return("result", &method.return_type, type_name);
+                    let wrap = wrap_opaque_return("result", &method.return_type, type_name, opaque_types);
                     if is_opaque {
                         format!(
                             "let rt = tokio::runtime::Runtime::new()?;\n        \
@@ -314,7 +330,7 @@ pub fn gen_method(
                         )
                     }
                 } else if is_opaque {
-                    let wrap = wrap_opaque_return("result", &method.return_type, type_name);
+                    let wrap = wrap_opaque_return("result", &method.return_type, type_name, opaque_types);
                     format!(
                         "let rt = tokio::runtime::Runtime::new()?;\n        \
                          let result = rt.block_on(async {{ {core_call_sync}.await }});\n        \
@@ -333,13 +349,13 @@ pub fn gen_method(
         let core_call = make_core_call(&method.name);
         if method.error_type.is_some() {
             if is_opaque {
-                let wrap = wrap_opaque_return("result", &method.return_type, type_name);
+                let wrap = wrap_opaque_return("result", &method.return_type, type_name, opaque_types);
                 format!("let result = {core_call}.map_err(|e| e.into())?;\n        {wrap}")
             } else {
                 format!("{core_call}.map_err(|e| e.into())")
             }
         } else if is_opaque {
-            wrap_opaque_return(&core_call, &method.return_type, type_name)
+            wrap_opaque_return(&core_call, &method.return_type, type_name, opaque_types)
         } else {
             core_call
         }
@@ -721,6 +737,7 @@ pub fn gen_impl_block(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingC
         return String::new();
     }
 
+    let empty_opaque = HashSet::new();
     let mut out = String::new();
     if let Some(block_attr) = cfg.method_block_attr {
         writeln!(out, "#[{block_attr}]").ok();
@@ -735,7 +752,7 @@ pub fn gen_impl_block(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingC
 
     // Instance methods
     for m in &instance {
-        out.push_str(&gen_method(m, mapper, cfg, &typ.name, false));
+        out.push_str(&gen_method(m, mapper, cfg, &typ.name, false, &empty_opaque));
         out.push_str("\n\n");
     }
 
