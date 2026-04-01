@@ -37,10 +37,25 @@ fn is_convertible_type(ty: &TypeRef) -> bool {
     }
 }
 
+/// Derive the Rust import path from rust_path, replacing hyphens with underscores.
+fn core_type_path(typ: &TypeDef, core_import: &str) -> String {
+    // rust_path is like "liter-llm::tower::RateLimitConfig"
+    // We need "liter_llm::tower::RateLimitConfig"
+    let path = typ.rust_path.replace('-', "_");
+    // If the path starts with the core_import, use it directly
+    if path.starts_with(core_import) {
+        path
+    } else {
+        // Fallback: just use core_import::name
+        format!("{core_import}::{}", typ.name)
+    }
+}
+
 /// Generate `impl From<BindingType> for core::Type` (binding -> core).
 pub fn gen_from_binding_to_core(typ: &TypeDef, core_import: &str) -> String {
+    let core_path = core_type_path(typ, core_import);
     let mut out = String::with_capacity(256);
-    writeln!(out, "impl From<{}> for {core_import}::{} {{", typ.name, typ.name).unwrap();
+    writeln!(out, "impl From<{}> for {core_path} {{", typ.name).unwrap();
     writeln!(out, "    fn from(val: {}) -> Self {{", typ.name).unwrap();
     writeln!(out, "        Self {{").unwrap();
     for field in &typ.fields {
@@ -55,9 +70,10 @@ pub fn gen_from_binding_to_core(typ: &TypeDef, core_import: &str) -> String {
 
 /// Generate `impl From<core::Type> for BindingType` (core -> binding).
 pub fn gen_from_core_to_binding(typ: &TypeDef, core_import: &str) -> String {
+    let core_path = core_type_path(typ, core_import);
     let mut out = String::with_capacity(256);
-    writeln!(out, "impl From<{core_import}::{}> for {} {{", typ.name, typ.name).unwrap();
-    writeln!(out, "    fn from(val: {core_import}::{}) -> Self {{", typ.name).unwrap();
+    writeln!(out, "impl From<{core_path}> for {} {{", typ.name).unwrap();
+    writeln!(out, "    fn from(val: {core_path}) -> Self {{").unwrap();
     writeln!(out, "        Self {{").unwrap();
     for field in &typ.fields {
         let conversion = field_conversion_from_core(&field.name, &field.ty, field.optional);
@@ -69,15 +85,20 @@ pub fn gen_from_core_to_binding(typ: &TypeDef, core_import: &str) -> String {
     out
 }
 
+fn core_enum_path(enum_def: &EnumDef, core_import: &str) -> String {
+    let path = enum_def.rust_path.replace('-', "_");
+    if path.starts_with(core_import) {
+        path
+    } else {
+        format!("{core_import}::{}", enum_def.name)
+    }
+}
+
 /// Generate `impl From<BindingEnum> for core::Enum` (binding -> core).
 pub fn gen_enum_from_binding_to_core(enum_def: &EnumDef, core_import: &str) -> String {
+    let core_path = core_enum_path(enum_def, core_import);
     let mut out = String::with_capacity(256);
-    writeln!(
-        out,
-        "impl From<{}> for {core_import}::{} {{",
-        enum_def.name, enum_def.name
-    )
-    .unwrap();
+    writeln!(out, "impl From<{}> for {core_path} {{", enum_def.name).unwrap();
     writeln!(out, "    fn from(val: {}) -> Self {{", enum_def.name).unwrap();
     writeln!(out, "        match val {{").unwrap();
     for variant in &enum_def.variants {
@@ -96,20 +117,16 @@ pub fn gen_enum_from_binding_to_core(enum_def: &EnumDef, core_import: &str) -> S
 
 /// Generate `impl From<core::Enum> for BindingEnum` (core -> binding).
 pub fn gen_enum_from_core_to_binding(enum_def: &EnumDef, core_import: &str) -> String {
+    let core_path = core_enum_path(enum_def, core_import);
     let mut out = String::with_capacity(256);
-    writeln!(
-        out,
-        "impl From<{core_import}::{}> for {} {{",
-        enum_def.name, enum_def.name
-    )
-    .unwrap();
-    writeln!(out, "    fn from(val: {core_import}::{}) -> Self {{", enum_def.name).unwrap();
+    writeln!(out, "impl From<{core_path}> for {} {{", enum_def.name).unwrap();
+    writeln!(out, "    fn from(val: {core_path}) -> Self {{").unwrap();
     writeln!(out, "        match val {{").unwrap();
     for variant in &enum_def.variants {
         writeln!(
             out,
-            "            {core_import}::{}::{} => Self::{},",
-            enum_def.name, variant.name, variant.name
+            "            {core_path}::{} => Self::{},",
+            variant.name, variant.name
         )
         .unwrap();
     }

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use ahash::AHashMap;
@@ -42,6 +43,7 @@ pub fn extract(
             &file.items,
             source,
             crate_name,
+            "",
             &mut surface,
             workspace_root,
             &mut visited,
@@ -56,37 +58,52 @@ fn extract_items(
     items: &[syn::Item],
     source_path: &Path,
     crate_name: &str,
+    module_path: &str,
     surface: &mut ApiSurface,
     workspace_root: Option<&Path>,
     visited: &mut Vec<PathBuf>,
 ) -> Result<()> {
+    // Collect pub use re-exports at this level (for path flattening).
+    // When a `pub use submod::*` or `pub use submod::TypeName` is found,
+    // items defined in that submodule should get a shorter path (this level's path).
+    let reexport_map = collect_reexport_map(items);
+
     // First pass: collect all structs/enums (no impl blocks yet)
     for item in items {
         match item {
             syn::Item::Struct(item_struct) => {
                 if is_pub(&item_struct.vis) {
-                    if let Some(td) = extract_struct(item_struct, crate_name) {
+                    if let Some(td) = extract_struct(item_struct, crate_name, module_path) {
                         surface.types.push(td);
                     }
                 }
             }
             syn::Item::Enum(item_enum) => {
                 if is_pub(&item_enum.vis) {
-                    if let Some(ed) = extract_enum(item_enum, crate_name) {
+                    if let Some(ed) = extract_enum(item_enum, crate_name, module_path) {
                         surface.enums.push(ed);
                     }
                 }
             }
             syn::Item::Fn(item_fn) => {
                 if is_pub(&item_fn.vis) {
-                    if let Some(fd) = extract_function(item_fn, crate_name) {
+                    if let Some(fd) = extract_function(item_fn, crate_name, module_path) {
                         surface.functions.push(fd);
                     }
                 }
             }
             syn::Item::Mod(item_mod) => {
                 if is_pub(&item_mod.vis) {
-                    extract_module(item_mod, source_path, crate_name, surface, workspace_root, visited)?;
+                    extract_module(
+                        item_mod,
+                        source_path,
+                        crate_name,
+                        module_path,
+                        &reexport_map,
+                        surface,
+                        workspace_root,
+                        visited,
+                    )?;
                 }
             }
             syn::Item::Use(item_use) if is_pub(&item_use.vis) => {
@@ -107,15 +124,113 @@ fn extract_items(
     // Second pass: process impl blocks using the index
     for item in items {
         if let syn::Item::Impl(item_impl) = item {
-            extract_impl_block(item_impl, crate_name, surface, &type_index);
+            extract_impl_block(item_impl, crate_name, module_path, surface, &type_index);
         }
     }
     Ok(())
 }
 
+/// Represents what a `pub use` re-exports from a specific module.
+#[derive(Debug)]
+enum ReexportKind {
+    /// `pub use module::*` — re-export everything
+    Glob,
+    /// `pub use module::{A, B}` — re-export specific names
+    Names(HashSet<String>),
+}
+
+/// Collect pub use re-exports at the current module level, grouped by source module.
+///
+/// Returns a map from module name to the kind of re-export (glob or named).
+/// Only tracks `pub use <ident>::...` where `<ident>` is not `self`/`super`/`crate`
+/// (those are internal references handled elsewhere).
+fn collect_reexport_map(items: &[syn::Item]) -> AHashMap<String, ReexportKind> {
+    let mut map: AHashMap<String, ReexportKind> = AHashMap::new();
+    for item in items {
+        if let syn::Item::Use(item_use) = item {
+            if is_pub(&item_use.vis) {
+                collect_reexport_from_tree(&item_use.tree, &mut map);
+            }
+        }
+    }
+    map
+}
+
+/// Walk a use tree and populate the reexport map.
+fn collect_reexport_from_tree(tree: &syn::UseTree, map: &mut AHashMap<String, ReexportKind>) {
+    if let syn::UseTree::Path(use_path) = tree {
+        let root_ident = use_path.ident.to_string();
+        // Skip self/super/crate — those are internal
+        if root_ident == "self" || root_ident == "super" || root_ident == "crate" {
+            return;
+        }
+        collect_reexport_leaves(&root_ident, &use_path.tree, map);
+    } else if let syn::UseTree::Group(group) = tree {
+        for item in &group.items {
+            collect_reexport_from_tree(item, map);
+        }
+    }
+}
+
+/// Collect leaves from a use subtree rooted at a known module name.
+fn collect_reexport_leaves(module: &str, tree: &syn::UseTree, map: &mut AHashMap<String, ReexportKind>) {
+    match tree {
+        syn::UseTree::Glob(_) => {
+            map.insert(module.to_string(), ReexportKind::Glob);
+        }
+        syn::UseTree::Name(use_name) => {
+            let name = use_name.ident.to_string();
+            match map.get_mut(module) {
+                Some(ReexportKind::Glob) => {} // glob already covers everything
+                Some(ReexportKind::Names(names)) => {
+                    names.insert(name);
+                }
+                None => {
+                    let mut names = HashSet::new();
+                    names.insert(name);
+                    map.insert(module.to_string(), ReexportKind::Names(names));
+                }
+            }
+        }
+        syn::UseTree::Rename(use_rename) => {
+            let name = use_rename.rename.to_string();
+            match map.get_mut(module) {
+                Some(ReexportKind::Glob) => {}
+                Some(ReexportKind::Names(names)) => {
+                    names.insert(name);
+                }
+                None => {
+                    let mut names = HashSet::new();
+                    names.insert(name);
+                    map.insert(module.to_string(), ReexportKind::Names(names));
+                }
+            }
+        }
+        syn::UseTree::Path(use_path) => {
+            // Deeper path like `pub use module::submod::Thing` — treat as coming from `module`
+            collect_reexport_leaves(module, &use_path.tree, map);
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                collect_reexport_leaves(module, item, map);
+            }
+        }
+    }
+}
+
+/// Build the fully qualified rust_path for an item, taking into account
+/// the accumulated module path.
+fn build_rust_path(crate_name: &str, module_path: &str, name: &str) -> String {
+    if module_path.is_empty() {
+        format!("{crate_name}::{name}")
+    } else {
+        format!("{crate_name}::{module_path}::{name}")
+    }
+}
+
 /// Extract a public struct into a `TypeDef`.
 /// Returns `None` for generic structs — they can't be directly exposed to FFI.
-fn extract_struct(item: &syn::ItemStruct, crate_name: &str) -> Option<TypeDef> {
+fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_path: &str) -> Option<TypeDef> {
     if !item.generics.params.is_empty() {
         return None;
     }
@@ -133,9 +248,10 @@ fn extract_struct(item: &syn::ItemStruct, crate_name: &str) -> Option<TypeDef> {
     let is_clone = has_derive(item.attrs.as_slice(), "Clone");
     let doc = extract_doc_comments(&item.attrs);
     let is_opaque = fields.is_empty();
+    let rust_path = build_rust_path(crate_name, module_path, &name);
 
     Some(TypeDef {
-        rust_path: format!("{crate_name}::{name}"),
+        rust_path,
         name,
         fields,
         methods: vec![],
@@ -172,7 +288,7 @@ fn unwrap_optional(ty: TypeRef) -> (TypeRef, bool) {
 
 /// Extract a public enum into an `EnumDef`.
 /// Returns `None` for generic enums — they can't be directly exposed to FFI.
-fn extract_enum(item: &syn::ItemEnum, crate_name: &str) -> Option<EnumDef> {
+fn extract_enum(item: &syn::ItemEnum, crate_name: &str, module_path: &str) -> Option<EnumDef> {
     if !item.generics.params.is_empty() {
         return None;
     }
@@ -211,8 +327,10 @@ fn extract_enum(item: &syn::ItemEnum, crate_name: &str) -> Option<EnumDef> {
         })
         .collect();
 
+    let rust_path = build_rust_path(crate_name, module_path, &name);
+
     Some(EnumDef {
-        rust_path: format!("{crate_name}::{name}"),
+        rust_path,
         name,
         variants,
         doc,
@@ -221,7 +339,7 @@ fn extract_enum(item: &syn::ItemEnum, crate_name: &str) -> Option<EnumDef> {
 
 /// Extract a public free function into a `FunctionDef`.
 /// Returns `None` for generic functions — they can't be directly exposed to FFI.
-fn extract_function(item: &syn::ItemFn, crate_name: &str) -> Option<FunctionDef> {
+fn extract_function(item: &syn::ItemFn, crate_name: &str, module_path: &str) -> Option<FunctionDef> {
     if !item.sig.generics.params.is_empty() {
         return None;
     }
@@ -240,9 +358,10 @@ fn extract_function(item: &syn::ItemFn, crate_name: &str) -> Option<FunctionDef>
     }
 
     let params = extract_params(&item.sig.inputs);
+    let rust_path = build_rust_path(crate_name, module_path, &name);
 
     Some(FunctionDef {
-        rust_path: format!("{crate_name}::{name}"),
+        rust_path,
         name,
         params,
         return_type,
@@ -256,6 +375,7 @@ fn extract_function(item: &syn::ItemFn, crate_name: &str) -> Option<FunctionDef>
 fn extract_impl_block(
     item: &syn::ItemImpl,
     crate_name: &str,
+    module_path: &str,
     surface: &mut ApiSurface,
     type_index: &AHashMap<String, usize>,
 ) {
@@ -310,9 +430,10 @@ fn extract_impl_block(
         }
     } else {
         // The impl is for a type we haven't seen as a pub struct — create an opaque entry
+        let rust_path = build_rust_path(crate_name, module_path, &type_name);
         surface.types.push(TypeDef {
             name: type_name.clone(),
-            rust_path: format!("{crate_name}::{type_name}"),
+            rust_path,
             fields: vec![],
             methods,
             is_opaque: true,
@@ -546,37 +667,113 @@ fn extract_module(
     item_mod: &syn::ItemMod,
     source_path: &Path,
     crate_name: &str,
+    module_path: &str,
+    reexport_map: &AHashMap<String, ReexportKind>,
     surface: &mut ApiSurface,
     workspace_root: Option<&Path>,
     visited: &mut Vec<PathBuf>,
 ) -> Result<()> {
     let mod_name = item_mod.ident.to_string();
 
+    // Build the new module path for items inside this module.
+    // If the parent has a glob re-export (`pub use mod_name::*`), all items from this
+    // submodule are available at the parent level, so they keep the parent's module_path.
+    let reexport_kind = reexport_map.get(&mod_name);
+    let has_glob_reexport = matches!(reexport_kind, Some(ReexportKind::Glob));
+
+    // For glob re-exports, items keep the parent's module_path (flattened).
+    // For named re-exports, items get the deep path first, then we post-process.
+    let new_module_path = if has_glob_reexport {
+        module_path.to_string()
+    } else if module_path.is_empty() {
+        mod_name.clone()
+    } else {
+        format!("{module_path}::{mod_name}")
+    };
+
+    // Track surface sizes before extraction so we can post-process named re-exports.
+    let named_reexports = match reexport_kind {
+        Some(ReexportKind::Names(names)) => Some(names),
+        _ => None,
+    };
+    let (types_before, enums_before, fns_before) = if named_reexports.is_some() {
+        (surface.types.len(), surface.enums.len(), surface.functions.len())
+    } else {
+        (0, 0, 0)
+    };
+
     // Inline module: `pub mod foo { ... }`
     if let Some((_, items)) = &item_mod.content {
-        return extract_items(items, source_path, crate_name, surface, workspace_root, visited);
-    }
+        extract_items(
+            items,
+            source_path,
+            crate_name,
+            &new_module_path,
+            surface,
+            workspace_root,
+            visited,
+        )?;
+    } else {
+        // External module: `pub mod foo;` — resolve to file
+        let parent_dir = source_path.parent().unwrap_or_else(|| Path::new("."));
 
-    // External module: `pub mod foo;` — resolve to file
-    let parent_dir = source_path.parent().unwrap_or_else(|| Path::new("."));
+        // Try `<mod_name>.rs` first, then `<mod_name>/mod.rs`
+        let candidates = [
+            parent_dir.join(format!("{mod_name}.rs")),
+            parent_dir.join(&mod_name).join("mod.rs"),
+        ];
 
-    // Try `<mod_name>.rs` first, then `<mod_name>/mod.rs`
-    let candidates = [
-        parent_dir.join(format!("{mod_name}.rs")),
-        parent_dir.join(&mod_name).join("mod.rs"),
-    ];
+        let mut found = false;
+        for candidate in &candidates {
+            if candidate.exists() {
+                let content = std::fs::read_to_string(candidate)
+                    .with_context(|| format!("Failed to read module file: {}", candidate.display()))?;
+                let file = syn::parse_file(&content)
+                    .with_context(|| format!("Failed to parse module file: {}", candidate.display()))?;
+                extract_items(
+                    &file.items,
+                    candidate,
+                    crate_name,
+                    &new_module_path,
+                    surface,
+                    workspace_root,
+                    visited,
+                )?;
+                found = true;
+                break;
+            }
+        }
 
-    for candidate in &candidates {
-        if candidate.exists() {
-            let content = std::fs::read_to_string(candidate)
-                .with_context(|| format!("Failed to read module file: {}", candidate.display()))?;
-            let file = syn::parse_file(&content)
-                .with_context(|| format!("Failed to parse module file: {}", candidate.display()))?;
-            return extract_items(&file.items, candidate, crate_name, surface, workspace_root, visited);
+        if !found {
+            return Ok(());
         }
     }
 
-    // Module file not found — not an error, just skip
+    // Post-process named re-exports: shorten rust_path for items whose names match.
+    if let Some(names) = named_reexports {
+        let parent_prefix = if module_path.is_empty() {
+            crate_name.to_string()
+        } else {
+            format!("{crate_name}::{module_path}")
+        };
+
+        for ty in &mut surface.types[types_before..] {
+            if names.contains(&ty.name) {
+                ty.rust_path = format!("{parent_prefix}::{}", ty.name);
+            }
+        }
+        for en in &mut surface.enums[enums_before..] {
+            if names.contains(&en.name) {
+                en.rust_path = format!("{parent_prefix}::{}", en.name);
+            }
+        }
+        for func in &mut surface.functions[fns_before..] {
+            if names.contains(&func.name) {
+                func.rust_path = format!("{parent_prefix}::{}", func.name);
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -663,6 +860,7 @@ fn resolve_external_use(
         &file.items,
         &canonical,
         crate_name,
+        "",
         &mut ext_surface,
         workspace_root,
         visited,
@@ -870,6 +1068,7 @@ mod tests {
             &file.items,
             Path::new("test.rs"),
             "test_crate",
+            "",
             &mut surface,
             None,
             &mut visited,
