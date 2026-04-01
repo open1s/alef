@@ -227,6 +227,10 @@ pub fn gen_method(
     let call_args = gen_call_args(&method.params);
     let core_import = cfg.core_import;
 
+    // For opaque types with non-trivial params, generate todo!() stub
+    // since auto-delegation would produce type mismatches.
+    let opaque_can_delegate = !is_opaque || crate::shared::can_auto_delegate(method);
+
     // Build the core call expression: opaque types delegate to self.inner directly,
     // non-opaque types convert self to core type first.
     let make_core_call = |method_name: &str| -> String {
@@ -258,7 +262,9 @@ pub fn gen_method(
         format!("{return_type}::from(result)")
     };
 
-    let body = if method.is_async {
+    let body = if !opaque_can_delegate {
+        format!("todo!(\"wire up {}.{}\")", type_name, method.name)
+    } else if method.is_async {
         // For opaque types with Pyo3FutureIntoPy, we need to clone the Arc before moving.
         let inner_clone_line = if is_opaque {
             "let inner = self.inner.clone();\n        "

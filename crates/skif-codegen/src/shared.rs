@@ -1,5 +1,21 @@
 use skif_core::ir::{FieldDef, MethodDef, ParamDef, TypeRef};
 
+/// Check if all params and return type are simple enough for auto-delegation.
+/// Simple = primitives, String, Bytes, bool, Vec<primitive>, Option<primitive>.
+/// Non-simple = Named types (need conversion), Json, complex nested.
+pub fn can_auto_delegate(method: &MethodDef) -> bool {
+    method.params.iter().all(|p| is_simple_type(&p.ty)) && is_simple_type(&method.return_type)
+}
+
+fn is_simple_type(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_simple_type(inner),
+        TypeRef::Map(k, v) => is_simple_type(k) && is_simple_type(v),
+        TypeRef::Named(_) | TypeRef::Json => false,
+    }
+}
+
 /// Partition methods into (instance, static).
 pub fn partition_methods(methods: &[MethodDef]) -> (Vec<&MethodDef>, Vec<&MethodDef>) {
     let instance: Vec<_> = methods.iter().filter(|m| m.receiver.is_some()).collect();
