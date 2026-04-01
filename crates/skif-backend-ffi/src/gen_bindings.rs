@@ -82,6 +82,16 @@ fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &SkifConfig) -> String {
     let core_import = config.core_import();
     builder.add_import(&core_import);
 
+    // Clippy allows for generated code
+    builder.add_item("#![allow(clippy::too_many_arguments)]");
+    builder.add_item("#![allow(clippy::missing_errors_doc)]");
+
+    // Custom module declarations
+    let custom_mods = config.custom_modules.for_language(Language::Ffi);
+    for module in custom_mods {
+        builder.add_item(&format!("pub mod {module};"));
+    }
+
     // Thread-local last_error infrastructure
     builder.add_item(&gen_last_error(prefix));
 

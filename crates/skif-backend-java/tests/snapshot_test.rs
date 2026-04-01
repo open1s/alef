@@ -192,6 +192,8 @@ fn print_generated_java_code() {
         lint: None,
         custom_files: None,
         adapters: vec![],
+        custom_modules: skif_core::config::CustomModulesConfig::default(),
+        custom_registrations: skif_core::config::CustomRegistrationsConfig::default(),
     };
 
     let result = backend.generate_bindings(&api, &config).unwrap();

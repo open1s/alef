@@ -117,6 +117,8 @@ fn test_basic_generation() {
         lint: None,
         custom_files: None,
         adapters: vec![],
+        custom_modules: skif_core::config::CustomModulesConfig::default(),
+        custom_registrations: skif_core::config::CustomRegistrationsConfig::default(),
     };
 
     // Generate bindings
@@ -242,6 +244,8 @@ fn test_namespace_resolution() {
         lint: None,
         custom_files: None,
         adapters: vec![],
+        custom_modules: skif_core::config::CustomModulesConfig::default(),
+        custom_registrations: skif_core::config::CustomRegistrationsConfig::default(),
     };
 
     let result = backend.generate_bindings(&api, &config);
@@ -298,6 +302,8 @@ fn test_generated_header() {
         lint: None,
         custom_files: None,
         adapters: vec![],
+        custom_modules: skif_core::config::CustomModulesConfig::default(),
+        custom_registrations: skif_core::config::CustomRegistrationsConfig::default(),
     };
 
     let result = backend.generate_bindings(&api, &config);
@@ -400,6 +406,8 @@ fn test_type_mapping() {
         lint: None,
         custom_files: None,
         adapters: vec![],
+        custom_modules: skif_core::config::CustomModulesConfig::default(),
+        custom_registrations: skif_core::config::CustomRegistrationsConfig::default(),
     };
 
     let result = backend.generate_bindings(&api, &config);

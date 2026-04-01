@@ -113,6 +113,8 @@ fn test_generated_code_example() {
         lint: None,
         custom_files: None,
         adapters: vec![],
+        custom_modules: skif_core::config::CustomModulesConfig::default(),
+        custom_registrations: skif_core::config::CustomRegistrationsConfig::default(),
     };
 
     let files = backend.generate_bindings(&api, &config).unwrap();

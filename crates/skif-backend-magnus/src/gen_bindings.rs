@@ -40,6 +40,16 @@ impl Backend for MagnusBackend {
         builder.add_import("std::collections::HashMap");
         builder.add_import(&core_import);
 
+        // Clippy allows for generated code
+        builder.add_item("#![allow(clippy::too_many_arguments)]");
+        builder.add_item("#![allow(clippy::missing_errors_doc)]");
+
+        // Custom module declarations
+        let custom_mods = config.custom_modules.for_language(Language::Ruby);
+        for module in custom_mods {
+            builder.add_item(&format!("pub mod {module};"));
+        }
+
         // Check if we have opaque types and add Arc import if needed
         let opaque_types: AHashSet<String> = api
             .types
@@ -97,7 +107,7 @@ impl Backend for MagnusBackend {
         let _adapter_bodies = skif_adapters::build_adapter_bodies(config, Language::Ruby)?;
 
         let module_name = get_module_name(&api.crate_name);
-        builder.add_item(&gen_module_init(&module_name, api));
+        builder.add_item(&gen_module_init(&module_name, api, config));
 
         let content = builder.build();
 
@@ -369,13 +379,28 @@ fn gen_async_function(func: &FunctionDef, mapper: &MagnusMapper) -> String {
 }
 
 /// Generate the module initialization function.
-fn gen_module_init(module_name: &str, api: &ApiSurface) -> String {
+fn gen_module_init(module_name: &str, api: &ApiSurface, config: &SkifConfig) -> String {
     let mut lines = vec![
         "#[magnus::init]".to_string(),
         "fn init(ruby: &Ruby) -> Result<(), Error> {".to_string(),
         format!(r#"    let module = ruby.define_module("{}")?;"#, module_name),
         "".to_string(),
     ];
+
+    // Custom registrations (before generated ones)
+    if let Some(reg) = config.custom_registrations.for_language(Language::Ruby) {
+        for class in &reg.classes {
+            lines.push(format!(
+                r#"    let class = module.define_class("{class}", ruby.class_object())?;"#
+            ));
+        }
+        for func in &reg.functions {
+            lines.push(format!(
+                r#"    module.define_module_function("{func}", function!({func}, 0))?;"#
+            ));
+        }
+        lines.push("".to_string());
+    }
 
     for typ in &api.types {
         lines.push(format!(

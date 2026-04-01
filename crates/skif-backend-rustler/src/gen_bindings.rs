@@ -39,6 +39,16 @@ impl Backend for RustlerBackend {
         builder.add_import("std::collections::HashMap");
         builder.add_import(&core_import);
 
+        // Clippy allows for generated code
+        builder.add_item("#![allow(clippy::too_many_arguments)]");
+        builder.add_item("#![allow(clippy::missing_errors_doc)]");
+
+        // Custom module declarations
+        let custom_mods = config.custom_modules.for_language(Language::Elixir);
+        for module in custom_mods {
+            builder.add_item(&format!("pub mod {module};"));
+        }
+
         let (_module_name, module_prefix) = get_module_info(api, config);
 
         // Check if we have opaque types and add Arc import if needed
@@ -106,7 +116,7 @@ impl Backend for RustlerBackend {
         // Build adapter body map (consumed by generators via body substitution)
         let _adapter_bodies = skif_adapters::build_adapter_bodies(config, Language::Elixir)?;
 
-        builder.add_item(&gen_nif_init(api));
+        builder.add_item(&gen_nif_init(api, config));
 
         let content = builder.build();
 
@@ -274,8 +284,15 @@ fn gen_nif_async_method(struct_name: &str, method: &MethodDef, mapper: &RustlerM
 }
 
 /// Generate the rustler::init! macro invocation.
-fn gen_nif_init(api: &ApiSurface) -> String {
+fn gen_nif_init(api: &ApiSurface, config: &SkifConfig) -> String {
     let mut exports = vec![];
+
+    // Custom NIF function registrations (before generated ones)
+    if let Some(reg) = config.custom_registrations.for_language(Language::Elixir) {
+        for func in &reg.functions {
+            exports.push(func.clone());
+        }
+    }
 
     for func in &api.functions {
         let func_name = if func.is_async {

@@ -62,6 +62,16 @@ impl Backend for PhpBackend {
         builder.add_import("std::collections::HashMap");
         builder.add_import(&core_import);
 
+        // Clippy allows for generated code
+        builder.add_item("#![allow(clippy::too_many_arguments)]");
+        builder.add_item("#![allow(clippy::missing_errors_doc)]");
+
+        // Custom module declarations
+        let custom_mods = config.custom_modules.for_language(Language::Php);
+        for module in custom_mods {
+            builder.add_item(&format!("pub mod {module};"));
+        }
+
         // Check if any function or method is async
         let has_async =
             api.functions.iter().any(|f| f.is_async) || api.types.iter().any(|t| t.methods.iter().any(|m| m.is_async));
@@ -312,12 +322,22 @@ fn gen_async_static_method(method: &MethodDef, mapper: &PhpMapper) -> String {
 }
 
 /// Generate the module initialization function.
-fn gen_module_init(api: &ApiSurface, _config: &SkifConfig) -> String {
+fn gen_module_init(api: &ApiSurface, config: &SkifConfig) -> String {
     let mut lines = vec![
         "#[php_module]".to_string(),
         "pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {".to_string(),
         "    let module = module".to_string(),
     ];
+
+    // Custom registrations (before generated ones)
+    if let Some(reg) = config.custom_registrations.for_language(Language::Php) {
+        for class in &reg.classes {
+            lines.push(format!("        .add_class::<{class}>()"));
+        }
+        for func in &reg.functions {
+            lines.push(format!("        .add_function({func})"));
+        }
+    }
 
     for typ in &api.types {
         lines.push(format!("        .add_class::<{}>()", typ.name));

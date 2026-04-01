@@ -908,6 +908,8 @@ mod tests {
             lint: None,
             custom_files: None,
             adapters: vec![],
+            custom_modules: CustomModulesConfig::default(),
+            custom_registrations: CustomRegistrationsConfig::default(),
         }
     }
 

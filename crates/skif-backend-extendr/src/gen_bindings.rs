@@ -88,6 +88,16 @@ impl Backend for ExtendrBackend {
         builder.add_import("extendr_api::prelude::*");
         builder.add_import(&core_import);
 
+        // Clippy allows for generated code
+        builder.add_item("#![allow(clippy::too_many_arguments)]");
+        builder.add_item("#![allow(clippy::missing_errors_doc)]");
+
+        // Custom module declarations
+        let custom_mods = config.custom_modules.for_language(Language::R);
+        for module in custom_mods {
+            builder.add_item(&format!("pub mod {module};"));
+        }
+
         // Generate type bindings
         for typ in &api.types {
             builder.add_item(&generators::gen_struct(typ, self, &cfg));

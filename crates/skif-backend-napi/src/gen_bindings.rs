@@ -66,6 +66,16 @@ impl Backend for NapiBackend {
         builder.add_import("serde_json");
         builder.add_import(&core_import);
 
+        // Clippy allows for generated code
+        builder.add_item("#![allow(clippy::too_many_arguments)]");
+        builder.add_item("#![allow(clippy::missing_errors_doc)]");
+
+        // Custom module declarations (NAPI auto-exports, no explicit registration needed)
+        let custom_mods = config.custom_modules.for_language(Language::Node);
+        for module in custom_mods {
+            builder.add_item(&format!("pub mod {module};"));
+        }
+
         // Check if any function or method is async
         let has_async =
             api.functions.iter().any(|f| f.is_async) || api.types.iter().any(|t| t.methods.iter().any(|m| m.is_async));

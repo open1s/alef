@@ -52,10 +52,22 @@ impl Backend for WasmBackend {
         let mapper = WasmMapper::new(type_overrides);
         let core_import = config.core_import();
 
+        // Note: custom modules and registrations handled below after builder creation
+
         let mut builder = RustFileBuilder::new().with_generated_header();
         builder.add_import("wasm_bindgen::prelude::*");
         builder.add_import("std::collections::HashMap");
         builder.add_import(&core_import);
+
+        // Clippy allows for generated code
+        builder.add_item("#![allow(clippy::too_many_arguments)]");
+        builder.add_item("#![allow(clippy::missing_errors_doc)]");
+
+        // Custom module declarations
+        let custom_mods = config.custom_modules.for_language(Language::Wasm);
+        for module in custom_mods {
+            builder.add_item(&format!("pub mod {module};"));
+        }
 
         // Check if we have opaque types and add Arc import if needed
         let opaque_types: AHashSet<String> = api

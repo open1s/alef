@@ -83,6 +83,16 @@ impl Backend for Pyo3Backend {
             builder.add_import("std::sync::Arc");
         }
 
+        // Clippy allows for generated code
+        builder.add_item("#![allow(clippy::too_many_arguments)]");
+        builder.add_item("#![allow(clippy::missing_errors_doc)]");
+
+        // Custom module declarations
+        let custom_mods = config.custom_modules.for_language(Language::Python);
+        for module in custom_mods {
+            builder.add_item(&format!("pub mod {module};"));
+        }
+
         // Add streaming iterator structs from adapters
         for adapter in &config.adapters {
             if matches!(adapter.pattern, AdapterPattern::Streaming) {
@@ -142,7 +152,7 @@ impl Backend for Pyo3Backend {
         }
 
         // Module init
-        builder.add_item(&gen_module_init(&config.python_module_name(), api));
+        builder.add_item(&gen_module_init(&config.python_module_name(), api, config));
 
         let content = builder.build();
 
@@ -192,7 +202,7 @@ pub fn init_async_runtime() -> PyResult<()> {
 }
 
 /// Generate the module initialization function.
-fn gen_module_init(module_name: &str, api: &ApiSurface) -> String {
+fn gen_module_init(module_name: &str, api: &ApiSurface, config: &SkifConfig) -> String {
     let mut lines = vec![
         "#[pymodule]".to_string(),
         format!("fn {module_name}(m: &Bound<'_, PyModule>) -> PyResult<()> {{"),
@@ -204,6 +214,16 @@ fn gen_module_init(module_name: &str, api: &ApiSurface) -> String {
 
     if has_async {
         lines.push("    m.add_function(wrap_pyfunction!(init_async_runtime, m)?)?;".to_string());
+    }
+
+    // Custom registrations (before generated ones so hand-written classes are registered first)
+    if let Some(reg) = config.custom_registrations.for_language(Language::Python) {
+        for class in &reg.classes {
+            lines.push(format!("    m.add_class::<{class}>()?;"));
+        }
+        for func in &reg.functions {
+            lines.push(format!("    m.add_function(wrap_pyfunction!({func}, m)?)?;"));
+        }
     }
 
     // Deduplicate registered types and enums

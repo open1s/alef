@@ -99,6 +99,8 @@ fn test_basic_generation() {
         lint: None,
         custom_files: None,
         adapters: vec![],
+        custom_modules: skif_core::config::CustomModulesConfig::default(),
+        custom_registrations: skif_core::config::CustomRegistrationsConfig::default(),
     };
 
     // Generate bindings
@@ -214,6 +216,8 @@ fn test_package_default() {
         lint: None,
         custom_files: None,
         adapters: vec![],
+        custom_modules: skif_core::config::CustomModulesConfig::default(),
+        custom_registrations: skif_core::config::CustomRegistrationsConfig::default(),
     };
 
     let result = backend.generate_bindings(&api, &config);
