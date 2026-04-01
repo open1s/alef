@@ -1,37 +1,29 @@
 use skif_core::config::{AdapterConfig, Language, SkifConfig};
 
-/// Generate a streaming adapter for the given language.
-pub fn generate(adapter: &AdapterConfig, language: Language, config: &SkifConfig) -> anyhow::Result<String> {
-    let code = match language {
-        Language::Python => gen_python(adapter, config),
-        Language::Node => gen_node(adapter, config),
-        Language::Ruby => gen_ruby(adapter, config),
-        Language::Php => gen_php(adapter, config),
-        Language::Elixir => gen_elixir(adapter, config),
-        Language::Wasm => gen_wasm(adapter, config),
-        Language::Ffi => gen_ffi(adapter),
-        Language::Go => gen_go(adapter),
-        Language::Java => gen_java(adapter),
-        Language::Csharp => gen_csharp(adapter),
-        Language::R => gen_r(adapter, config),
+/// Generate the method body and optionally a struct definition for a streaming adapter.
+///
+/// Returns `(method_body, Option<struct_definition>)`.
+/// The struct definition is only produced for languages that need a separate iterator struct
+/// (currently Python/PyO3).
+pub fn generate_body(
+    adapter: &AdapterConfig,
+    language: Language,
+    config: &SkifConfig,
+) -> anyhow::Result<(String, Option<String>)> {
+    let result = match language {
+        Language::Python => gen_python_body(adapter, config),
+        Language::Node => gen_node_body(adapter, config),
+        Language::Ruby => gen_ruby_body(adapter, config),
+        Language::Php => gen_php_body(adapter, config),
+        Language::Elixir => gen_elixir_body(adapter, config),
+        Language::Wasm => gen_wasm_body(adapter, config),
+        Language::Ffi => gen_ffi_body(adapter),
+        Language::Go => gen_go_body(adapter),
+        Language::Java => gen_java_body(adapter),
+        Language::Csharp => gen_csharp_body(adapter),
+        Language::R => gen_r_body(adapter, config),
     };
-    Ok(code)
-}
-
-/// Build the parameter list for Rust-side function signatures.
-fn rust_params(adapter: &AdapterConfig) -> Vec<String> {
-    adapter
-        .params
-        .iter()
-        .map(|p| {
-            let ty = if p.optional {
-                format!("Option<{}>", p.ty)
-            } else {
-                p.ty.clone()
-            };
-            format!("{}: {}", p.name, ty)
-        })
-        .collect()
+    Ok(result)
 }
 
 /// Build the call arguments with `.into()` conversion.
@@ -58,26 +50,17 @@ fn iterator_name(adapter: &AdapterConfig) -> String {
 // Python (PyO3)
 // ---------------------------------------------------------------------------
 
-fn gen_python(adapter: &AdapterConfig, config: &SkifConfig) -> String {
-    let name = &adapter.name;
+fn gen_python_body(adapter: &AdapterConfig, config: &SkifConfig) -> (String, Option<String>) {
     let core_path = &adapter.core_path;
     let item_type = adapter.item_type.as_deref().unwrap_or("()");
     let error_type = adapter.error_type.as_deref().unwrap_or("anyhow::Error");
-    let owner_type = adapter.owner_type.as_deref().unwrap_or("Self");
     let core_import = config.core_import();
     let iter_name = iterator_name(adapter);
 
-    let params = rust_params(adapter);
     let args = call_args(adapter);
-
-    let param_str = if params.is_empty() {
-        String::new()
-    } else {
-        format!(", {}", params.join(", "))
-    };
     let call_str = args.join(", ");
 
-    format!(
+    let struct_def = format!(
         "#[pyclass]\n\
          pub struct {iter_name} {{\n    \
              inner: Arc<tokio::sync::Mutex<futures::stream::BoxStream<'static, Result<{core_import}::{item_type}, {core_import}::{error_type}>>>>,\n\
@@ -98,288 +81,219 @@ fn gen_python(adapter: &AdapterConfig, config: &SkifConfig) -> String {
                      }}\n        \
                  }})\n    \
              }}\n\
-         }}\n\
-         \n\
-         // Method on {owner_type} impl block\n\
-         pub fn {name}<'py>(&self, py: Python<'py>{param_str}) -> PyResult<{iter_name}> {{\n    \
-             let inner = self.inner.clone();\n    \
-             let stream = inner.{core_path}({call_str});\n    \
-             Ok({iter_name} {{\n        \
-                 inner: Arc::new(tokio::sync::Mutex::new(stream)),\n    \
-             }})\n\
          }}"
-    )
+    );
+
+    let method_body = format!(
+        "let inner = self.inner.clone();\n    \
+         let stream = inner.{core_path}({call_str});\n    \
+         Ok({iter_name} {{\n        \
+             inner: Arc::new(tokio::sync::Mutex::new(stream)),\n    \
+         }})"
+    );
+
+    (method_body, Some(struct_def))
 }
 
 // ---------------------------------------------------------------------------
 // Node (NAPI)
 // ---------------------------------------------------------------------------
 
-fn gen_node(adapter: &AdapterConfig, _config: &SkifConfig) -> String {
-    let name = &adapter.name;
+fn gen_node_body(adapter: &AdapterConfig, _config: &SkifConfig) -> (String, Option<String>) {
     let core_path = &adapter.core_path;
     let item_type = adapter.item_type.as_deref().unwrap_or("()");
 
-    let params = rust_params(adapter);
     let args = call_args(adapter);
-
-    let param_str = if params.is_empty() {
-        String::from("&self")
-    } else {
-        format!("&self, {}", params.join(", "))
-    };
     let call_str = args.join(", ");
 
-    let js_name = to_camel_case(name);
+    let body = format!(
+        "use futures::StreamExt;\n    \
+         let stream = self.inner.{core_path}({call_str});\n    \
+         let chunks: Vec<_> = stream\n        \
+             .map(|r| r.map({item_type}::from))\n        \
+             .collect::<Vec<_>>().await\n        \
+             .into_iter()\n        \
+             .collect::<Result<Vec<_>, _>>()\n        \
+             .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;\n    \
+         Ok(chunks)"
+    );
 
-    format!(
-        "#[napi(js_name = \"{js_name}\")]\n\
-         pub async fn {name}({param_str}) -> napi::Result<Vec<{item_type}>> {{\n    \
-             use futures::StreamExt;\n    \
-             let stream = self.inner.{core_path}({call_str});\n    \
-             let chunks: Vec<_> = stream\n        \
-                 .map(|r| r.map({item_type}::from))\n        \
-                 .collect::<Vec<_>>().await\n        \
-                 .into_iter()\n        \
-                 .collect::<Result<Vec<_>, _>>()\n        \
-                 .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;\n    \
-             Ok(chunks)\n\
-         }}"
-    )
+    (body, None)
 }
 
 // ---------------------------------------------------------------------------
 // Ruby (Magnus)
 // ---------------------------------------------------------------------------
 
-fn gen_ruby(adapter: &AdapterConfig, _config: &SkifConfig) -> String {
-    let name = &adapter.name;
+fn gen_ruby_body(adapter: &AdapterConfig, _config: &SkifConfig) -> (String, Option<String>) {
     let core_path = &adapter.core_path;
     let item_type = adapter.item_type.as_deref().unwrap_or("()");
 
-    let params = rust_params(adapter);
     let args = call_args(adapter);
-
-    let param_str = if params.is_empty() {
-        String::from("&self")
-    } else {
-        format!("&self, {}", params.join(", "))
-    };
     let call_str = args.join(", ");
 
-    format!(
-        "fn {name}({param_str}) -> Result<Vec<{item_type}>, magnus::Error> {{\n    \
-             use futures::StreamExt;\n    \
-             let rt = tokio::runtime::Runtime::new()\n        \
-                 .map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))?;\n    \
-             let stream = self.inner.{core_path}({call_str});\n    \
-             rt.block_on(async {{\n        \
-                 stream\n            \
-                     .map(|r| r.map({item_type}::from))\n            \
-                     .collect::<Vec<_>>().await\n            \
-                     .into_iter()\n            \
-                     .collect::<Result<Vec<_>, _>>()\n    \
-             }})\n    \
-             .map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))\n\
-         }}"
-    )
+    let body = format!(
+        "use futures::StreamExt;\n    \
+         let rt = tokio::runtime::Runtime::new()\n        \
+             .map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))?;\n    \
+         let stream = self.inner.{core_path}({call_str});\n    \
+         rt.block_on(async {{\n        \
+             stream\n            \
+                 .map(|r| r.map({item_type}::from))\n            \
+                 .collect::<Vec<_>>().await\n            \
+                 .into_iter()\n            \
+                 .collect::<Result<Vec<_>, _>>()\n    \
+         }})\n    \
+         .map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))"
+    );
+
+    (body, None)
 }
 
 // ---------------------------------------------------------------------------
 // PHP (ext-php-rs)
 // ---------------------------------------------------------------------------
 
-fn gen_php(adapter: &AdapterConfig, _config: &SkifConfig) -> String {
-    let name = &adapter.name;
+fn gen_php_body(adapter: &AdapterConfig, _config: &SkifConfig) -> (String, Option<String>) {
     let core_path = &adapter.core_path;
     let item_type = adapter.item_type.as_deref().unwrap_or("()");
 
-    let params = rust_params(adapter);
     let args = call_args(adapter);
-
-    let param_str = if params.is_empty() {
-        String::from("&self")
-    } else {
-        format!("&self, {}", params.join(", "))
-    };
     let call_str = args.join(", ");
 
-    format!(
-        "pub fn {name}({param_str}) -> PhpResult<Vec<{item_type}>> {{\n    \
-             use futures::StreamExt;\n    \
-             WORKER_RUNTIME.block_on(async {{\n        \
-                 let stream = self.inner.{core_path}({call_str});\n        \
-                 stream\n            \
-                     .map(|r| r.map({item_type}::from))\n            \
-                     .collect::<Vec<_>>().await\n            \
-                     .into_iter()\n            \
-                     .collect::<Result<Vec<_>, _>>()\n    \
-             }})\n    \
-             .map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()).into())\n\
-         }}"
-    )
+    let body = format!(
+        "use futures::StreamExt;\n    \
+         WORKER_RUNTIME.block_on(async {{\n        \
+             let stream = self.inner.{core_path}({call_str});\n        \
+             stream\n            \
+                 .map(|r| r.map({item_type}::from))\n            \
+                 .collect::<Vec<_>>().await\n            \
+                 .into_iter()\n            \
+                 .collect::<Result<Vec<_>, _>>()\n    \
+         }})\n    \
+         .map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()).into())"
+    );
+
+    (body, None)
 }
 
 // ---------------------------------------------------------------------------
 // Elixir (Rustler)
 // ---------------------------------------------------------------------------
 
-fn gen_elixir(adapter: &AdapterConfig, _config: &SkifConfig) -> String {
-    let name = &adapter.name;
+fn gen_elixir_body(adapter: &AdapterConfig, _config: &SkifConfig) -> (String, Option<String>) {
     let core_path = &adapter.core_path;
     let item_type = adapter.item_type.as_deref().unwrap_or("()");
-    let owner_type = adapter.owner_type.as_deref().unwrap_or("Self");
-    let owner_snake = to_snake_case(owner_type);
 
-    let params = rust_params(adapter);
     let args = call_args(adapter);
-
-    let param_str = if params.is_empty() {
-        format!("client: ResourceArc<{owner_type}>")
-    } else {
-        format!("client: ResourceArc<{owner_type}>, {}", params.join(", "))
-    };
     let call_str = args.join(", ");
 
-    format!(
-        "#[rustler::nif(schedule = \"DirtyCpu\")]\n\
-         fn {owner_snake}_{name}({param_str}) -> Result<Vec<{item_type}>, String> {{\n    \
-             use futures::StreamExt;\n    \
-             let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;\n    \
-             let stream = client.inner.{core_path}({call_str});\n    \
-             rt.block_on(async {{\n        \
-                 stream\n            \
-                     .map(|r| r.map({item_type}::from))\n            \
-                     .collect::<Vec<_>>().await\n            \
-                     .into_iter()\n            \
-                     .collect::<Result<Vec<_>, _>>()\n    \
-             }})\n    \
-             .map_err(|e| e.to_string())\n\
-         }}"
-    )
+    let body = format!(
+        "use futures::StreamExt;\n    \
+         let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;\n    \
+         let stream = client.inner.{core_path}({call_str});\n    \
+         rt.block_on(async {{\n        \
+             stream\n            \
+                 .map(|r| r.map({item_type}::from))\n            \
+                 .collect::<Vec<_>>().await\n            \
+                 .into_iter()\n            \
+                 .collect::<Result<Vec<_>, _>>()\n    \
+         }})\n    \
+         .map_err(|e| e.to_string())"
+    );
+
+    (body, None)
 }
 
 // ---------------------------------------------------------------------------
 // WASM (wasm-bindgen)
 // ---------------------------------------------------------------------------
 
-fn gen_wasm(adapter: &AdapterConfig, _config: &SkifConfig) -> String {
-    let name = &adapter.name;
+fn gen_wasm_body(adapter: &AdapterConfig, _config: &SkifConfig) -> (String, Option<String>) {
     let core_path = &adapter.core_path;
     let item_type = adapter.item_type.as_deref().unwrap_or("JsValue");
 
-    let params = rust_params(adapter);
     let args = call_args(adapter);
-
-    let param_str = if params.is_empty() {
-        String::from("&self")
-    } else {
-        format!("&self, {}", params.join(", "))
-    };
     let call_str = args.join(", ");
 
-    let js_name = to_camel_case(name);
+    let body = format!(
+        "use futures::StreamExt;\n    \
+         let stream = self.inner.{core_path}({call_str});\n    \
+         let chunks: Vec<_> = stream\n        \
+             .map(|r| r.map({item_type}::from))\n        \
+             .collect::<Vec<_>>().await\n        \
+             .into_iter()\n        \
+             .collect::<Result<Vec<_>, _>>()\n        \
+             .map_err(|e| JsValue::from_str(&e.to_string()))?;\n    \
+         Ok(chunks)"
+    );
 
-    format!(
-        "#[wasm_bindgen(js_name = \"{js_name}\")]\n\
-         pub async fn {name}({param_str}) -> Result<Vec<{item_type}>, JsValue> {{\n    \
-             use futures::StreamExt;\n    \
-             let stream = self.inner.{core_path}({call_str});\n    \
-             let chunks: Vec<_> = stream\n        \
-                 .map(|r| r.map({item_type}::from))\n        \
-                 .collect::<Vec<_>>().await\n        \
-                 .into_iter()\n        \
-                 .collect::<Result<Vec<_>, _>>()\n        \
-                 .map_err(|e| JsValue::from_str(&e.to_string()))?;\n    \
-             Ok(chunks)\n\
-         }}"
-    )
+    (body, None)
 }
 
 // ---------------------------------------------------------------------------
-// FFI (C ABI) — Streaming not supported
+// FFI (C ABI) -- Streaming not supported
 // ---------------------------------------------------------------------------
 
-fn gen_ffi(adapter: &AdapterConfig) -> String {
-    format!(
-        "// Streaming not supported via FFI. Use the Rust API directly.\n\
-         // Adapter: {}",
-        adapter.name,
-    )
+fn gen_ffi_body(adapter: &AdapterConfig) -> (String, Option<String>) {
+    let body = format!("todo!(\"streaming not supported via FFI: {}\")", adapter.name,);
+    (body, None)
 }
 
 // ---------------------------------------------------------------------------
-// Go — Streaming not supported via FFI
+// Go -- Streaming not supported via FFI
 // ---------------------------------------------------------------------------
 
-fn gen_go(adapter: &AdapterConfig) -> String {
-    format!(
-        "// Streaming not supported via FFI. Use the Rust API directly.\n\
-         // Adapter: {}",
-        adapter.name,
-    )
+fn gen_go_body(adapter: &AdapterConfig) -> (String, Option<String>) {
+    let body = format!("todo!(\"streaming not supported via FFI: {}\")", adapter.name,);
+    (body, None)
 }
 
 // ---------------------------------------------------------------------------
-// Java — Streaming not supported via FFI
+// Java -- Streaming not supported via FFI
 // ---------------------------------------------------------------------------
 
-fn gen_java(adapter: &AdapterConfig) -> String {
-    format!(
-        "// Streaming not supported via FFI. Use the Rust API directly.\n\
-         // Adapter: {}",
-        adapter.name,
-    )
+fn gen_java_body(adapter: &AdapterConfig) -> (String, Option<String>) {
+    let body = format!("todo!(\"streaming not supported via FFI: {}\")", adapter.name,);
+    (body, None)
 }
 
 // ---------------------------------------------------------------------------
-// C# — Streaming not supported via FFI
+// C# -- Streaming not supported via FFI
 // ---------------------------------------------------------------------------
 
-fn gen_csharp(adapter: &AdapterConfig) -> String {
-    format!(
-        "// Streaming not supported via FFI. Use the Rust API directly.\n\
-         // Adapter: {}",
-        adapter.name,
-    )
+fn gen_csharp_body(adapter: &AdapterConfig) -> (String, Option<String>) {
+    let body = format!("todo!(\"streaming not supported via FFI: {}\")", adapter.name,);
+    (body, None)
 }
 
 // ---------------------------------------------------------------------------
-// R (extendr) — collect stream into Vec
+// R (extendr) -- collect stream into Vec
 // ---------------------------------------------------------------------------
 
-fn gen_r(adapter: &AdapterConfig, _config: &SkifConfig) -> String {
-    let name = &adapter.name;
+fn gen_r_body(adapter: &AdapterConfig, _config: &SkifConfig) -> (String, Option<String>) {
     let core_path = &adapter.core_path;
     let item_type = adapter.item_type.as_deref().unwrap_or("Robj");
 
-    let params = rust_params(adapter);
     let args = call_args(adapter);
-
-    let param_str = if params.is_empty() {
-        String::from("&self")
-    } else {
-        format!("&self, {}", params.join(", "))
-    };
     let call_str = args.join(", ");
 
-    format!(
-        "#[extendr]\n\
-         fn {name}({param_str}) -> extendr_api::Result<Vec<{item_type}>> {{\n    \
-             use futures::StreamExt;\n    \
-             let rt = tokio::runtime::Runtime::new()\n        \
-                 .map_err(|e| extendr_api::Error::Other(e.to_string()))?;\n    \
-             let stream = self.inner.{core_path}({call_str});\n    \
-             rt.block_on(async {{\n        \
-                 stream\n            \
-                     .map(|r| r.map({item_type}::from))\n            \
-                     .collect::<Vec<_>>().await\n            \
-                     .into_iter()\n            \
-                     .collect::<Result<Vec<_>, _>>()\n    \
-             }})\n    \
-             .map_err(|e| extendr_api::Error::Other(e.to_string()))\n\
-         }}"
-    )
+    let body = format!(
+        "use futures::StreamExt;\n    \
+         let rt = tokio::runtime::Runtime::new()\n        \
+             .map_err(|e| extendr_api::Error::Other(e.to_string()))?;\n    \
+         let stream = self.inner.{core_path}({call_str});\n    \
+         rt.block_on(async {{\n        \
+             stream\n            \
+                 .map(|r| r.map({item_type}::from))\n            \
+                 .collect::<Vec<_>>().await\n            \
+                 .into_iter()\n            \
+                 .collect::<Result<Vec<_>, _>>()\n    \
+         }})\n    \
+         .map_err(|e| extendr_api::Error::Other(e.to_string()))"
+    );
+
+    (body, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -396,28 +310,4 @@ fn to_pascal_case(s: &str) -> String {
             }
         })
         .collect()
-}
-
-fn to_camel_case(s: &str) -> String {
-    let pascal = to_pascal_case(s);
-    let mut chars = pascal.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_lowercase().to_string() + chars.as_str(),
-    }
-}
-
-fn to_snake_case(s: &str) -> String {
-    let mut result = String::new();
-    for (i, ch) in s.chars().enumerate() {
-        if ch.is_uppercase() {
-            if i > 0 {
-                result.push('_');
-            }
-            result.push(ch.to_lowercase().next().unwrap());
-        } else {
-            result.push(ch);
-        }
-    }
-    result
 }

@@ -81,6 +81,9 @@ impl Backend for ExtendrBackend {
         let core_import = config.core_import();
         let cfg = Self::binding_config(&core_import);
 
+        // Build adapter body map for method body substitution
+        let adapter_bodies = skif_adapters::build_adapter_bodies(config, Language::R)?;
+
         let mut builder = RustFileBuilder::new().with_generated_header();
         builder.add_import("extendr_api::prelude::*");
         builder.add_import(&core_import);
@@ -88,7 +91,7 @@ impl Backend for ExtendrBackend {
         // Generate type bindings
         for typ in &api.types {
             builder.add_item(&generators::gen_struct(typ, self, &cfg));
-            let impl_block = generators::gen_impl_block(typ, self, &cfg);
+            let impl_block = generators::gen_impl_block(typ, self, &cfg, &adapter_bodies);
             if !impl_block.is_empty() {
                 builder.add_item(&impl_block);
             }
@@ -101,13 +104,7 @@ impl Backend for ExtendrBackend {
 
         // Generate function bindings
         for func in &api.functions {
-            builder.add_item(&generators::gen_function(func, self, &cfg));
-        }
-
-        // Generate adapter functions
-        let adapter_blocks = skif_adapters::generate_adapters(config, Language::R)?;
-        for block in &adapter_blocks {
-            builder.add_item(block);
+            builder.add_item(&generators::gen_function(func, self, &cfg, &adapter_bodies));
         }
 
         // Module registration

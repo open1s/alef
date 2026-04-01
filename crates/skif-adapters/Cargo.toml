@@ -8,5 +8,6 @@ description = "FFI adapter pattern generators for skif"
 repository.workspace = true
 
 [dependencies]
+ahash = { workspace = true }
 anyhow = { workspace = true }
 skif-core = { workspace = true }

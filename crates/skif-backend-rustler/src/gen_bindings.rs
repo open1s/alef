@@ -103,11 +103,8 @@ impl Backend for RustlerBackend {
             }
         }
 
-        // Generate adapter functions
-        let adapter_blocks = skif_adapters::generate_adapters(config, Language::Elixir)?;
-        for block in &adapter_blocks {
-            builder.add_item(block);
-        }
+        // Build adapter body map (consumed by generators via body substitution)
+        let _adapter_bodies = skif_adapters::build_adapter_bodies(config, Language::Elixir)?;
 
         builder.add_item(&gen_nif_init(api));
 

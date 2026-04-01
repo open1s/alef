@@ -1,9 +1,13 @@
 use crate::builder::StructBuilder;
 use crate::shared::{constructor_parts, function_params, function_sig_defaults, partition_methods};
 use crate::type_mapper::TypeMapper;
-use ahash::AHashSet;
+use ahash::{AHashMap, AHashSet};
 use skif_core::ir::{EnumDef, FunctionDef, MethodDef, ParamDef, TypeDef, TypeRef};
 use std::fmt::Write;
+
+/// Map of adapter-generated method/function bodies.
+/// Key: "TypeName.method_name" for methods, "function_name" for free functions.
+pub type AdapterBodies = AHashMap<String, String>;
 
 /// Async support pattern for the backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,6 +159,7 @@ pub fn gen_opaque_impl_block(
     mapper: &dyn TypeMapper,
     cfg: &RustBindingConfig,
     opaque_types: &AHashSet<String>,
+    adapter_bodies: &AdapterBodies,
 ) -> String {
     let (instance, statics) = partition_methods(&typ.methods);
     if instance.is_empty() && statics.is_empty() {
@@ -169,13 +174,13 @@ pub fn gen_opaque_impl_block(
 
     // Instance methods — delegate to self.inner
     for m in &instance {
-        out.push_str(&gen_method(m, mapper, cfg, typ, true, opaque_types));
+        out.push_str(&gen_method(m, mapper, cfg, typ, true, opaque_types, adapter_bodies));
         out.push_str("\n\n");
     }
 
     // Static methods
     for m in &statics {
-        out.push_str(&gen_static_method(m, mapper, cfg, typ));
+        out.push_str(&gen_static_method(m, mapper, cfg, typ, adapter_bodies));
         out.push_str("\n\n");
     }
 
@@ -221,6 +226,7 @@ pub fn gen_method(
     typ: &TypeDef,
     is_opaque: bool,
     opaque_types: &AHashSet<String>,
+    adapter_bodies: &AdapterBodies,
 ) -> String {
     let type_name = &typ.name;
     // Use the full rust_path (with hyphens replaced by underscores) for core type references
@@ -283,7 +289,13 @@ pub fn gen_method(
     };
 
     let body = if !opaque_can_delegate {
-        format!("todo!(\"wire up {}.{}\")", type_name, method.name)
+        // Check if an adapter provides the body
+        let adapter_key = format!("{}.{}", type_name, method.name);
+        if let Some(adapter_body) = adapter_bodies.get(&adapter_key) {
+            adapter_body.clone()
+        } else {
+            format!("todo!(\"wire up {}.{}\")", type_name, method.name)
+        }
     } else if method.is_async {
         // For opaque types with Pyo3FutureIntoPy, we need to clone the Arc before moving.
         let inner_clone_line = if is_opaque {
@@ -448,6 +460,7 @@ pub fn gen_static_method(
     mapper: &dyn TypeMapper,
     cfg: &RustBindingConfig,
     typ: &TypeDef,
+    adapter_bodies: &AdapterBodies,
 ) -> String {
     let type_name = &typ.name;
     // Use the full rust_path (with hyphens replaced by underscores) for core type references
@@ -462,7 +475,13 @@ pub fn gen_static_method(
     let can_delegate = crate::shared::can_auto_delegate(method);
 
     let body = if !can_delegate {
-        format!("todo!(\"wire up {type_name}::{}\")", method.name)
+        // Check if an adapter provides the body
+        let adapter_key = format!("{}.{}", type_name, method.name);
+        if let Some(adapter_body) = adapter_bodies.get(&adapter_key) {
+            adapter_body.clone()
+        } else {
+            format!("todo!(\"wire up {type_name}::{}\")", method.name)
+        }
     } else if method.is_async {
         match cfg.async_pattern {
             AsyncPattern::Pyo3FutureIntoPy => {
@@ -613,7 +632,12 @@ pub fn gen_enum(enum_def: &EnumDef, cfg: &RustBindingConfig) -> String {
 }
 
 /// Generate a free function.
-pub fn gen_function(func: &FunctionDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfig) -> String {
+pub fn gen_function(
+    func: &FunctionDef,
+    mapper: &dyn TypeMapper,
+    cfg: &RustBindingConfig,
+    adapter_bodies: &AdapterBodies,
+) -> String {
     let map_fn = |ty: &skif_core::ir::TypeRef| mapper.map_type(ty);
     let params = function_params(&func.params, &map_fn);
     let return_type = mapper.map_type(&func.return_type);
@@ -636,7 +660,12 @@ pub fn gen_function(func: &FunctionDef, mapper: &dyn TypeMapper, cfg: &RustBindi
 
     // Generate the body based on async pattern
     let body = if !can_delegate {
-        format!("todo!(\"wire up {}\")", func.name)
+        // Check if an adapter provides the body
+        if let Some(adapter_body) = adapter_bodies.get(&func.name) {
+            adapter_body.clone()
+        } else {
+            format!("todo!(\"wire up {}\")", func.name)
+        }
     } else if func.is_async {
         match cfg.async_pattern {
             AsyncPattern::Pyo3FutureIntoPy => {
@@ -777,7 +806,12 @@ pub fn gen_function(func: &FunctionDef, mapper: &dyn TypeMapper, cfg: &RustBindi
 }
 
 /// Generate a full methods impl block.
-pub fn gen_impl_block(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfig) -> String {
+pub fn gen_impl_block(
+    typ: &TypeDef,
+    mapper: &dyn TypeMapper,
+    cfg: &RustBindingConfig,
+    adapter_bodies: &AdapterBodies,
+) -> String {
     let (instance, statics) = partition_methods(&typ.methods);
     if instance.is_empty() && statics.is_empty() && typ.fields.is_empty() {
         return String::new();
@@ -798,13 +832,13 @@ pub fn gen_impl_block(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingC
 
     // Instance methods
     for m in &instance {
-        out.push_str(&gen_method(m, mapper, cfg, typ, false, &empty_opaque));
+        out.push_str(&gen_method(m, mapper, cfg, typ, false, &empty_opaque, adapter_bodies));
         out.push_str("\n\n");
     }
 
     // Static methods
     for m in &statics {
-        out.push_str(&gen_static_method(m, mapper, cfg, typ));
+        out.push_str(&gen_static_method(m, mapper, cfg, typ, adapter_bodies));
         out.push_str("\n\n");
     }
 

@@ -110,11 +110,8 @@ impl Backend for WasmBackend {
             }
         }
 
-        // Generate adapter functions
-        let adapter_blocks = skif_adapters::generate_adapters(config, Language::Wasm)?;
-        for block in &adapter_blocks {
-            builder.add_item(block);
-        }
+        // Build adapter body map (consumed by generators via body substitution)
+        let _adapter_bodies = skif_adapters::build_adapter_bodies(config, Language::Wasm)?;
 
         let content = builder.build();
 

@@ -3,7 +3,7 @@ use ahash::AHashSet;
 use skif_codegen::builder::RustFileBuilder;
 use skif_codegen::generators::{self, AsyncPattern, RustBindingConfig};
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
-use skif_core::config::{Language, SkifConfig, resolve_output_dir};
+use skif_core::config::{AdapterPattern, Language, SkifConfig, resolve_output_dir};
 use skif_core::ir::ApiSurface;
 use std::path::PathBuf;
 
@@ -55,6 +55,9 @@ impl Backend for Pyo3Backend {
         let core_import = config.core_import();
         let cfg = Self::binding_config(&core_import);
 
+        // Build adapter body map for method body substitution
+        let adapter_bodies = skif_adapters::build_adapter_bodies(config, Language::Python)?;
+
         let mut builder = RustFileBuilder::new().with_generated_header();
         builder.add_import("pyo3::prelude::*");
         builder.add_import("pyo3::types::PyDict");
@@ -80,16 +83,26 @@ impl Backend for Pyo3Backend {
             builder.add_import("std::sync::Arc");
         }
 
+        // Add streaming iterator structs from adapters
+        for adapter in &config.adapters {
+            if matches!(adapter.pattern, AdapterPattern::Streaming) {
+                let key = format!("{}.__stream_struct__", adapter.item_type.as_deref().unwrap_or(""));
+                if let Some(struct_code) = adapter_bodies.get(&key) {
+                    builder.add_item(struct_code);
+                }
+            }
+        }
+
         for typ in &api.types {
             if typ.is_opaque {
                 builder.add_item(&generators::gen_opaque_struct(typ, &cfg));
-                let impl_block = generators::gen_opaque_impl_block(typ, &mapper, &cfg, &opaque_types);
+                let impl_block = generators::gen_opaque_impl_block(typ, &mapper, &cfg, &opaque_types, &adapter_bodies);
                 if !impl_block.is_empty() {
                     builder.add_item(&impl_block);
                 }
             } else {
                 builder.add_item(&generators::gen_struct(typ, &mapper, &cfg));
-                let impl_block = generators::gen_impl_block(typ, &mapper, &cfg);
+                let impl_block = generators::gen_impl_block(typ, &mapper, &cfg, &adapter_bodies);
                 if !impl_block.is_empty() {
                     builder.add_item(&impl_block);
                 }
@@ -99,7 +112,7 @@ impl Backend for Pyo3Backend {
             builder.add_item(&generators::gen_enum(e, &cfg));
         }
         for f in &api.functions {
-            builder.add_item(&generators::gen_function(f, &mapper, &cfg));
+            builder.add_item(&generators::gen_function(f, &mapper, &cfg, &adapter_bodies));
         }
 
         let convertible = skif_codegen::conversions::convertible_types(api);
@@ -121,12 +134,6 @@ impl Backend for Pyo3Backend {
                     &core_import,
                 ));
             }
-        }
-
-        // Generate adapter functions
-        let adapter_blocks = skif_adapters::generate_adapters(config, Language::Python)?;
-        for block in &adapter_blocks {
-            builder.add_item(block);
         }
 
         // Async runtime initialization (if needed)
