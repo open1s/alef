@@ -28,6 +28,7 @@ fn test_basic_generation() {
             is_opaque: false,
             is_clone: true,
             doc: "Test config".to_string(),
+            cfg: None,
         }],
         functions: vec![FunctionDef {
             name: "extract".to_string(),
@@ -42,6 +43,7 @@ fn test_basic_generation() {
             is_async: false,
             error_type: Some("Error".to_string()),
             doc: "Extract text".to_string(),
+            cfg: None,
         }],
         enums: vec![EnumDef {
             name: "Mode".to_string(),
@@ -59,6 +61,7 @@ fn test_basic_generation() {
                 },
             ],
             doc: "Processing mode".to_string(),
+            cfg: None,
         }],
         errors: vec![],
     };
@@ -71,6 +74,7 @@ fn test_basic_generation() {
             version_from: "Cargo.toml".to_string(),
             core_import: None,
             workspace_root: None,
+            skip_core_import: false,
         },
         languages: vec![],
         exclude: Default::default(),
@@ -191,6 +195,7 @@ fn test_package_default() {
             version_from: "Cargo.toml".to_string(),
             core_import: None,
             workspace_root: None,
+            skip_core_import: false,
         },
         languages: vec![],
         exclude: Default::default(),

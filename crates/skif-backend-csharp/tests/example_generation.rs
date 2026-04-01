@@ -35,6 +35,7 @@ fn test_generated_code_example() {
             is_opaque: false,
             is_clone: true,
             doc: "Configuration for text extraction".to_string(),
+            cfg: None,
         }],
         functions: vec![FunctionDef {
             name: "extract_file_sync".to_string(),
@@ -57,6 +58,7 @@ fn test_generated_code_example() {
             is_async: false,
             error_type: Some("Error".to_string()),
             doc: "Extract text from a file synchronously".to_string(),
+            cfg: None,
         }],
         enums: vec![EnumDef {
             name: "OcrBackend".to_string(),
@@ -74,6 +76,7 @@ fn test_generated_code_example() {
                 },
             ],
             doc: "Available OCR backends".to_string(),
+            cfg: None,
         }],
         errors: vec![],
     };
@@ -85,6 +88,7 @@ fn test_generated_code_example() {
             version_from: "Cargo.toml".to_string(),
             core_import: None,
             workspace_root: None,
+            skip_core_import: false,
         },
         languages: vec![],
         exclude: Default::default(),

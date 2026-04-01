@@ -63,7 +63,12 @@ impl Backend for Pyo3Backend {
         builder.add_import("pyo3::types::PyDict");
         builder.add_import("pyo3::exceptions::PyRuntimeError");
         builder.add_import("std::collections::HashMap");
-        builder.add_import(&core_import);
+        // Only import core crate if we generate types from it (and skip_core_import is not set)
+        if !config.crate_config.skip_core_import
+            && (!api.types.is_empty() || !api.functions.is_empty() || !api.enums.is_empty())
+        {
+            builder.add_import(&core_import);
+        }
 
         // Check if we have async functions and add imports if needed
         let has_async =
@@ -224,21 +229,33 @@ fn gen_module_init(module_name: &str, api: &ApiSurface, config: &SkifConfig) -> 
         for func in &reg.functions {
             lines.push(format!("    m.add_function(wrap_pyfunction!({func}, m)?)?;"));
         }
+        for call in &reg.init_calls {
+            lines.push(format!("    {call}"));
+        }
     }
 
     // Deduplicate registered types and enums
     let mut registered: AHashSet<String> = AHashSet::new();
     for typ in &api.types {
         if registered.insert(typ.name.clone()) {
+            if let Some(ref cfg) = typ.cfg {
+                lines.push(format!("    #[cfg({cfg})]"));
+            }
             lines.push(format!("    m.add_class::<{}>()?;", typ.name));
         }
     }
     for enum_def in &api.enums {
         if registered.insert(enum_def.name.clone()) {
+            if let Some(ref cfg) = enum_def.cfg {
+                lines.push(format!("    #[cfg({cfg})]"));
+            }
             lines.push(format!("    m.add_class::<{}>()?;", enum_def.name));
         }
     }
     for func in &api.functions {
+        if let Some(ref cfg) = func.cfg {
+            lines.push(format!("    #[cfg({cfg})]"));
+        }
         lines.push(format!("    m.add_function(wrap_pyfunction!({}, m)?)?;", func.name));
     }
 

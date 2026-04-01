@@ -99,6 +99,10 @@ fn gen_call_args(params: &[ParamDef]) -> String {
 
 /// Generate a struct definition using the builder.
 pub fn gen_struct(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfig) -> String {
+    let mut out_prefix = String::new();
+    if let Some(ref cfg_condition) = typ.cfg {
+        writeln!(out_prefix, "#[cfg({cfg_condition})]").ok();
+    }
     let mut sb = StructBuilder::new(&typ.name);
     for attr in cfg.struct_attrs {
         sb.add_attr(attr);
@@ -115,12 +119,15 @@ pub fn gen_struct(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfi
         let attrs: Vec<String> = cfg.field_attrs.iter().map(|a| a.to_string()).collect();
         sb.add_field(&field.name, &ty, attrs);
     }
-    sb.build()
+    format!("{}{}", out_prefix, sb.build())
 }
 
 /// Generate an opaque wrapper struct with `inner: Arc<core::Type>`.
 pub fn gen_opaque_struct(typ: &TypeDef, cfg: &RustBindingConfig) -> String {
     let mut out = String::with_capacity(512);
+    if let Some(ref cfg_condition) = typ.cfg {
+        writeln!(out, "#[cfg({cfg_condition})]").ok();
+    }
     if !cfg.struct_derives.is_empty() {
         writeln!(out, "#[derive(Clone)]").ok();
     }
@@ -167,6 +174,9 @@ pub fn gen_opaque_impl_block(
     }
 
     let mut out = String::with_capacity(2048);
+    if let Some(ref cfg_condition) = typ.cfg {
+        writeln!(out, "#[cfg({cfg_condition})]").ok();
+    }
     if let Some(block_attr) = cfg.method_block_attr {
         writeln!(out, "#[{block_attr}]").ok();
     }
@@ -617,6 +627,9 @@ pub fn gen_static_method(
 /// Generate an enum.
 pub fn gen_enum(enum_def: &EnumDef, cfg: &RustBindingConfig) -> String {
     let mut out = String::with_capacity(512);
+    if let Some(ref cfg_condition) = enum_def.cfg {
+        writeln!(out, "#[cfg({cfg_condition})]").ok();
+    }
     if !cfg.enum_derives.is_empty() {
         writeln!(out, "#[derive({})]", cfg.enum_derives.join(", ")).ok();
     }
@@ -791,6 +804,9 @@ pub fn gen_function(
     };
 
     let mut out = String::with_capacity(1024);
+    if let Some(ref cfg_condition) = func.cfg {
+        writeln!(out, "#[cfg({cfg_condition})]").ok();
+    }
     let attr_inner = cfg
         .function_attr
         .trim_start_matches('#')
@@ -819,6 +835,9 @@ pub fn gen_impl_block(
 
     let empty_opaque = AHashSet::new();
     let mut out = String::with_capacity(2048);
+    if let Some(ref cfg_condition) = typ.cfg {
+        writeln!(out, "#[cfg({cfg_condition})]").ok();
+    }
     if let Some(block_attr) = cfg.method_block_attr {
         writeln!(out, "#[{block_attr}]").ok();
     }

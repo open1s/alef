@@ -243,6 +243,7 @@ mod tests {
             is_opaque: false,
             is_clone: true,
             doc: String::new(),
+            cfg: None,
         }
     }
 
@@ -263,6 +264,7 @@ mod tests {
                 },
             ],
             doc: String::new(),
+            cfg: None,
         }
     }
 

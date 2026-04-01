@@ -108,6 +108,7 @@ fn extract_items(
                         is_opaque: true, // type aliases are opaque (no fields)
                         is_clone: false,
                         doc,
+                        cfg: None,
                     });
                 }
             }
@@ -168,6 +169,7 @@ fn extract_items(
                         is_opaque: true,
                         is_clone: false,
                         doc,
+                        cfg: None,
                     });
                 }
             }
@@ -307,9 +309,17 @@ fn build_rust_path(crate_name: &str, module_path: &str, name: &str) -> String {
     }
 }
 
-/// Check if an item has a `#[cfg(...)]` attribute.
-fn has_cfg_attribute(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| a.path().is_ident("cfg"))
+/// Extract the condition string from a `#[cfg(...)]` attribute, if present.
+fn extract_cfg_condition(attrs: &[syn::Attribute]) -> Option<String> {
+    for attr in attrs {
+        if attr.path().is_ident("cfg") {
+            // Get the token stream inside cfg(...)
+            if let Ok(tokens) = attr.meta.require_list() {
+                return Some(tokens.tokens.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Extract a public struct into a `TypeDef`.
@@ -318,9 +328,7 @@ fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_path: &str) -
     if !item.generics.params.is_empty() {
         return None;
     }
-    if has_cfg_attribute(&item.attrs) {
-        return None;
-    }
+    let cfg = extract_cfg_condition(&item.attrs);
     let name = item.ident.to_string();
     let fields = match &item.fields {
         syn::Fields::Named(named) => named
@@ -345,6 +353,7 @@ fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_path: &str) -
         is_opaque,
         is_clone,
         doc,
+        cfg,
     })
 }
 
@@ -380,9 +389,7 @@ fn extract_enum(item: &syn::ItemEnum, crate_name: &str, module_path: &str) -> Op
     if !item.generics.params.is_empty() {
         return None;
     }
-    if has_cfg_attribute(&item.attrs) {
-        return None;
-    }
+    let cfg = extract_cfg_condition(&item.attrs);
     let name = item.ident.to_string();
     let doc = extract_doc_comments(&item.attrs);
 
@@ -426,6 +433,7 @@ fn extract_enum(item: &syn::ItemEnum, crate_name: &str, module_path: &str) -> Op
         name,
         variants,
         doc,
+        cfg,
     })
 }
 
@@ -435,9 +443,7 @@ fn extract_function(item: &syn::ItemFn, crate_name: &str, module_path: &str) -> 
     if !item.sig.generics.params.is_empty() {
         return None;
     }
-    if has_cfg_attribute(&item.attrs) {
-        return None;
-    }
+    let cfg = extract_cfg_condition(&item.attrs);
     let name = item.sig.ident.to_string();
     let doc = extract_doc_comments(&item.attrs);
     let mut is_async = item.sig.asyncness.is_some();
@@ -463,6 +469,7 @@ fn extract_function(item: &syn::ItemFn, crate_name: &str, module_path: &str) -> 
         is_async,
         error_type,
         doc,
+        cfg,
     })
 }
 
@@ -534,6 +541,7 @@ fn extract_impl_block(
             is_opaque: true,
             is_clone: false,
             doc: String::new(),
+            cfg: None,
         });
     }
 }
@@ -1561,6 +1569,7 @@ mod tests {
                 is_opaque: true,
                 is_clone: false,
                 doc: String::new(),
+                cfg: None,
             }],
             functions: vec![],
             enums: vec![],
@@ -1579,6 +1588,7 @@ mod tests {
                     is_opaque: true,
                     is_clone: false,
                     doc: String::new(),
+                    cfg: None,
                 },
                 TypeDef {
                     name: "NewType".into(),
@@ -1588,6 +1598,7 @@ mod tests {
                     is_opaque: true,
                     is_clone: false,
                     doc: String::new(),
+                    cfg: None,
                 },
             ],
             functions: vec![],
@@ -1624,6 +1635,7 @@ mod tests {
                     is_opaque: true,
                     is_clone: false,
                     doc: String::new(),
+                    cfg: None,
                 },
                 TypeDef {
                     name: "NotWanted".into(),
@@ -1633,6 +1645,7 @@ mod tests {
                     is_opaque: true,
                     is_clone: false,
                     doc: String::new(),
+                    cfg: None,
                 },
             ],
             functions: vec![],

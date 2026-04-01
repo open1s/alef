@@ -1084,6 +1084,7 @@ mod tests {
                 is_opaque: false,
                 is_clone: true,
                 doc: "Configuration struct.".to_string(),
+                cfg: None,
             }],
             functions: vec![FunctionDef {
                 name: "extract".to_string(),
@@ -1098,6 +1099,7 @@ mod tests {
                 is_async: false,
                 error_type: Some("MyError".to_string()),
                 doc: "Extract content from a file.".to_string(),
+                cfg: None,
             }],
             enums: vec![EnumDef {
                 name: "OutputFormat".to_string(),
@@ -1115,6 +1117,7 @@ mod tests {
                     },
                 ],
                 doc: "Output format.".to_string(),
+                cfg: None,
             }],
             errors: vec![],
         }

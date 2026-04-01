@@ -211,6 +211,7 @@ mod tests {
                 version_from: "Cargo.toml".to_string(),
                 core_import: None,
                 workspace_root: None,
+                skip_core_import: false,
             },
             languages: vec![Language::Python, Language::Node],
             exclude: ExcludeConfig::default(),

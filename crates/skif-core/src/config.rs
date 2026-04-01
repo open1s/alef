@@ -63,6 +63,9 @@ pub struct CrateConfig {
     /// Optional workspace root path for resolving `pub use` re-exports from sibling crates.
     #[serde(default)]
     pub workspace_root: Option<PathBuf>,
+    /// When true, skip adding `use {core_import};` to generated bindings.
+    #[serde(default)]
+    pub skip_core_import: bool,
 }
 
 fn default_version_from() -> String {
@@ -313,6 +316,8 @@ pub struct CustomRegistration {
     pub classes: Vec<String>,
     #[serde(default)]
     pub functions: Vec<String>,
+    #[serde(default)]
+    pub init_calls: Vec<String>,
 }
 
 /// Per-language custom registrations.

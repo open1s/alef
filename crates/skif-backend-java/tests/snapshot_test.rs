@@ -42,6 +42,7 @@ fn print_generated_java_code() {
                 is_opaque: false,
                 is_clone: true,
                 doc: "Configuration for extraction".to_string(),
+                cfg: None,
             },
             TypeDef {
                 name: "ExtractionResult".to_string(),
@@ -68,6 +69,7 @@ fn print_generated_java_code() {
                 is_opaque: false,
                 is_clone: true,
                 doc: "Result of extraction".to_string(),
+                cfg: None,
             },
         ],
         functions: vec![
@@ -92,6 +94,7 @@ fn print_generated_java_code() {
                 is_async: false,
                 error_type: Some("Error".to_string()),
                 doc: "Extract text from a file synchronously".to_string(),
+                cfg: None,
             },
             FunctionDef {
                 name: "extractFileAsync".to_string(),
@@ -114,6 +117,7 @@ fn print_generated_java_code() {
                 is_async: true,
                 error_type: Some("Error".to_string()),
                 doc: "Extract text from a file asynchronously".to_string(),
+                cfg: None,
             },
         ],
         enums: vec![EnumDef {
@@ -137,6 +141,7 @@ fn print_generated_java_code() {
                 },
             ],
             doc: "Available OCR backends".to_string(),
+            cfg: None,
         }],
         errors: vec![ErrorDef {
             name: "Error".to_string(),
@@ -164,6 +169,7 @@ fn print_generated_java_code() {
             version_from: "Cargo.toml".to_string(),
             core_import: None,
             workspace_root: None,
+            skip_core_import: false,
         },
         languages: vec![],
         exclude: Default::default(),

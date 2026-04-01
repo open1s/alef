@@ -21,6 +21,8 @@ pub struct TypeDef {
     pub is_opaque: bool,
     pub is_clone: bool,
     pub doc: String,
+    #[serde(default)]
+    pub cfg: Option<String>,
 }
 
 /// A field on a public struct.
@@ -68,6 +70,8 @@ pub struct FunctionDef {
     pub is_async: bool,
     pub error_type: Option<String>,
     pub doc: String,
+    #[serde(default)]
+    pub cfg: Option<String>,
 }
 
 /// A function/method parameter.
@@ -86,6 +90,8 @@ pub struct EnumDef {
     pub rust_path: String,
     pub variants: Vec<EnumVariant>,
     pub doc: String,
+    #[serde(default)]
+    pub cfg: Option<String>,
 }
 
 /// An enum variant.
