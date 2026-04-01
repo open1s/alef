@@ -70,29 +70,6 @@ pub fn can_generate_enum_conversion(enum_def: &EnumDef) -> bool {
     enum_def.variants.iter().all(|v| v.fields.is_empty())
 }
 
-fn is_field_convertible(ty: &TypeRef, known_types: &HashSet<&str>, known_enums: &HashSet<&str>) -> bool {
-    match ty {
-        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
-        TypeRef::Json => false, // Needs backend-specific conversion
-        TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_field_convertible(inner, known_types, known_enums),
-        TypeRef::Map(k, v) => {
-            is_field_convertible(k, known_types, known_enums) && is_field_convertible(v, known_types, known_enums)
-        }
-        TypeRef::Named(name) => {
-            // Skip single-letter generic params
-            if name.len() <= 2 {
-                return false;
-            }
-            // Skip types that look like generics or trait bounds
-            if name.contains('<') || name.contains("dyn ") {
-                return false;
-            }
-            // The Named type must actually exist in the API surface
-            known_types.contains(name.as_str()) || known_enums.contains(name.as_str())
-        }
-    }
-}
-
 /// Derive the Rust import path from rust_path, replacing hyphens with underscores.
 fn core_type_path(typ: &TypeDef, core_import: &str) -> String {
     // rust_path is like "liter-llm::tower::RateLimitConfig"

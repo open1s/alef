@@ -663,6 +663,7 @@ fn resolve_return_type(output: &syn::ReturnType) -> (TypeRef, Option<String>) {
 }
 
 /// Extract a `mod` declaration and recursively process its contents.
+#[allow(clippy::too_many_arguments)]
 fn extract_module(
     item_mod: &syn::ItemMod,
     source_path: &Path,

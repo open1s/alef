@@ -5,6 +5,7 @@ use skif_codegen::type_mapper::TypeMapper;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
 use skif_core::config::{Language, SkifConfig, resolve_output_dir};
 use skif_core::ir::{ApiSurface, EnumDef, FunctionDef, MethodDef, TypeDef};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 pub struct RustlerBackend;
@@ -41,14 +42,19 @@ impl Backend for RustlerBackend {
         let (_module_name, module_prefix) = get_module_info(api, config);
 
         // Check if we have opaque types and add Arc import if needed
-        let has_opaque = api.types.iter().any(|t| t.is_opaque);
-        if has_opaque {
+        let opaque_types: HashSet<String> = api
+            .types
+            .iter()
+            .filter(|t| t.is_opaque)
+            .map(|t| t.name.clone())
+            .collect();
+        if !opaque_types.is_empty() {
             builder.add_import("std::sync::Arc");
         }
 
         for typ in &api.types {
             if typ.is_opaque {
-                builder.add_item(&gen_opaque_resource(typ, &core_import));
+                builder.add_item(&gen_opaque_resource(typ, &core_import, &opaque_types));
             } else {
                 builder.add_item(&gen_struct(typ, &mapper, &module_prefix));
             }
@@ -126,7 +132,7 @@ fn get_module_info(_api: &ApiSurface, config: &SkifConfig) -> (String, String) {
 }
 
 /// Generate an opaque Rustler resource struct with inner Arc.
-fn gen_opaque_resource(typ: &TypeDef, core_import: &str) -> String {
+fn gen_opaque_resource(typ: &TypeDef, core_import: &str, _opaque_types: &HashSet<String>) -> String {
     let mut out = String::with_capacity(256);
     out.push_str("#[derive(Clone)]\n");
     out.push_str(&format!("pub struct {} {{\n", typ.name));

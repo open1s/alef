@@ -54,7 +54,6 @@ struct ScaffoldMeta {
     description: String,
     license: String,
     repository: String,
-    #[allow(dead_code)]
     homepage: String,
     authors: Vec<String>,
     keywords: Vec<String>,

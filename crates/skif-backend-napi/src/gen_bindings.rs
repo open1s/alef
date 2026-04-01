@@ -6,6 +6,7 @@ use skif_codegen::type_mapper::TypeMapper;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
 use skif_core::config::{Language, SkifConfig, resolve_output_dir};
 use skif_core::ir::{ApiSurface, EnumDef, FunctionDef, MethodDef, TypeDef};
+use std::collections::HashSet;
 use std::fmt::Write;
 use std::path::PathBuf;
 
@@ -73,8 +74,13 @@ impl Backend for NapiBackend {
         }
 
         // Check if we have opaque types and add Arc import if needed
-        let has_opaque = api.types.iter().any(|t| t.is_opaque);
-        if has_opaque {
+        let opaque_types: HashSet<String> = api
+            .types
+            .iter()
+            .filter(|t| t.is_opaque)
+            .map(|t| t.name.clone())
+            .collect();
+        if !opaque_types.is_empty() {
             builder.add_import("std::sync::Arc");
         }
 
@@ -84,7 +90,7 @@ impl Backend for NapiBackend {
         for typ in &api.types {
             if typ.is_opaque {
                 builder.add_item(&skif_codegen::generators::gen_opaque_struct_prefixed(typ, &cfg, "Js"));
-                builder.add_item(&gen_opaque_struct_methods(typ, &mapper, &cfg));
+                builder.add_item(&gen_opaque_struct_methods(typ, &mapper, &cfg, &opaque_types));
             } else {
                 builder.add_item(&gen_struct(typ, &mapper));
                 builder.add_item(&gen_struct_methods(typ, &mapper, &cfg));
@@ -165,7 +171,12 @@ fn gen_struct_methods(typ: &TypeDef, mapper: &NapiMapper, _cfg: &RustBindingConf
 }
 
 /// Generate NAPI methods for an opaque struct (delegates to self.inner).
-fn gen_opaque_struct_methods(typ: &TypeDef, mapper: &NapiMapper, _cfg: &RustBindingConfig) -> String {
+fn gen_opaque_struct_methods(
+    typ: &TypeDef,
+    mapper: &NapiMapper,
+    _cfg: &RustBindingConfig,
+    _opaque_types: &HashSet<String>,
+) -> String {
     let mut impl_builder = ImplBuilder::new(&format!("Js{}", typ.name));
     impl_builder.add_attr("napi");
 
