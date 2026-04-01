@@ -92,6 +92,7 @@ fn test_basic_generation() {
             ffi_style: "panama".to_string(),
         }),
         csharp: None,
+        r: None,
         scaffold: None,
         readme: None,
         lint: None,
@@ -205,6 +206,7 @@ fn test_package_default() {
         go: None,
         java: None, // No explicit package
         csharp: None,
+        r: None,
         scaffold: None,
         readme: None,
         lint: None,

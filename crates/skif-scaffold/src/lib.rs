@@ -46,6 +46,11 @@ fn scaffold_language(api: &ApiSurface, config: &SkifConfig, lang: Language) -> a
             Ok(files)
         }
         Language::Wasm => scaffold_wasm(api, config),
+        Language::R => {
+            let mut files = scaffold_r(api, config)?;
+            files.extend(scaffold_r_cargo(api, config)?);
+            Ok(files)
+        }
     }
 }
 
@@ -771,6 +776,97 @@ fn capitalize_first(s: &str) -> String {
     }
 }
 
+fn scaffold_r(api: &ApiSurface, config: &SkifConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+    let meta = scaffold_meta(config);
+    let version = &api.version;
+    let package_name = config.r_package_name();
+
+    let mut description = meta.description.clone();
+    if description.ends_with('.') {
+        description.pop();
+    }
+
+    let authors_r = if meta.authors.is_empty() {
+        r#"Authors@R: person("Author", "Name", email = "author@example.com", role = c("aut", "cre"))"#.to_string()
+    } else {
+        format!(
+            "Authors@R: person(\"{}\", email = \"author@example.com\", role = c(\"aut\", \"cre\"))",
+            meta.authors.first().unwrap_or(&"Author Name".to_string())
+        )
+    };
+
+    let content = format!(
+        r#"Package: {package}
+Title: {title}
+Version: {version}
+{authors}
+Description: {description}
+    Rust bindings generated with extendr.
+URL: {repository}
+BugReports: {repository}/issues
+License: {license}
+Depends: R (>= 4.2)
+Imports: jsonlite
+Suggests:
+    testthat (>= 3.0.0),
+    withr,
+    roxygen2
+SystemRequirements: Cargo (Rust's package manager), rustc (>= 1.91)
+Config/rextendr/version: 0.4.2
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Config/testthat/edition: 3
+"#,
+        package = package_name,
+        title = meta.description,
+        version = version,
+        authors = authors_r,
+        description = description,
+        repository = meta.repository,
+        license = meta.license,
+    );
+
+    Ok(vec![GeneratedFile {
+        path: PathBuf::from("packages/r/DESCRIPTION"),
+        content,
+        generated_header: true,
+    }])
+}
+
+fn scaffold_r_cargo(api: &ApiSurface, config: &SkifConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+    let name = &config.crate_config.name;
+    let version = &api.version;
+    let core_import = config.core_import();
+
+    let content = format!(
+        r#"[package]
+name = "{name}-r"
+version = "{version}"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+{core_import} = {{ path = "../../crates/{crate_name}" }}
+extendr-api = {{ version = "0.7", features = ["use-precompiled-bindings"] }}
+serde = {{ version = "1", features = ["derive"] }}
+serde_json = "1"
+"#,
+        name = name,
+        version = version,
+        core_import = core_import,
+        crate_name = name,
+    );
+
+    Ok(vec![GeneratedFile {
+        path: PathBuf::from("packages/r/src/rust/Cargo.toml".to_string()),
+        content,
+        generated_header: true,
+    }])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -799,6 +895,7 @@ mod tests {
             go: None,
             java: None,
             csharp: None,
+            r: None,
             scaffold: Some(ScaffoldConfig {
                 description: Some("Test library".to_string()),
                 license: Some("MIT".to_string()),

@@ -18,6 +18,7 @@ clap = { version = "4", features = ["derive"] }
 regex = { workspace = true }
 serde_json = { workspace = true }
 skif-backend-csharp = { path = "../skif-backend-csharp" }
+skif-backend-extendr = { path = "../skif-backend-extendr" }
 skif-backend-ffi = { path = "../skif-backend-ffi" }
 skif-backend-go = { path = "../skif-backend-go" }
 skif-backend-java = { path = "../skif-backend-java" }

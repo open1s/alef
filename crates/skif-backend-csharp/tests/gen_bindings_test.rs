@@ -109,6 +109,7 @@ fn test_basic_generation() {
             namespace: Some("Kreuzberg".to_string()),
             target_framework: None,
         }),
+        r: None,
         scaffold: None,
         readme: None,
         lint: None,
@@ -135,7 +136,7 @@ fn test_basic_generation() {
         "Should generate exception class"
     );
     assert!(
-        file_names.iter().any(|f| f.contains("Kreuzberg.cs")),
+        file_names.iter().any(|f| f.contains("KreuzbergLib.cs")),
         "Should generate wrapper class"
     );
     assert!(
@@ -164,10 +165,10 @@ fn test_basic_generation() {
 
     let wrapper = files
         .iter()
-        .find(|f| f.path.to_string_lossy().contains("Kreuzberg.cs"))
+        .find(|f| f.path.to_string_lossy().contains("KreuzbergLib.cs"))
         .unwrap();
     assert!(
-        wrapper.content.contains("public static class Kreuzberg"),
+        wrapper.content.contains("public static class KreuzbergLib"),
         "Should define wrapper class"
     );
     assert!(
@@ -232,6 +233,7 @@ fn test_namespace_resolution() {
             namespace: Some("MyCompany.MyLib".to_string()),
             target_framework: None,
         }),
+        r: None,
         scaffold: None,
         readme: None,
         lint: None,
@@ -286,6 +288,7 @@ fn test_generated_header() {
         go: None,
         java: None,
         csharp: None,
+        r: None,
         scaffold: None,
         readme: None,
         lint: None,
@@ -382,6 +385,7 @@ fn test_type_mapping() {
         go: None,
         java: None,
         csharp: None,
+        r: None,
         scaffold: None,
         readme: None,
         lint: None,

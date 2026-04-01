@@ -14,5 +14,6 @@ pub fn get_backend(lang: Language) -> Box<dyn Backend> {
         Language::Go => Box::new(skif_backend_go::GoBackend),
         Language::Java => Box::new(skif_backend_java::JavaBackend),
         Language::Csharp => Box::new(skif_backend_csharp::CsharpBackend),
+        Language::R => Box::new(skif_backend_extendr::ExtendrBackend),
     }
 }

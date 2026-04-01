@@ -182,6 +182,7 @@ fn print_generated_java_code() {
             ffi_style: "panama".to_string(),
         }),
         csharp: None,
+        r: None,
         scaffold: None,
         readme: None,
         lint: None,

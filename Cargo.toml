@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/skif-backend-csharp",
+    "crates/skif-backend-extendr",
     "crates/skif-backend-ffi",
     "crates/skif-backend-go",
     "crates/skif-backend-java",

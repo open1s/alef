@@ -439,6 +439,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "skif-backend-extendr"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "skif-codegen",
+ "skif-core",
+]
+
+[[package]]
 name = "skif-backend-ffi"
 version = "0.1.0"
 dependencies = [
@@ -540,6 +549,7 @@ dependencies = [
  "regex",
  "serde_json",
  "skif-backend-csharp",
+ "skif-backend-extendr",
  "skif-backend-ffi",
  "skif-backend-go",
  "skif-backend-java",

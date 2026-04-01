@@ -35,6 +35,8 @@ pub struct SkifConfig {
     #[serde(default)]
     pub csharp: Option<CSharpConfig>,
     #[serde(default)]
+    pub r: Option<RConfig>,
+    #[serde(default)]
     pub scaffold: Option<ScaffoldConfig>,
     #[serde(default)]
     pub readme: Option<ReadmeConfig>,
@@ -74,6 +76,7 @@ pub enum Language {
     Go,
     Java,
     Csharp,
+    R,
 }
 
 impl std::fmt::Display for Language {
@@ -89,6 +92,7 @@ impl std::fmt::Display for Language {
             Self::Go => write!(f, "go"),
             Self::Java => write!(f, "java"),
             Self::Csharp => write!(f, "csharp"),
+            Self::R => write!(f, "r"),
         }
     }
 }
@@ -121,6 +125,7 @@ pub struct OutputConfig {
     pub go: Option<PathBuf>,
     pub java: Option<PathBuf>,
     pub csharp: Option<PathBuf>,
+    pub r: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,6 +203,11 @@ fn default_java_ffi_style() -> String {
 pub struct CSharpConfig {
     pub namespace: Option<String>,
     pub target_framework: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RConfig {
+    pub package_name: Option<String>,
 }
 
 /// Helper function to resolve output directory path from config.
@@ -339,5 +349,14 @@ impl SkifConfig {
                 use heck::ToPascalCase;
                 self.crate_config.name.to_pascal_case()
             })
+    }
+
+    /// Get the R package name.
+    pub fn r_package_name(&self) -> String {
+        self.r
+            .as_ref()
+            .and_then(|r| r.package_name.as_ref())
+            .cloned()
+            .unwrap_or_else(|| self.crate_config.name.clone())
     }
 }

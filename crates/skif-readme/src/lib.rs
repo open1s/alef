@@ -132,6 +132,18 @@ fn generate_readme(api: &ApiSurface, config: &SkifConfig, lang: Language) -> any
             format!("```javascript\nimport init from '{name}-wasm';\n\nawait init();\n// TODO: add usage example\n```"),
             "wasm",
         ),
+        Language::R => (
+            "R",
+            format!(
+                "```r\ninstall.packages('{package}')\n```",
+                package = config.r_package_name()
+            ),
+            format!(
+                "```r\nlibrary({})\n\n# TODO: add usage example\n```",
+                config.r_package_name()
+            ),
+            "r",
+        ),
     };
 
     let content = format!(
@@ -214,6 +226,7 @@ mod tests {
             go: None,
             java: None,
             csharp: None,
+            r: None,
             scaffold: Some(ScaffoldConfig {
                 description: Some("Test library".to_string()),
                 license: Some("MIT".to_string()),

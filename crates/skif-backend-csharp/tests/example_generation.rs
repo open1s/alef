@@ -105,6 +105,7 @@ fn test_generated_code_example() {
             namespace: Some("Kreuzberg".to_string()),
             target_framework: None,
         }),
+        r: None,
         scaffold: None,
         readme: None,
         lint: None,
@@ -143,10 +144,10 @@ fn test_generated_code_example() {
     // Wrapper class should have extraction methods
     let wrapper = files
         .iter()
-        .find(|f| f.path.to_string_lossy().contains("Kreuzberg.cs"))
+        .find(|f| f.path.to_string_lossy().contains("KreuzbergLib.cs"))
         .unwrap();
 
-    assert!(wrapper.content.contains("public static class Kreuzberg"));
+    assert!(wrapper.content.contains("public static class KreuzbergLib"));
     assert!(wrapper.content.contains("public static string ExtractFileSync"));
     assert!(wrapper.content.contains("NativeMethods."));
     assert!(wrapper.content.contains("GetLastError()"));
