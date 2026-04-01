@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use skif_core::ir::{
@@ -11,7 +11,13 @@ use crate::type_resolver;
 ///
 /// `sources` should be the root source files (e.g., `lib.rs`) of the crate.
 /// Submodules referenced via `mod` declarations are resolved and extracted recursively.
-pub fn extract(sources: &[&Path], crate_name: &str, version: &str) -> Result<ApiSurface> {
+/// `workspace_root` enables resolution of `pub use` re-exports from workspace sibling crates.
+pub fn extract(
+    sources: &[&Path],
+    crate_name: &str,
+    version: &str,
+    workspace_root: Option<&Path>,
+) -> Result<ApiSurface> {
     let mut surface = ApiSurface {
         crate_name: crate_name.to_string(),
         version: version.to_string(),
@@ -21,19 +27,38 @@ pub fn extract(sources: &[&Path], crate_name: &str, version: &str) -> Result<Api
         errors: vec![],
     };
 
+    let mut visited = Vec::<PathBuf>::new();
+
     for source in sources {
+        let canonical = std::fs::canonicalize(source).unwrap_or_else(|_| source.to_path_buf());
+        visited.push(canonical);
+
         let content = std::fs::read_to_string(source)
             .with_context(|| format!("Failed to read source file: {}", source.display()))?;
         let file =
             syn::parse_file(&content).with_context(|| format!("Failed to parse source file: {}", source.display()))?;
-        extract_items(&file.items, source, crate_name, &mut surface)?;
+        extract_items(
+            &file.items,
+            source,
+            crate_name,
+            &mut surface,
+            workspace_root,
+            &mut visited,
+        )?;
     }
 
     Ok(surface)
 }
 
 /// Extract items from a parsed syn file or module.
-fn extract_items(items: &[syn::Item], source_path: &Path, crate_name: &str, surface: &mut ApiSurface) -> Result<()> {
+fn extract_items(
+    items: &[syn::Item],
+    source_path: &Path,
+    crate_name: &str,
+    surface: &mut ApiSurface,
+    workspace_root: Option<&Path>,
+    visited: &mut Vec<PathBuf>,
+) -> Result<()> {
     for item in items {
         match item {
             syn::Item::Struct(item_struct) => {
@@ -56,8 +81,11 @@ fn extract_items(items: &[syn::Item], source_path: &Path, crate_name: &str, surf
             }
             syn::Item::Mod(item_mod) => {
                 if is_pub(&item_mod.vis) {
-                    extract_module(item_mod, source_path, crate_name, surface)?;
+                    extract_module(item_mod, source_path, crate_name, surface, workspace_root, visited)?;
                 }
+            }
+            syn::Item::Use(item_use) if is_pub(&item_use.vis) => {
+                resolve_use_tree(&item_use.tree, crate_name, surface, workspace_root, visited)?;
             }
             _ => {}
         }
@@ -185,8 +213,9 @@ fn extract_function(item: &syn::ItemFn, crate_name: &str) -> FunctionDef {
 
 /// Extract methods from an `impl` block and attach them to the corresponding `TypeDef`.
 fn extract_impl_block(item: &syn::ItemImpl, crate_name: &str, surface: &mut ApiSurface) {
-    // Only handle inherent impls (not trait impls)
     if item.trait_.is_some() {
+        // Extract trait impl methods and attach to the type if it's in our surface
+        extract_trait_impl_methods(item, crate_name, surface);
         return;
     }
 
@@ -235,6 +264,32 @@ fn extract_impl_block(item: &syn::ItemImpl, crate_name: &str, surface: &mut ApiS
             is_clone: false,
             doc: String::new(),
         });
+    }
+}
+
+/// Extract methods from a trait impl and attach them to an existing type in the surface.
+fn extract_trait_impl_methods(item: &syn::ItemImpl, crate_name: &str, surface: &mut ApiSurface) {
+    let type_name = match &*item.self_ty {
+        syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+        _ => None,
+    };
+
+    let Some(type_name) = type_name else { return };
+
+    // Find the type in our surface — only attach to types we already know about
+    let Some(type_def) = surface.types.iter_mut().find(|t| t.name == type_name) else {
+        return;
+    };
+
+    // Extract methods from the trait impl (trait methods are implicitly pub)
+    for impl_item in &item.items {
+        if let syn::ImplItem::Fn(method) = impl_item {
+            let method_def = extract_method(method, crate_name);
+            // Don't add duplicates
+            if !type_def.methods.iter().any(|m| m.name == method_def.name) {
+                type_def.methods.push(method_def);
+            }
+        }
     }
 }
 
@@ -329,12 +384,14 @@ fn extract_module(
     source_path: &Path,
     crate_name: &str,
     surface: &mut ApiSurface,
+    workspace_root: Option<&Path>,
+    visited: &mut Vec<PathBuf>,
 ) -> Result<()> {
     let mod_name = item_mod.ident.to_string();
 
     // Inline module: `pub mod foo { ... }`
     if let Some((_, items)) = &item_mod.content {
-        return extract_items(items, source_path, crate_name, surface);
+        return extract_items(items, source_path, crate_name, surface, workspace_root, visited);
     }
 
     // External module: `pub mod foo;` — resolve to file
@@ -352,12 +409,235 @@ fn extract_module(
                 .with_context(|| format!("Failed to read module file: {}", candidate.display()))?;
             let file = syn::parse_file(&content)
                 .with_context(|| format!("Failed to parse module file: {}", candidate.display()))?;
-            return extract_items(&file.items, candidate, crate_name, surface);
+            return extract_items(&file.items, candidate, crate_name, surface, workspace_root, visited);
         }
     }
 
     // Module file not found — not an error, just skip
     Ok(())
+}
+
+// --- pub use re-export resolution ---
+
+/// Resolve a `pub use` tree, extracting re-exported items from workspace sibling crates.
+fn resolve_use_tree(
+    tree: &syn::UseTree,
+    crate_name: &str,
+    surface: &mut ApiSurface,
+    workspace_root: Option<&Path>,
+    visited: &mut Vec<PathBuf>,
+) -> Result<()> {
+    match tree {
+        syn::UseTree::Path(use_path) => {
+            let root_ident = use_path.ident.to_string();
+
+            // Skip self/super/crate references — already handled by mod resolution
+            if root_ident == "self" || root_ident == "super" || root_ident == "crate" {
+                return Ok(());
+            }
+
+            // This is an external crate reference like `use other_crate::...`
+            resolve_external_use(
+                &root_ident,
+                &use_path.tree,
+                crate_name,
+                surface,
+                workspace_root,
+                visited,
+            )
+        }
+        syn::UseTree::Group(group) => {
+            for tree in &group.items {
+                resolve_use_tree(tree, crate_name, surface, workspace_root, visited)?;
+            }
+            Ok(())
+        }
+        // `pub use something;` — a single ident, skip (not an external crate path)
+        _ => Ok(()),
+    }
+}
+
+/// Resolve `pub use external_crate::...` by finding the crate source and extracting named items.
+fn resolve_external_use(
+    ext_crate_name: &str,
+    subtree: &syn::UseTree,
+    crate_name: &str,
+    surface: &mut ApiSurface,
+    workspace_root: Option<&Path>,
+    visited: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let Some(crate_source) = find_crate_source(ext_crate_name, workspace_root) else {
+        return Ok(());
+    };
+
+    let canonical = std::fs::canonicalize(&crate_source).unwrap_or_else(|_| crate_source.clone());
+    if visited.contains(&canonical) {
+        return Ok(());
+    }
+    visited.push(canonical);
+
+    // Parse the external crate source
+    let content = match std::fs::read_to_string(&crate_source) {
+        Ok(c) => c,
+        Err(_) => return Ok(()),
+    };
+    let file = match syn::parse_file(&content) {
+        Ok(f) => f,
+        Err(_) => return Ok(()),
+    };
+
+    // Extract the full surface of the external crate into a temporary surface
+    let mut ext_surface = ApiSurface {
+        crate_name: crate_name.to_string(), // Use our crate name for the rust_path
+        version: String::new(),
+        types: vec![],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+    };
+    extract_items(
+        &file.items,
+        &crate_source,
+        crate_name,
+        &mut ext_surface,
+        workspace_root,
+        visited,
+    )?;
+
+    // Collect the names we want to import
+    let filter = collect_use_names(subtree);
+
+    match filter {
+        UseFilter::All => {
+            merge_surface(surface, ext_surface);
+        }
+        UseFilter::Names(names) => {
+            merge_surface_filtered(surface, ext_surface, &names);
+        }
+    }
+
+    Ok(())
+}
+
+/// What names does a use subtree import?
+enum UseFilter {
+    /// `use crate::*` — import everything
+    All,
+    /// `use crate::{A, B}` or `use crate::A` — import specific names
+    Names(Vec<String>),
+}
+
+/// Collect the leaf names from a use subtree.
+fn collect_use_names(tree: &syn::UseTree) -> UseFilter {
+    match tree {
+        syn::UseTree::Glob(_) => UseFilter::All,
+        syn::UseTree::Name(name) => UseFilter::Names(vec![name.ident.to_string()]),
+        syn::UseTree::Rename(rename) => UseFilter::Names(vec![rename.rename.to_string()]),
+        syn::UseTree::Path(path) => collect_use_names(&path.tree),
+        syn::UseTree::Group(group) => {
+            let mut names = Vec::new();
+            for item in &group.items {
+                match collect_use_names(item) {
+                    UseFilter::All => return UseFilter::All,
+                    UseFilter::Names(n) => names.extend(n),
+                }
+            }
+            UseFilter::Names(names)
+        }
+    }
+}
+
+/// Merge all items from `src` into `dst`, skipping duplicates.
+fn merge_surface(dst: &mut ApiSurface, src: ApiSurface) {
+    for ty in src.types {
+        if !dst.types.iter().any(|t| t.name == ty.name) {
+            dst.types.push(ty);
+        }
+    }
+    for func in src.functions {
+        if !dst.functions.iter().any(|f| f.name == func.name) {
+            dst.functions.push(func);
+        }
+    }
+    for en in src.enums {
+        if !dst.enums.iter().any(|e| e.name == en.name) {
+            dst.enums.push(en);
+        }
+    }
+}
+
+/// Merge only items whose name is in `names` from `src` into `dst`.
+fn merge_surface_filtered(dst: &mut ApiSurface, src: ApiSurface, names: &[String]) {
+    for ty in src.types {
+        if names.contains(&ty.name) && !dst.types.iter().any(|t| t.name == ty.name) {
+            dst.types.push(ty);
+        }
+    }
+    for func in src.functions {
+        if names.contains(&func.name) && !dst.functions.iter().any(|f| f.name == func.name) {
+            dst.functions.push(func);
+        }
+    }
+    for en in src.enums {
+        if names.contains(&en.name) && !dst.enums.iter().any(|e| e.name == en.name) {
+            dst.enums.push(en);
+        }
+    }
+}
+
+/// Find the `src/lib.rs` of a workspace sibling crate.
+fn find_crate_source(dep_crate_name: &str, workspace_root: Option<&Path>) -> Option<PathBuf> {
+    let root = workspace_root?;
+
+    // Read workspace Cargo.toml
+    let cargo_toml = std::fs::read_to_string(root.join("Cargo.toml")).ok()?;
+    let value: toml::Value = toml::from_str(&cargo_toml).ok()?;
+
+    // Check [dependencies] for path deps
+    if let Some(deps) = value.get("dependencies").and_then(|d| d.as_table()) {
+        if let Some(path) = resolve_dep_path(deps, dep_crate_name, root) {
+            return Some(path);
+        }
+    }
+
+    // Check [workspace.dependencies]
+    if let Some(deps) = value
+        .get("workspace")
+        .and_then(|w| w.get("dependencies"))
+        .and_then(|d| d.as_table())
+    {
+        if let Some(path) = resolve_dep_path(deps, dep_crate_name, root) {
+            return Some(path);
+        }
+    }
+
+    // Heuristic: look for crates/{crate_name}/src/lib.rs
+    let heuristic = root.join("crates").join(dep_crate_name).join("src/lib.rs");
+    if heuristic.exists() {
+        return Some(heuristic);
+    }
+
+    // Try with hyphens replaced by underscores and vice versa
+    let alt_name = if dep_crate_name.contains('-') {
+        dep_crate_name.replace('-', "_")
+    } else {
+        dep_crate_name.replace('_', "-")
+    };
+    let alt = root.join("crates").join(&alt_name).join("src/lib.rs");
+    if alt.exists() {
+        return Some(alt);
+    }
+
+    None
+}
+
+/// Try to resolve a dependency path from a TOML dependencies table.
+fn resolve_dep_path(deps: &toml::map::Map<String, toml::Value>, dep_name: &str, root: &Path) -> Option<PathBuf> {
+    let dep = deps.get(dep_name)?;
+    let path = dep.get("path").and_then(|p| p.as_str())?;
+    let crate_dir = root.join(path);
+    let lib_rs = crate_dir.join("src/lib.rs");
+    if lib_rs.exists() { Some(lib_rs) } else { None }
 }
 
 // --- Attribute helpers ---
@@ -421,7 +701,16 @@ mod tests {
             enums: vec![],
             errors: vec![],
         };
-        extract_items(&file.items, Path::new("test.rs"), "test_crate", &mut surface).unwrap();
+        let mut visited = Vec::new();
+        extract_items(
+            &file.items,
+            Path::new("test.rs"),
+            "test_crate",
+            &mut surface,
+            None,
+            &mut visited,
+        )
+        .unwrap();
         surface
     }
 
@@ -650,5 +939,372 @@ mod tests {
         assert_eq!(builder.methods.len(), 1);
         assert_eq!(builder.methods[0].receiver, Some(ReceiverKind::Owned));
         assert!(!builder.methods[0].is_static);
+    }
+
+    #[test]
+    fn test_trait_impl_methods_extracted() {
+        let source = r#"
+            pub struct DefaultClient {
+                pub base_url: String,
+            }
+
+            impl DefaultClient {
+                pub fn new(base_url: String) -> DefaultClient {
+                    todo!()
+                }
+            }
+
+            trait LlmClient {
+                async fn chat(&self, prompt: String) -> Result<String, MyError>;
+                fn model(&self) -> String;
+            }
+
+            impl LlmClient for DefaultClient {
+                async fn chat(&self, prompt: String) -> Result<String, MyError> {
+                    todo!()
+                }
+
+                fn model(&self) -> String {
+                    todo!()
+                }
+            }
+        "#;
+
+        let surface = extract_from_source(source);
+        assert_eq!(surface.types.len(), 1);
+
+        let client = &surface.types[0];
+        assert_eq!(client.name, "DefaultClient");
+        // Should have: new (not skipped because it doesn't return Self), chat, model
+        // Actually new returns DefaultClient not Self, so it's included
+        assert_eq!(client.methods.len(), 3);
+
+        let method_names: Vec<&str> = client.methods.iter().map(|m| m.name.as_str()).collect();
+        assert!(method_names.contains(&"new"));
+        assert!(method_names.contains(&"chat"));
+        assert!(method_names.contains(&"model"));
+
+        // Verify chat is async
+        let chat = client.methods.iter().find(|m| m.name == "chat").unwrap();
+        assert!(chat.is_async);
+        assert_eq!(chat.receiver, Some(ReceiverKind::Ref));
+        assert_eq!(chat.error_type.as_deref(), Some("MyError"));
+    }
+
+    #[test]
+    fn test_trait_impl_no_duplicate_methods() {
+        let source = r#"
+            pub struct MyType {}
+
+            impl MyType {
+                pub fn do_thing(&self) -> String {
+                    todo!()
+                }
+            }
+
+            trait SomeTrait {
+                fn do_thing(&self) -> String;
+            }
+
+            impl SomeTrait for MyType {
+                fn do_thing(&self) -> String {
+                    todo!()
+                }
+            }
+        "#;
+
+        let surface = extract_from_source(source);
+        let my_type = &surface.types[0];
+        // Should not have duplicate do_thing
+        let do_thing_count = my_type.methods.iter().filter(|m| m.name == "do_thing").count();
+        assert_eq!(do_thing_count, 1);
+    }
+
+    #[test]
+    fn test_trait_impl_ignored_for_unknown_type() {
+        let source = r#"
+            trait SomeTrait {
+                fn method(&self);
+            }
+
+            impl SomeTrait for UnknownType {
+                fn method(&self) {
+                    todo!()
+                }
+            }
+        "#;
+
+        let surface = extract_from_source(source);
+        // UnknownType is not in the surface, so trait impl methods should be ignored
+        assert_eq!(surface.types.len(), 0);
+    }
+
+    #[test]
+    fn test_pub_use_self_super_skipped() {
+        let source = r#"
+            pub use self::inner::Helper;
+            pub use super::other::Thing;
+            pub use crate::root::Item;
+
+            pub mod inner {
+                pub struct Helper {
+                    pub value: u32,
+                }
+            }
+        "#;
+
+        let surface = extract_from_source(source);
+        // self/super/crate use paths are skipped (handled by mod resolution)
+        // The inline module should still be extracted
+        assert_eq!(surface.types.len(), 1);
+        assert_eq!(surface.types[0].name, "Helper");
+    }
+
+    #[test]
+    fn test_collect_use_names_single() {
+        let tree: syn::UseTree = syn::parse_str("Foo").unwrap();
+        match collect_use_names(&tree) {
+            UseFilter::Names(names) => assert_eq!(names, vec!["Foo"]),
+            UseFilter::All => panic!("expected Names"),
+        }
+    }
+
+    #[test]
+    fn test_collect_use_names_group() {
+        let tree: syn::UseTree = syn::parse_str("{Foo, Bar, Baz}").unwrap();
+        match collect_use_names(&tree) {
+            UseFilter::Names(names) => {
+                assert_eq!(names.len(), 3);
+                assert!(names.contains(&"Foo".to_string()));
+                assert!(names.contains(&"Bar".to_string()));
+                assert!(names.contains(&"Baz".to_string()));
+            }
+            UseFilter::All => panic!("expected Names"),
+        }
+    }
+
+    #[test]
+    fn test_collect_use_names_glob() {
+        let tree: syn::UseTree = syn::parse_str("*").unwrap();
+        assert!(matches!(collect_use_names(&tree), UseFilter::All));
+    }
+
+    #[test]
+    fn test_merge_surface_no_duplicates() {
+        let mut dst = ApiSurface {
+            crate_name: "test".into(),
+            version: "0.1.0".into(),
+            types: vec![TypeDef {
+                name: "Existing".into(),
+                rust_path: "test::Existing".into(),
+                fields: vec![],
+                methods: vec![],
+                is_opaque: true,
+                is_clone: false,
+                doc: String::new(),
+            }],
+            functions: vec![],
+            enums: vec![],
+            errors: vec![],
+        };
+
+        let src = ApiSurface {
+            crate_name: "test".into(),
+            version: "0.1.0".into(),
+            types: vec![
+                TypeDef {
+                    name: "Existing".into(),
+                    rust_path: "test::Existing".into(),
+                    fields: vec![],
+                    methods: vec![],
+                    is_opaque: true,
+                    is_clone: false,
+                    doc: String::new(),
+                },
+                TypeDef {
+                    name: "NewType".into(),
+                    rust_path: "test::NewType".into(),
+                    fields: vec![],
+                    methods: vec![],
+                    is_opaque: true,
+                    is_clone: false,
+                    doc: String::new(),
+                },
+            ],
+            functions: vec![],
+            enums: vec![],
+            errors: vec![],
+        };
+
+        merge_surface(&mut dst, src);
+        assert_eq!(dst.types.len(), 2);
+        assert_eq!(dst.types[0].name, "Existing");
+        assert_eq!(dst.types[1].name, "NewType");
+    }
+
+    #[test]
+    fn test_merge_surface_filtered() {
+        let mut dst = ApiSurface {
+            crate_name: "test".into(),
+            version: "0.1.0".into(),
+            types: vec![],
+            functions: vec![],
+            enums: vec![],
+            errors: vec![],
+        };
+
+        let src = ApiSurface {
+            crate_name: "test".into(),
+            version: "0.1.0".into(),
+            types: vec![
+                TypeDef {
+                    name: "Wanted".into(),
+                    rust_path: "test::Wanted".into(),
+                    fields: vec![],
+                    methods: vec![],
+                    is_opaque: true,
+                    is_clone: false,
+                    doc: String::new(),
+                },
+                TypeDef {
+                    name: "NotWanted".into(),
+                    rust_path: "test::NotWanted".into(),
+                    fields: vec![],
+                    methods: vec![],
+                    is_opaque: true,
+                    is_clone: false,
+                    doc: String::new(),
+                },
+            ],
+            functions: vec![],
+            enums: vec![],
+            errors: vec![],
+        };
+
+        merge_surface_filtered(&mut dst, src, &["Wanted".to_string()]);
+        assert_eq!(dst.types.len(), 1);
+        assert_eq!(dst.types[0].name, "Wanted");
+    }
+
+    #[test]
+    fn test_find_crate_source_no_workspace() {
+        // With no workspace root, should return None
+        assert!(find_crate_source("some_crate", None).is_none());
+    }
+
+    #[test]
+    fn test_pub_use_reexport_from_workspace_crate() {
+        // Create a temporary workspace structure
+        let tmp = std::env::temp_dir().join("skif_test_reexport");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("crates/other_crate/src")).unwrap();
+
+        // Write workspace Cargo.toml
+        std::fs::write(
+            tmp.join("Cargo.toml"),
+            r#"
+[workspace]
+members = ["crates/other_crate"]
+
+[workspace.dependencies]
+other_crate = { path = "crates/other_crate" }
+"#,
+        )
+        .unwrap();
+
+        // Write other_crate's lib.rs with a pub struct
+        std::fs::write(
+            tmp.join("crates/other_crate/src/lib.rs"),
+            r#"
+/// Server configuration.
+#[derive(Clone)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+}
+
+/// CORS settings.
+pub struct CorsConfig {
+    pub allowed_origins: Vec<String>,
+}
+
+/// Internal helper, not re-exported.
+pub struct InternalHelper {
+    pub data: String,
+}
+"#,
+        )
+        .unwrap();
+
+        // Write our crate's lib.rs that re-exports specific items
+        let our_lib = tmp.join("crates/my_crate/src/lib.rs");
+        std::fs::create_dir_all(our_lib.parent().unwrap()).unwrap();
+        std::fs::write(
+            &our_lib,
+            r#"
+pub use other_crate::{ServerConfig, CorsConfig};
+"#,
+        )
+        .unwrap();
+
+        let sources: Vec<&Path> = vec![our_lib.as_path()];
+        let surface = extract(&sources, "my_crate", "0.1.0", Some(&tmp)).unwrap();
+
+        // Should have extracted ServerConfig and CorsConfig but not InternalHelper
+        assert_eq!(surface.types.len(), 2);
+        let names: Vec<&str> = surface.types.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"ServerConfig"));
+        assert!(names.contains(&"CorsConfig"));
+        assert!(!names.contains(&"InternalHelper"));
+
+        // Verify they use our crate name in rust_path
+        let server = surface.types.iter().find(|t| t.name == "ServerConfig").unwrap();
+        assert_eq!(server.rust_path, "my_crate::ServerConfig");
+        assert!(server.is_clone);
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_pub_use_glob_reexport() {
+        let tmp = std::env::temp_dir().join("skif_test_glob_reexport");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("crates/other_crate/src")).unwrap();
+
+        std::fs::write(
+            tmp.join("Cargo.toml"),
+            r#"
+[workspace]
+members = ["crates/other_crate"]
+
+[workspace.dependencies]
+other_crate = { path = "crates/other_crate" }
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            tmp.join("crates/other_crate/src/lib.rs"),
+            r#"
+pub struct Alpha { pub value: u32 }
+pub struct Beta { pub name: String }
+"#,
+        )
+        .unwrap();
+
+        let our_lib = tmp.join("crates/my_crate/src/lib.rs");
+        std::fs::create_dir_all(our_lib.parent().unwrap()).unwrap();
+        std::fs::write(&our_lib, "pub use other_crate::*;\n").unwrap();
+
+        let sources: Vec<&Path> = vec![our_lib.as_path()];
+        let surface = extract(&sources, "my_crate", "0.1.0", Some(&tmp)).unwrap();
+
+        assert_eq!(surface.types.len(), 2);
+        let names: Vec<&str> = surface.types.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"Alpha"));
+        assert!(names.contains(&"Beta"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

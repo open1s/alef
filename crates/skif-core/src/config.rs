@@ -11,6 +11,8 @@ pub struct SkifConfig {
     #[serde(default)]
     pub exclude: ExcludeConfig,
     #[serde(default)]
+    pub include: IncludeConfig,
+    #[serde(default)]
     pub output: OutputConfig,
     #[serde(default)]
     pub python: Option<PythonConfig>,
@@ -50,6 +52,9 @@ pub struct CrateConfig {
     pub version_from: String,
     #[serde(default)]
     pub core_import: Option<String>,
+    /// Optional workspace root path for resolving `pub use` re-exports from sibling crates.
+    #[serde(default)]
+    pub workspace_root: Option<PathBuf>,
 }
 
 fn default_version_from() -> String {
@@ -90,6 +95,14 @@ impl std::fmt::Display for Language {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExcludeConfig {
+    #[serde(default)]
+    pub types: Vec<String>,
+    #[serde(default)]
+    pub functions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IncludeConfig {
     #[serde(default)]
     pub types: Vec<String>,
     #[serde(default)]

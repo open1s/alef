@@ -22,10 +22,11 @@ pub fn extract(config: &SkifConfig, config_path: &Path, clean: bool) -> anyhow::
     // Read version from Cargo.toml
     let version = read_version(&config.crate_config.version_from)?;
 
-    let api = skif_extract::extractor::extract(&sources, &config.crate_config.name, &version)?;
+    let workspace_root = config.crate_config.workspace_root.as_deref();
+    let api = skif_extract::extractor::extract(&sources, &config.crate_config.name, &version, workspace_root)?;
 
-    // Apply global exclusions
-    let api = apply_exclusions(api, &config.exclude);
+    // Apply global filters (includes and excludes)
+    let api = apply_filters(api, config);
 
     cache::write_ir_cache(&api, &source_hash)?;
     info!(
@@ -446,10 +447,25 @@ fn to_pascal_case(s: &str) -> String {
         .collect()
 }
 
-fn apply_exclusions(mut api: ApiSurface, exclude: &skif_core::config::ExcludeConfig) -> ApiSurface {
+fn apply_filters(mut api: ApiSurface, config: &SkifConfig) -> ApiSurface {
+    let exclude = &config.exclude;
+    let include = &config.include;
+
+    // Apply includes first (whitelist)
+    if !include.types.is_empty() {
+        api.types.retain(|t| include.types.contains(&t.name));
+        api.enums.retain(|e| include.types.contains(&e.name));
+        api.errors.retain(|e| include.types.contains(&e.name));
+    }
+    if !include.functions.is_empty() {
+        api.functions.retain(|f| include.functions.contains(&f.name));
+    }
+
+    // Then apply excludes (blacklist)
     api.types.retain(|t| !exclude.types.contains(&t.name));
     api.functions.retain(|f| !exclude.functions.contains(&f.name));
     api.enums.retain(|e| !exclude.types.contains(&e.name));
     api.errors.retain(|e| !exclude.types.contains(&e.name));
+
     api
 }

@@ -548,6 +548,7 @@ dependencies = [
  "quote",
  "skif-core",
  "syn",
+ "toml",
 ]
 
 [[package]]

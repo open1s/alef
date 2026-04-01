@@ -16,15 +16,35 @@ pub fn scaffold(api: &ApiSurface, config: &SkifConfig, languages: &[Language]) -
 
 fn scaffold_language(api: &ApiSurface, config: &SkifConfig, lang: Language) -> anyhow::Result<Vec<GeneratedFile>> {
     match lang {
-        Language::Python => scaffold_python(api, config),
-        Language::Node => scaffold_node(api, config),
+        Language::Python => {
+            let mut files = scaffold_python(api, config)?;
+            files.extend(scaffold_python_cargo(api, config)?);
+            Ok(files)
+        }
+        Language::Node => {
+            let mut files = scaffold_node(api, config)?;
+            files.extend(scaffold_node_cargo(api, config)?);
+            Ok(files)
+        }
         Language::Ffi => scaffold_ffi(api, config),
         Language::Go => scaffold_go(api, config),
         Language::Java => scaffold_java(api, config),
         Language::Csharp => scaffold_csharp(api, config),
-        Language::Ruby => scaffold_ruby(api, config),
-        Language::Php => scaffold_php(api, config),
-        Language::Elixir => scaffold_elixir(api, config),
+        Language::Ruby => {
+            let mut files = scaffold_ruby(api, config)?;
+            files.extend(scaffold_ruby_cargo(api, config)?);
+            Ok(files)
+        }
+        Language::Php => {
+            let mut files = scaffold_php(api, config)?;
+            files.extend(scaffold_php_cargo(api, config)?);
+            Ok(files)
+        }
+        Language::Elixir => {
+            let mut files = scaffold_elixir(api, config)?;
+            files.extend(scaffold_elixir_cargo(api, config)?);
+            Ok(files)
+        }
         Language::Wasm => scaffold_wasm(api, config),
     }
 }
@@ -56,6 +76,43 @@ fn scaffold_meta(config: &SkifConfig) -> ScaffoldMeta {
         authors: scaffold.map(|s| s.authors.clone()).unwrap_or_default(),
         keywords: scaffold.map(|s| s.keywords.clone()).unwrap_or_default(),
     }
+}
+
+fn scaffold_python_cargo(api: &ApiSurface, config: &SkifConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+    let name = &config.crate_config.name;
+    let version = &api.version;
+    let module_name = config.python_module_name();
+    let core_import = config.core_import();
+
+    let content = format!(
+        r#"[package]
+name = "{name}-py"
+version = "{version}"
+edition = "2024"
+
+[lib]
+name = "{module_name}"
+crate-type = ["cdylib"]
+
+[dependencies]
+{core_import} = {{ path = "../../crates/{core_import}" }}
+pyo3 = {{ version = "0.23", features = ["extension-module"] }}
+pyo3-async-runtimes = {{ version = "0.23", features = ["tokio-runtime"] }}
+serde = {{ version = "1", features = ["derive"] }}
+serde_json = "1"
+tokio = {{ version = "1", features = ["full"] }}
+"#,
+        name = name,
+        version = version,
+        module_name = module_name,
+        core_import = core_import,
+    );
+
+    Ok(vec![GeneratedFile {
+        path: PathBuf::from(format!("crates/{}-py/Cargo.toml", name)),
+        content,
+        generated_header: true,
+    }])
 }
 
 fn scaffold_python(api: &ApiSurface, config: &SkifConfig) -> anyhow::Result<Vec<GeneratedFile>> {
@@ -126,6 +183,43 @@ select = ["E", "F", "W"]
 
     Ok(vec![GeneratedFile {
         path: PathBuf::from("packages/python/pyproject.toml"),
+        content,
+        generated_header: true,
+    }])
+}
+
+fn scaffold_node_cargo(api: &ApiSurface, config: &SkifConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+    let name = &config.crate_config.name;
+    let version = &api.version;
+    let core_import = config.core_import();
+
+    let content = format!(
+        r#"[package]
+name = "{name}-node"
+version = "{version}"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+{core_import} = {{ path = "../../crates/{core_import}" }}
+napi = {{ version = "3", features = ["async"] }}
+napi-derive = "3"
+serde = {{ version = "1", features = ["derive"] }}
+serde_json = "1"
+tokio = {{ version = "1", features = ["full"] }}
+
+[build-dependencies]
+napi-build = "2"
+"#,
+        name = name,
+        version = version,
+        core_import = core_import,
+    );
+
+    Ok(vec![GeneratedFile {
+        path: PathBuf::from(format!("crates/{}-node/Cargo.toml", name)),
         content,
         generated_header: true,
     }])
@@ -207,6 +301,39 @@ fn scaffold_node(api: &ApiSurface, config: &SkifConfig) -> anyhow::Result<Vec<Ge
     }])
 }
 
+fn scaffold_ruby_cargo(api: &ApiSurface, config: &SkifConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+    let name = &config.crate_config.name;
+    let version = &api.version;
+    let core_import = config.core_import();
+
+    let content = format!(
+        r#"[package]
+name = "{name}-rb"
+version = "{version}"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+{core_import} = {{ path = "../../../../crates/{core_import}" }}
+magnus = "0.7"
+serde = {{ version = "1", features = ["derive"] }}
+serde_json = "1"
+tokio = {{ version = "1", features = ["full"] }}
+"#,
+        name = name,
+        version = version,
+        core_import = core_import,
+    );
+
+    Ok(vec![GeneratedFile {
+        path: PathBuf::from(format!("packages/ruby/ext/{}_rb/native/Cargo.toml", name)),
+        content,
+        generated_header: true,
+    }])
+}
+
 fn scaffold_ruby(api: &ApiSurface, config: &SkifConfig) -> anyhow::Result<Vec<GeneratedFile>> {
     let meta = scaffold_meta(config);
     let gem_name = config.ruby_gem_name();
@@ -258,6 +385,39 @@ end
     }])
 }
 
+fn scaffold_php_cargo(api: &ApiSurface, config: &SkifConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+    let name = &config.crate_config.name;
+    let version = &api.version;
+    let core_import = config.core_import();
+
+    let content = format!(
+        r#"[package]
+name = "{name}-php"
+version = "{version}"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+{core_import} = {{ path = "../../crates/{core_import}" }}
+ext-php-rs = "0.13"
+serde = {{ version = "1", features = ["derive"] }}
+serde_json = "1"
+tokio = {{ version = "1", features = ["full"] }}
+"#,
+        name = name,
+        version = version,
+        core_import = core_import,
+    );
+
+    Ok(vec![GeneratedFile {
+        path: PathBuf::from(format!("crates/{}-php/Cargo.toml", name)),
+        content,
+        generated_header: true,
+    }])
+}
+
 fn scaffold_php(_api: &ApiSurface, config: &SkifConfig) -> anyhow::Result<Vec<GeneratedFile>> {
     let meta = scaffold_meta(config);
     let ext_name = config.php_extension_name();
@@ -295,6 +455,39 @@ fn scaffold_php(_api: &ApiSurface, config: &SkifConfig) -> anyhow::Result<Vec<Ge
         path: PathBuf::from("packages/php/composer.json"),
         content,
         generated_header: false,
+    }])
+}
+
+fn scaffold_elixir_cargo(api: &ApiSurface, config: &SkifConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+    let name = &config.crate_config.name;
+    let version = &api.version;
+    let core_import = config.core_import();
+
+    let content = format!(
+        r#"[package]
+name = "{name}_rustler"
+version = "{version}"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+{core_import} = {{ path = "../../../../crates/{core_import}" }}
+rustler = "0.36"
+serde = {{ version = "1", features = ["derive"] }}
+serde_json = "1"
+tokio = {{ version = "1", features = ["full"] }}
+"#,
+        name = name,
+        version = version,
+        core_import = core_import,
+    );
+
+    Ok(vec![GeneratedFile {
+        path: PathBuf::from(format!("packages/elixir/native/{}_rustler/Cargo.toml", name)),
+        content,
+        generated_header: true,
     }])
 }
 
@@ -526,6 +719,7 @@ fn scaffold_wasm(api: &ApiSurface, config: &SkifConfig) -> anyhow::Result<Vec<Ge
     let meta = scaffold_meta(config);
     let name = &config.crate_config.name;
     let version = &api.version;
+    let core_import = config.core_import();
 
     let content = format!(
         r#"[package]
@@ -540,14 +734,19 @@ repository = "{repository}"
 crate-type = ["cdylib"]
 
 [dependencies]
-{name} = {{ path = "../.." }}
+{core_import} = {{ path = "../../crates/{core_import}" }}
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+serde = {{ version = "1", features = ["derive"] }}
+serde_json = "1"
+js-sys = "0.3"
 "#,
         name = name,
         version = version,
         description = meta.description,
         license = meta.license,
         repository = meta.repository,
+        core_import = core_import,
     );
 
     Ok(vec![GeneratedFile {
@@ -578,9 +777,11 @@ mod tests {
                 sources: vec![],
                 version_from: "Cargo.toml".to_string(),
                 core_import: None,
+                workspace_root: None,
             },
             languages: vec![Language::Python, Language::Node],
             exclude: ExcludeConfig::default(),
+            include: IncludeConfig::default(),
             output: OutputConfig::default(),
             python: None,
             node: None,
@@ -622,10 +823,12 @@ mod tests {
         let config = test_config();
         let api = test_api();
         let files = scaffold(&api, &config, &[Language::Python]).unwrap();
-        assert_eq!(files.len(), 1);
+        assert_eq!(files.len(), 2);
         assert_eq!(files[0].path, PathBuf::from("packages/python/pyproject.toml"));
         assert!(files[0].content.contains("maturin"));
         assert!(files[0].content.contains("my-lib"));
+        assert_eq!(files[1].path, PathBuf::from("crates/my-lib-py/Cargo.toml"));
+        assert!(files[1].content.contains("pyo3"));
     }
 
     #[test]
@@ -633,9 +836,11 @@ mod tests {
         let config = test_config();
         let api = test_api();
         let files = scaffold(&api, &config, &[Language::Node]).unwrap();
-        assert_eq!(files.len(), 1);
+        assert_eq!(files.len(), 2);
         assert_eq!(files[0].path, PathBuf::from("packages/typescript/package.json"));
         assert!(files[0].content.contains("napi"));
+        assert_eq!(files[1].path, PathBuf::from("crates/my-lib-node/Cargo.toml"));
+        assert!(files[1].content.contains("napi-derive"));
     }
 
     #[test]
@@ -643,7 +848,7 @@ mod tests {
         let config = test_config();
         let api = test_api();
         let files = scaffold(&api, &config, &[Language::Python, Language::Node]).unwrap();
-        assert_eq!(files.len(), 2);
+        assert_eq!(files.len(), 4);
     }
 
     #[test]
@@ -716,10 +921,16 @@ mod tests {
         let config = test_config();
         let api = test_api();
         let files = scaffold(&api, &config, &[Language::Ruby]).unwrap();
-        assert_eq!(files.len(), 1);
+        assert_eq!(files.len(), 2);
         let content = &files[0].content;
         assert!(content.contains("spec.required_ruby_version"));
         assert!(content.contains("spec.extensions"));
         assert!(content.contains("spec.keywords"));
+        // Check for Cargo.toml generation
+        assert_eq!(
+            files[1].path,
+            PathBuf::from("packages/ruby/ext/my-lib_rb/native/Cargo.toml")
+        );
+        assert!(files[1].content.contains("magnus"));
     }
 }
