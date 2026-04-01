@@ -176,7 +176,7 @@ pub fn field_conversion_to_core(name: &str, ty: &TypeRef, optional: bool) -> Str
         TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit | TypeRef::Json => {
             format!("{name}: val.{name}")
         }
-        // Named type -- needs .into()
+        // Named type -- needs .into() to convert between binding and core types
         TypeRef::Named(_) => {
             if optional {
                 format!("{name}: val.{name}.map(Into::into)")

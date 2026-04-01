@@ -9,6 +9,5 @@ repository.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-heck = { workspace = true }
 skif-codegen = { path = "../skif-codegen" }
 skif-core = { workspace = true }

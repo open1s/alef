@@ -1,5 +1,6 @@
 use crate::type_map::WasmMapper;
 use skif_codegen::builder::{ImplBuilder, RustFileBuilder, StructBuilder};
+use skif_codegen::naming::to_node_name;
 use skif_codegen::shared::constructor_parts;
 use skif_codegen::type_mapper::TypeMapper;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
@@ -168,6 +169,13 @@ fn gen_opaque_method(method: &MethodDef, mapper: &WasmMapper, _type_name: &str) 
         .collect();
     let args_str = call_args.join(", ");
 
+    let js_name = to_node_name(&method.name);
+    let js_name_attr = if js_name != method.name {
+        format!(", js_name = \"{}\"", js_name)
+    } else {
+        String::new()
+    };
+
     if method.is_async {
         let body = if method.error_type.is_some() {
             format!(
@@ -184,7 +192,7 @@ fn gen_opaque_method(method: &MethodDef, mapper: &WasmMapper, _type_name: &str) 
             )
         };
         format!(
-            "pub async fn {}(&self, {}) -> {} {{\n    \
+            "#[wasm_bindgen{js_name_attr}]\npub async fn {}(&self, {}) -> {} {{\n    \
              {body}\n}}",
             method.name,
             params.join(", "),
@@ -192,7 +200,7 @@ fn gen_opaque_method(method: &MethodDef, mapper: &WasmMapper, _type_name: &str) 
         )
     } else if method.is_static {
         format!(
-            "#[wasm_bindgen(static)]\npub fn {}({}) -> {} {{\n    \
+            "#[wasm_bindgen(static{js_name_attr})]\npub fn {}({}) -> {} {{\n    \
              todo!(\"call into core implementation\")\n}}",
             method.name,
             params.join(", "),
@@ -209,7 +217,7 @@ fn gen_opaque_method(method: &MethodDef, mapper: &WasmMapper, _type_name: &str) 
             format!("{}::from(self.inner.{}({}))", return_type, method.name, args_str)
         };
         format!(
-            "pub fn {}(&self, {}) -> {} {{\n    \
+            "#[wasm_bindgen{js_name_attr}]\npub fn {}(&self, {}) -> {} {{\n    \
              {body}\n}}",
             method.name,
             params.join(", "),
@@ -280,8 +288,15 @@ fn gen_getter(field: &FieldDef, mapper: &WasmMapper) -> String {
         mapper.map_type(&field.ty)
     };
 
+    let js_name = to_node_name(&field.name);
+    let js_name_attr = if js_name != field.name {
+        format!(", js_name = \"{}\"", js_name)
+    } else {
+        String::new()
+    };
+
     format!(
-        "#[wasm_bindgen(getter)]\npub fn {}(&self) -> {} {{\n    self.{}.clone()\n}}",
+        "#[wasm_bindgen(getter{js_name_attr})]\npub fn {}(&self) -> {} {{\n    self.{}.clone()\n}}",
         field.name, field_type, field.name
     )
 }
@@ -294,8 +309,15 @@ fn gen_setter(field: &FieldDef, mapper: &WasmMapper) -> String {
         mapper.map_type(&field.ty)
     };
 
+    let js_name = to_node_name(&field.name);
+    let js_name_attr = if js_name != field.name {
+        format!(", js_name = \"{}\"", js_name)
+    } else {
+        String::new()
+    };
+
     format!(
-        "#[wasm_bindgen(setter)]\npub fn set_{}(&mut self, value: {}) {{\n    self.{} = value;\n}}",
+        "#[wasm_bindgen(setter{js_name_attr})]\npub fn set_{}(&mut self, value: {}) {{\n    self.{} = value;\n}}",
         field.name, field_type, field.name
     )
 }
@@ -311,6 +333,13 @@ fn gen_method(method: &MethodDef, mapper: &WasmMapper, type_name: &str) -> Strin
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
     let core_import = "skif_core";
+
+    let js_name = to_node_name(&method.name);
+    let js_name_attr = if js_name != method.name {
+        format!(", js_name = \"{}\"", js_name)
+    } else {
+        String::new()
+    };
 
     if method.is_async {
         // For WASM, native async fn automatically becomes a Promise
@@ -345,7 +374,7 @@ fn gen_method(method: &MethodDef, mapper: &WasmMapper, type_name: &str) -> Strin
             )
         };
         format!(
-            "pub async fn {}(&self, {}) -> {} {{\n    \
+            "#[wasm_bindgen{js_name_attr}]\npub async fn {}(&self, {}) -> {} {{\n    \
              {body}\n}}",
             method.name,
             params.join(", "),
@@ -353,7 +382,7 @@ fn gen_method(method: &MethodDef, mapper: &WasmMapper, type_name: &str) -> Strin
         )
     } else if method.is_static {
         format!(
-            "#[wasm_bindgen(static)]\npub fn {}({}) -> {} {{\n    \
+            "#[wasm_bindgen(static{js_name_attr})]\npub fn {}({}) -> {} {{\n    \
              todo!(\"call into core implementation\")\n}}",
             method.name,
             params.join(", "),
@@ -361,7 +390,7 @@ fn gen_method(method: &MethodDef, mapper: &WasmMapper, type_name: &str) -> Strin
         )
     } else {
         format!(
-            "pub fn {}(&self, {}) -> {} {{\n    \
+            "#[wasm_bindgen{js_name_attr}]\npub fn {}(&self, {}) -> {} {{\n    \
              todo!(\"call into core implementation\")\n}}",
             method.name,
             params.join(", "),
@@ -399,6 +428,13 @@ fn gen_function(func: &FunctionDef, mapper: &WasmMapper) -> String {
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
     let core_import = "skif_core";
 
+    let js_name = to_node_name(&func.name);
+    let js_name_attr = if js_name != func.name {
+        format!(", js_name = \"{}\"", js_name)
+    } else {
+        String::new()
+    };
+
     if func.is_async {
         // For WASM, native async fn automatically becomes a Promise
         let call_args = func
@@ -429,7 +465,7 @@ fn gen_function(func: &FunctionDef, mapper: &WasmMapper) -> String {
             )
         };
         format!(
-            "#[wasm_bindgen]\npub async fn {}({}) -> {} {{\n    \
+            "#[wasm_bindgen{js_name_attr}]\npub async fn {}({}) -> {} {{\n    \
              {body}\n}}",
             func.name,
             params.join(", "),
@@ -437,7 +473,7 @@ fn gen_function(func: &FunctionDef, mapper: &WasmMapper) -> String {
         )
     } else {
         format!(
-            "#[wasm_bindgen]\npub fn {}({}) -> {} {{\n    \
+            "#[wasm_bindgen{js_name_attr}]\npub fn {}({}) -> {} {{\n    \
              todo!(\"call into core implementation\")\n}}",
             func.name,
             params.join(", "),

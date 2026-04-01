@@ -1,5 +1,6 @@
 use crate::type_map::{csharp_default_value, csharp_type};
 use heck::ToPascalCase;
+use skif_codegen::naming::to_csharp_name;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
 use skif_core::config::{Language, SkifConfig, resolve_output_dir};
 use skif_core::ir::{ApiSurface, EnumDef, FunctionDef, MethodDef, TypeDef, TypeRef};
@@ -318,7 +319,7 @@ fn gen_wrapper_function(func: &FunctionDef, _exception_name: &str, prefix: &str)
         out.push_str(&csharp_type(&func.return_type));
     }
 
-    out.push_str(&format!(" {}", func.name.to_pascal_case()));
+    out.push_str(&format!(" {}", to_csharp_name(&func.name)));
     out.push('(');
 
     // Parameters
@@ -386,7 +387,7 @@ fn gen_wrapper_method(method: &MethodDef, _exception_name: &str, prefix: &str) -
         out.push_str(&csharp_type(&method.return_type));
     }
 
-    out.push_str(&format!(" {}", method.name.to_pascal_case()));
+    out.push_str(&format!(" {}", to_csharp_name(&method.name)));
     out.push('(');
 
     // Parameters
@@ -467,7 +468,7 @@ fn gen_record_type(typ: &TypeDef, namespace: &str) -> String {
             csharp_type(&field.ty).to_string()
         };
 
-        out.push_str(&format!("    {} {}", field_type, field.name.to_pascal_case()));
+        out.push_str(&format!("    {} {}", field_type, to_csharp_name(&field.name)));
 
         if let Some(default) = &field.default {
             out.push_str(&format!(" = {}", default));

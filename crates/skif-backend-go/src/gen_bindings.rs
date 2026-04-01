@@ -1,5 +1,6 @@
 use crate::type_map::{go_optional_type, go_type};
 use heck::{ToPascalCase, ToSnakeCase};
+use skif_codegen::naming::to_go_name;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
 use skif_core::config::{Language, SkifConfig, resolve_output_dir};
 use skif_core::ir::{ApiSurface, EnumDef, FunctionDef, MethodDef, TypeDef, TypeRef};
@@ -173,9 +174,9 @@ fn gen_struct_type(typ: &TypeDef) -> String {
         };
 
         if !field.doc.is_empty() {
-            writeln!(out, "    // {} {}", field.name.to_pascal_case(), field.doc).unwrap();
+            writeln!(out, "    // {} {}", to_go_name(&field.name), field.doc).unwrap();
         }
-        writeln!(out, "    {} {} `{}`", field.name.to_pascal_case(), field_type, json_tag).unwrap();
+        writeln!(out, "    {} {} `{}`", to_go_name(&field.name), field_type, json_tag).unwrap();
     }
 
     writeln!(out, "}}").unwrap();
@@ -186,10 +187,12 @@ fn gen_struct_type(typ: &TypeDef) -> String {
 fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
     let mut out = String::with_capacity(2048);
 
+    let func_go_name = to_go_name(&func.name);
+
     if !func.doc.is_empty() {
-        writeln!(out, "// {} {}", func.name, func.doc).unwrap();
+        writeln!(out, "// {} {}", func_go_name, func.doc).unwrap();
     } else {
-        writeln!(out, "// {} calls the FFI function.", func.name).unwrap();
+        writeln!(out, "// {} calls the FFI function.", func_go_name).unwrap();
     }
 
     let return_type = if func.error_type.is_some() {
@@ -207,7 +210,7 @@ fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
     let func_snake = func.name.to_snake_case();
     let ffi_name = format!("C.{}_{}", ffi_prefix, func_snake);
 
-    write!(out, "func {}(", func.name).unwrap();
+    write!(out, "func {}(", func_go_name).unwrap();
 
     let params: Vec<String> = func
         .params
@@ -284,10 +287,12 @@ fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
 fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str) -> String {
     let mut out = String::with_capacity(2048);
 
+    let method_go_name = to_go_name(&method.name);
+
     if !method.doc.is_empty() {
-        writeln!(out, "// {} {}", method.name, method.doc).unwrap();
+        writeln!(out, "// {} {}", method_go_name, method.doc).unwrap();
     } else {
-        writeln!(out, "// {} is a method.", method.name).unwrap();
+        writeln!(out, "// {} is a method.", method_go_name).unwrap();
     }
 
     let return_type = if method.error_type.is_some() {
@@ -306,7 +311,7 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str) -> St
     let receiver_type = &typ.name;
 
     // Determine receiver (pointer)
-    write!(out, "func ({} *{}) {}(", receiver_name, receiver_type, method.name).unwrap();
+    write!(out, "func ({} *{}) {}(", receiver_name, receiver_type, method_go_name).unwrap();
 
     let params: Vec<String> = method
         .params

@@ -1,6 +1,5 @@
 use crate::type_map::{java_boxed_type, java_ffi_type, java_type};
-use heck::ToLowerCamelCase;
-use skif_codegen::naming::to_class_name;
+use skif_codegen::naming::{to_class_name, to_java_name};
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
 use skif_core::config::{Language, SkifConfig, resolve_output_dir};
 use skif_core::ir::{ApiSurface, EnumDef, FunctionDef, TypeDef, TypeRef};
@@ -231,7 +230,7 @@ fn gen_sync_function_method(out: &mut String, func: &FunctionDef, prefix: &str, 
         out,
         "    public static {} {}({}) throws {}Exception {{",
         return_type,
-        func.name.to_lower_camel_case(),
+        to_java_name(&func.name),
         params.join(", "),
         class_name
     )
@@ -296,7 +295,7 @@ fn gen_async_wrapper_method(out: &mut String, func: &FunctionDef) {
         other => java_boxed_type(other).to_string(),
     };
 
-    let sync_method_name = func.name.to_lower_camel_case();
+    let sync_method_name = to_java_name(&func.name);
     let async_method_name = format!("{}Async", sync_method_name);
     let param_names: Vec<String> = func.params.iter().map(|p| p.name.clone()).collect();
 
@@ -383,7 +382,7 @@ fn gen_record_type(package: &str, typ: &TypeDef) -> String {
             } else {
                 java_type(&f.ty).to_string()
             };
-            format!("{} {}", ftype, f.name)
+            format!("{} {}", ftype, to_java_name(&f.name))
         })
         .collect();
 

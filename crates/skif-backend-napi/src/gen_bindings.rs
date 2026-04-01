@@ -1,6 +1,7 @@
 use crate::type_map::NapiMapper;
 use skif_codegen::builder::{ImplBuilder, RustFileBuilder, StructBuilder};
 use skif_codegen::generators::{AsyncPattern, RustBindingConfig};
+use skif_codegen::naming::to_node_name;
 use skif_codegen::shared::{constructor_parts, function_params, partition_methods};
 use skif_codegen::type_mapper::TypeMapper;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
@@ -144,7 +145,13 @@ fn gen_struct(typ: &TypeDef, mapper: &NapiMapper) -> String {
 
     for field in &typ.fields {
         let field_type = format!("Option<{}>", mapper.map_type(&field.ty));
-        struct_builder.add_field(&field.name, &field_type, vec![]);
+        let js_name = to_node_name(&field.name);
+        let attrs = if js_name != field.name {
+            vec![format!("#[napi(js_name = \"{}\")]", js_name)]
+        } else {
+            vec![]
+        };
+        struct_builder.add_field(&field.name, &field_type, attrs);
     }
 
     struct_builder.build()
@@ -215,6 +222,13 @@ fn gen_opaque_instance_method(method: &MethodDef, mapper: &NapiMapper) -> String
         .collect();
     let args_str = call_args.join(", ");
 
+    let js_name = to_node_name(&method.name);
+    let js_name_attr = if js_name != method.name {
+        format!(", js_name = \"{}\"", js_name)
+    } else {
+        String::new()
+    };
+
     let async_kw = if method.is_async { "async " } else { "" };
 
     let body = if method.is_async {
@@ -237,7 +251,7 @@ fn gen_opaque_instance_method(method: &MethodDef, mapper: &NapiMapper) -> String
     };
 
     format!(
-        "#[napi]\npub {async_kw}fn {}(&self, {params}) -> {return_annotation} {{\n    \
+        "#[napi{js_name_attr}]\npub {async_kw}fn {}(&self, {params}) -> {return_annotation} {{\n    \
          {body}\n    Ok({return_type}::from(result))\n}}",
         method.name
     )
@@ -266,9 +280,16 @@ fn gen_instance_method(method: &MethodDef, mapper: &NapiMapper) -> String {
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
+    let js_name = to_node_name(&method.name);
+    let js_name_attr = if js_name != method.name {
+        format!(", js_name = \"{}\"", js_name)
+    } else {
+        String::new()
+    };
+
     let async_kw = if method.is_async { "async " } else { "" };
     format!(
-        "#[napi]\npub {async_kw}fn {}(&self, {params}) -> {return_annotation} {{\n    \
+        "#[napi{js_name_attr}]\npub {async_kw}fn {}(&self, {params}) -> {return_annotation} {{\n    \
          todo!(\"call into core\")\n}}",
         method.name
     )
@@ -280,9 +301,16 @@ fn gen_static_method(method: &MethodDef, mapper: &NapiMapper) -> String {
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
+    let js_name = to_node_name(&method.name);
+    let js_name_attr = if js_name != method.name {
+        format!(", js_name = \"{}\"", js_name)
+    } else {
+        String::new()
+    };
+
     let async_kw = if method.is_async { "async " } else { "" };
     format!(
-        "#[napi]\npub {async_kw}fn {}({params}) -> {return_annotation} {{\n    \
+        "#[napi{js_name_attr}]\npub {async_kw}fn {}({params}) -> {return_annotation} {{\n    \
          todo!(\"call into core\")\n}}",
         method.name
     )
@@ -310,9 +338,16 @@ fn gen_function(func: &FunctionDef, mapper: &NapiMapper) -> String {
     let return_type = mapper.map_type(&func.return_type);
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
 
+    let js_name = to_node_name(&func.name);
+    let js_name_attr = if js_name != func.name {
+        format!(", js_name = \"{}\"", js_name)
+    } else {
+        String::new()
+    };
+
     let async_kw = if func.is_async { "async " } else { "" };
     format!(
-        "#[napi]\npub {async_kw}fn {}({params}) -> {return_annotation} {{\n    \
+        "#[napi{js_name_attr}]\npub {async_kw}fn {}({params}) -> {return_annotation} {{\n    \
          todo!(\"call into core\")\n}}",
         func.name
     )

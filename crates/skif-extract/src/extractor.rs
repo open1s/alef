@@ -307,10 +307,18 @@ fn build_rust_path(crate_name: &str, module_path: &str, name: &str) -> String {
     }
 }
 
+/// Check if an item has a `#[cfg(...)]` attribute.
+fn has_cfg_attribute(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| a.path().is_ident("cfg"))
+}
+
 /// Extract a public struct into a `TypeDef`.
 /// Returns `None` for generic structs — they can't be directly exposed to FFI.
 fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_path: &str) -> Option<TypeDef> {
     if !item.generics.params.is_empty() {
+        return None;
+    }
+    if has_cfg_attribute(&item.attrs) {
         return None;
     }
     let name = item.ident.to_string();
@@ -371,6 +379,9 @@ fn extract_enum(item: &syn::ItemEnum, crate_name: &str, module_path: &str) -> Op
     if !item.generics.params.is_empty() {
         return None;
     }
+    if has_cfg_attribute(&item.attrs) {
+        return None;
+    }
     let name = item.ident.to_string();
     let doc = extract_doc_comments(&item.attrs);
 
@@ -420,6 +431,9 @@ fn extract_enum(item: &syn::ItemEnum, crate_name: &str, module_path: &str) -> Op
 /// Returns `None` for generic functions — they can't be directly exposed to FFI.
 fn extract_function(item: &syn::ItemFn, crate_name: &str, module_path: &str) -> Option<FunctionDef> {
     if !item.sig.generics.params.is_empty() {
+        return None;
+    }
+    if has_cfg_attribute(&item.attrs) {
         return None;
     }
     let name = item.sig.ident.to_string();
