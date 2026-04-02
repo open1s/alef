@@ -81,7 +81,9 @@ fn wrap_opaque_return(expr: &str, return_type: &TypeRef, type_name: &str, opaque
     }
 }
 
-/// Build call argument expressions from parameters, applying `.into()` on Named types.
+/// Build call argument expressions from parameters.
+/// - Named types: `.into()` for conversion
+/// - String/Path: `&param` since core functions typically take `&str`/`&Path`
 fn gen_call_args(params: &[ParamDef]) -> String {
     params
         .iter()
@@ -93,6 +95,9 @@ fn gen_call_args(params: &[ParamDef]) -> String {
                     format!("{}.into()", p.name)
                 }
             }
+            // String → &str, Path → &Path for core function calls
+            TypeRef::String | TypeRef::Path => format!("&{}", p.name),
+            TypeRef::Bytes => format!("&{}", p.name),
             _ => p.name.clone(),
         })
         .collect::<Vec<_>>()
@@ -761,7 +766,16 @@ pub fn gen_function(
         if func.error_type.is_some() {
             format!("{core_call}.map_err(|e| e.into())")
         } else {
-            core_call
+            // Wrap return for types that may need conversion (&str→String, &[u8]→Vec<u8>)
+            match &func.return_type {
+                TypeRef::String | TypeRef::Bytes | TypeRef::Path => format!("{core_call}.into()"),
+                TypeRef::Optional(inner)
+                    if matches!(inner.as_ref(), TypeRef::String | TypeRef::Bytes | TypeRef::Path) =>
+                {
+                    format!("{core_call}.map(Into::into)")
+                }
+                _ => core_call,
+            }
         }
     };
 

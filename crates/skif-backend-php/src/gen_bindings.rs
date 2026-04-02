@@ -361,6 +361,20 @@ fn php_field_conversion(name: &str, ty: &skif_core::ir::TypeRef, optional: bool,
                 format!("{name}: {val}.{name}.into()")
             }
         }
+        // Path: binding uses String (i64 for PHP), core uses PathBuf
+        TypeRef::Path => {
+            if to_core {
+                if optional {
+                    format!("{name}: {val}.{name}.map(Into::into)")
+                } else {
+                    format!("{name}: {val}.{name}.into()")
+                }
+            } else if optional {
+                format!("{name}: {val}.{name}.map(|p| p.to_string_lossy().to_string())")
+            } else {
+                format!("{name}: {val}.{name}.to_string_lossy().to_string()")
+            }
+        }
         TypeRef::Optional(inner) => match inner.as_ref() {
             TypeRef::Primitive(p) if matches!(p, PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize) => {
                 let cast_to = if to_core {
@@ -375,7 +389,13 @@ fn php_field_conversion(name: &str, ty: &skif_core::ir::TypeRef, optional: bool,
                 };
                 format!("{name}: {val}.{name}.map(|v| v as {cast_to})")
             }
-            TypeRef::Named(_) => format!("{name}: {val}.{name}.map(Into::into)"),
+            TypeRef::Named(_) | TypeRef::Path => {
+                if to_core {
+                    format!("{name}: {val}.{name}.map(Into::into)")
+                } else {
+                    format!("{name}: {val}.{name}.map(|p| p.to_string_lossy().to_string())")
+                }
+            }
             _ => format!("{name}: {val}.{name}"),
         },
         _ => format!("{name}: {val}.{name}"),

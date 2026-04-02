@@ -166,9 +166,17 @@ pub fn gen_enum_from_core_to_binding(enum_def: &EnumDef, core_import: &str) -> S
 /// Determine the field conversion expression for binding -> core.
 pub fn field_conversion_to_core(name: &str, ty: &TypeRef, optional: bool) -> String {
     match ty {
-        // Primitives, String, Bytes, Path, Unit, Json -- direct assignment
-        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit | TypeRef::Json => {
+        // Primitives, String, Bytes, Unit, Json -- direct assignment
+        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Unit | TypeRef::Json => {
             format!("{name}: val.{name}")
+        }
+        // Path needs .into() — binding uses String, core uses PathBuf
+        TypeRef::Path => {
+            if optional {
+                format!("{name}: val.{name}.map(Into::into)")
+            } else {
+                format!("{name}: val.{name}.into()")
+            }
         }
         // Named type -- needs .into() to convert between binding and core types
         TypeRef::Named(_) => {
@@ -180,7 +188,7 @@ pub fn field_conversion_to_core(name: &str, ty: &TypeRef, optional: bool) -> Str
         }
         // Optional with inner
         TypeRef::Optional(inner) => match inner.as_ref() {
-            TypeRef::Named(_) => format!("{name}: val.{name}.map(Into::into)"),
+            TypeRef::Named(_) | TypeRef::Path => format!("{name}: val.{name}.map(Into::into)"),
             _ => format!("{name}: val.{name}"),
         },
         // Vec of named types -- map each element
@@ -196,9 +204,23 @@ pub fn field_conversion_to_core(name: &str, ty: &TypeRef, optional: bool) -> Str
 }
 
 /// Same but for core -> binding direction.
-pub fn field_conversion_from_core(name: &str, ty: &TypeRef, optional: bool) -> String {
-    // Same logic -- From/Into is symmetric for our types
-    field_conversion_to_core(name, ty, optional)
+/// Some types are asymmetric (PathBuf→String needs .to_string_lossy()).
+pub fn field_conversion_from_core(name: &str, ty: &TypeRef, _optional: bool) -> String {
+    match ty {
+        // Path: core uses PathBuf, binding uses String — PathBuf→String needs special handling
+        TypeRef::Path => {
+            if _optional {
+                format!("{name}: val.{name}.map(|p| p.to_string_lossy().to_string())")
+            } else {
+                format!("{name}: val.{name}.to_string_lossy().to_string()")
+            }
+        }
+        TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Path) => {
+            format!("{name}: val.{name}.map(|p| p.to_string_lossy().to_string())")
+        }
+        // Everything else is symmetric
+        _ => field_conversion_to_core(name, ty, _optional),
+    }
 }
 
 // Suppress dead_code warning for field_conversion_from_core's `_optional` usage
