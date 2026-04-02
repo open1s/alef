@@ -96,16 +96,17 @@ fn gen_python_body(adapter: &AdapterConfig, _config: &SkifConfig) -> (String, St
         .join("::");
 
     let struct_code = format!(
-        "use {import_base}::{{{trait_nm}, {error}}};\n\n\
+        "use pyo3::prelude::*;\n\
+         use {import_base}::{{{trait_nm}, {error}}};\n\n\
          /// Generated FFI bridge for {trait_nm} trait — Python implementation.\n\
          pub struct {struct_name} {{\n    \
-             callback: pyo3::Py<pyo3::PyAny>,\n    \
+             callback: Py<PyAny>,\n    \
              is_async: bool,\n\
          }}\n\
          \n\
          impl {struct_name} {{\n    \
              /// Create a new bridge from a Python callable.\n    \
-             pub fn new(py: pyo3::Python<'_>, callback: &pyo3::Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Self> {{\n        \
+             pub fn new(py: Python<'_>, callback: &Bound<'_, pyo3::PyAny>) -> PyResult<Self> {{\n        \
                  let is_async = py.import(\"inspect\")?\n            \
                      .call_method1(\"iscoroutinefunction\", (callback,))?\n            \
                      .is_truthy()\n            \
@@ -120,8 +121,8 @@ fn gen_python_body(adapter: &AdapterConfig, _config: &SkifConfig) -> (String, St
 
     let impl_code = format!(
         "impl {trait_nm} for {struct_name} {{\n    \
-             type Input = pyo3::Py<pyo3::PyAny>;\n    \
-             type Output = pyo3::Py<pyo3::PyAny>;\n\n    \
+             type Input = Py<PyAny>;\n    \
+             type Output = Py<PyAny>;\n\n    \
              fn prepare_request(&self, request_data: &spikard_http::handler_trait::RequestData) -> Result<Self::Input, {error}> {{\n        \
                  todo!(\"convert RequestData to Python object\")\n    \
              }}\n\n    \
@@ -129,24 +130,27 @@ fn gen_python_body(adapter: &AdapterConfig, _config: &SkifConfig) -> (String, St
                  todo!(\"convert Python response to HTTP Response\")\n    \
              }}\n\n    \
              fn {method_nm}(&self, input: Self::Input) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Output, {error}>> + Send + '_>> {{\n        \
+                 let callback = Python::attach(|py| self.callback.clone_ref(py));\n        \
+                 let is_async = self.is_async;\n        \
                  Box::pin(async move {{\n            \
-                     let callback = self.callback.clone();\n            \
-                     let is_async = self.is_async;\n            \
-                     let result = tokio::task::spawn_blocking(move || {{\n                \
-                         pyo3::Python::attach(|py| {{\n                    \
-                             let result = callback.call1(py, (input,))?;\n                    \
+                     let join_result = tokio::task::spawn_blocking(move || -> Result<Py<PyAny>, {error}> {{\n                \
+                         Python::attach(|py| {{\n                    \
+                             let result = callback.call1(py, (input,))\n                        \
+                                 .map_err(|e| {error}::Execution(e.to_string()))?;\n                    \
                              if is_async {{\n                        \
-                                 let asyncio = py.import(\"asyncio\")?;\n                        \
-                                 let event_loop = asyncio.call_method0(\"new_event_loop\")?;\n                        \
-                                 let awaited = event_loop.call_method1(\"run_until_complete\", (result.bind(py),))?;\n                        \
-                                 Ok::<_, pyo3::PyErr>(awaited.unbind())\n                    \
+                                 let asyncio = py.import(\"asyncio\")\n                            \
+                                     .map_err(|e| {error}::Execution(e.to_string()))?;\n                        \
+                                 let event_loop = asyncio.call_method0(\"new_event_loop\")\n                            \
+                                     .map_err(|e| {error}::Execution(e.to_string()))?;\n                        \
+                                 let awaited = event_loop.call_method1(\"run_until_complete\", (result.bind(py),))\n                            \
+                                     .map_err(|e| {error}::Execution(e.to_string()))?;\n                        \
+                                 Ok(awaited.unbind())\n                    \
                              }} else {{\n                        \
                                  Ok(result)\n                    \
                              }}\n                \
                          }})\n            \
-                     }}).await\n            \
-                     .map_err(|e| {error}::Execution(e.to_string()))?\n            \
-                     .map_err(|e: pyo3::PyErr| {error}::Execution(e.to_string()))\n        \
+                     }}).await.map_err(|e| {error}::Execution(e.to_string()))?;\n            \
+                     join_result\n        \
                  }})\n    \
              }}\n\
          }}"
