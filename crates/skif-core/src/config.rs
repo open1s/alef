@@ -66,6 +66,10 @@ pub struct CrateConfig {
     /// When true, skip adding `use {core_import};` to generated bindings.
     #[serde(default)]
     pub skip_core_import: bool,
+    /// Maps extracted rust_path prefixes to actual import paths in binding crates.
+    /// Example: { "spikard" = "spikard_http" } rewrites "spikard::ServerConfig" to "spikard_http::ServerConfig"
+    #[serde(default)]
+    pub path_mappings: HashMap<String, String>,
 }
 
 fn default_version_from() -> String {
@@ -508,5 +512,20 @@ impl SkifConfig {
             .and_then(|r| r.package_name.as_ref())
             .cloned()
             .unwrap_or_else(|| self.crate_config.name.clone())
+    }
+
+    /// Rewrite a rust_path using path_mappings.
+    /// Matches the longest prefix first.
+    pub fn rewrite_path(&self, rust_path: &str) -> String {
+        // Sort mappings by key length descending (longest prefix first)
+        let mut mappings: Vec<_> = self.crate_config.path_mappings.iter().collect();
+        mappings.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+
+        for (from, to) in &mappings {
+            if rust_path.starts_with(from.as_str()) {
+                return format!("{}{}", to, &rust_path[from.len()..]);
+            }
+        }
+        rust_path.to_string()
     }
 }

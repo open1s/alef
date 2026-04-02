@@ -68,6 +68,11 @@ impl Backend for Pyo3Backend {
             && (!api.types.is_empty() || !api.functions.is_empty() || !api.enums.is_empty())
         {
             builder.add_import(&core_import);
+            // Add imports for all mapped crates when path_mappings exist
+            for target_crate in config.crate_config.path_mappings.values() {
+                let crate_name = target_crate.split("::").next().unwrap_or(target_crate);
+                builder.add_import(crate_name);
+            }
         }
 
         // Check if we have async functions and add imports if needed

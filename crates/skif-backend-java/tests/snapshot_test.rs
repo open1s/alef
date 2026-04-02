@@ -170,6 +170,7 @@ fn print_generated_java_code() {
             core_import: None,
             workspace_root: None,
             skip_core_import: false,
+            path_mappings: std::collections::HashMap::new(),
         },
         languages: vec![],
         exclude: Default::default(),

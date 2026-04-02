@@ -2,6 +2,7 @@ use ahash::{AHashMap, AHashSet};
 use skif_core::backend::GeneratedFile;
 use skif_core::config::{Language, SkifConfig};
 use skif_core::ir::{ApiSurface, TypeDef, TypeRef};
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::cache;
@@ -34,6 +35,9 @@ pub fn extract(config: &SkifConfig, config_path: &Path, clean: bool) -> anyhow::
 
     // Deduplicate types, enums, and functions by name
     dedup_api_surface(&mut api);
+
+    // Apply path mappings to rewrite rust_path fields
+    apply_path_mappings(&mut api, config);
 
     cache::write_ir_cache(&api, &source_hash)?;
     info!(
@@ -603,5 +607,37 @@ fn collect_named_types(
             collect_named_types(v, needed, all_types, all_enums, changed);
         }
         _ => {}
+    }
+}
+
+/// Rewrite a rust_path using path_mappings.
+/// Matches the longest prefix first.
+fn rewrite_path(path: &str, mappings: &HashMap<String, String>) -> String {
+    let mut sorted: Vec<_> = mappings.iter().collect();
+    sorted.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    for (from, to) in sorted {
+        if path.starts_with(from.as_str()) {
+            return format!("{}{}", to, &path[from.len()..]);
+        }
+    }
+    path.to_string()
+}
+
+/// Apply path_mappings to rewrite all rust_path fields in the API surface.
+fn apply_path_mappings(api: &mut ApiSurface, config: &SkifConfig) {
+    if config.crate_config.path_mappings.is_empty() {
+        return;
+    }
+    for typ in &mut api.types {
+        typ.rust_path = rewrite_path(&typ.rust_path, &config.crate_config.path_mappings);
+    }
+    for func in &mut api.functions {
+        func.rust_path = rewrite_path(&func.rust_path, &config.crate_config.path_mappings);
+    }
+    for enum_def in &mut api.enums {
+        enum_def.rust_path = rewrite_path(&enum_def.rust_path, &config.crate_config.path_mappings);
+    }
+    for error_def in &mut api.errors {
+        error_def.rust_path = rewrite_path(&error_def.rust_path, &config.crate_config.path_mappings);
     }
 }

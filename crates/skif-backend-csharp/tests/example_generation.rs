@@ -89,6 +89,7 @@ fn test_generated_code_example() {
             core_import: None,
             workspace_root: None,
             skip_core_import: false,
+            path_mappings: std::collections::HashMap::new(),
         },
         languages: vec![],
         exclude: Default::default(),
