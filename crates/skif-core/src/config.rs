@@ -261,6 +261,15 @@ pub struct AdapterConfig {
     /// For Python: release GIL during call
     #[serde(default)]
     pub gil_release: bool,
+    /// For callback_bridge: the Rust trait to implement (e.g., "SpikardHandler")
+    #[serde(default)]
+    pub trait_name: Option<String>,
+    /// For callback_bridge: the trait method name (e.g., "handle")
+    #[serde(default)]
+    pub trait_method: Option<String>,
+    /// For callback_bridge: whether to detect async callbacks at construction time
+    #[serde(default)]
+    pub detect_async: bool,
 }
 
 /// Custom modules that skif should declare (mod X;) but not generate.

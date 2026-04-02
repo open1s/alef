@@ -1,4 +1,5 @@
 pub mod async_method;
+pub mod callback_bridge;
 pub mod streaming;
 pub mod sync_function;
 
@@ -39,7 +40,15 @@ pub fn build_adapter_bodies(config: &SkifConfig, language: Language) -> anyhow::
                     bodies.insert(struct_key, struct_code);
                 }
             }
-            AdapterPattern::CallbackBridge | AdapterPattern::ServerLifecycle => {
+            AdapterPattern::CallbackBridge => {
+                let (struct_code, impl_code) = callback_bridge::generate(adapter, language, config)?;
+                let struct_key = format!("{}.__bridge_struct__", adapter.name);
+                bodies.insert(struct_key, struct_code);
+                let impl_key = format!("{}.__bridge_impl__", adapter.name);
+                bodies.insert(impl_key, impl_code);
+                continue; // Don't insert into the normal body map
+            }
+            AdapterPattern::ServerLifecycle => {
                 let body = format!("todo!(\"adapter pattern not yet implemented: {}\")", adapter.name);
                 bodies.insert(key, body);
             }
