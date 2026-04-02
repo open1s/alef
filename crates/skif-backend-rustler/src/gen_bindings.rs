@@ -1,6 +1,6 @@
 use crate::type_map::RustlerMapper;
 use ahash::AHashSet;
-use skif_codegen::builder::{RustFileBuilder, StructBuilder};
+use skif_codegen::builder::RustFileBuilder;
 use skif_codegen::shared::function_params;
 use skif_codegen::type_mapper::TypeMapper;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
@@ -35,7 +35,7 @@ impl Backend for RustlerBackend {
         let core_import = config.core_import();
 
         let mut builder = RustFileBuilder::new().with_generated_header();
-        builder.add_import("rustler::prelude::*");
+        builder.add_import("rustler::{Env, Term, NifResult, ResourceArc}");
         builder.add_import("std::collections::HashMap");
         builder.add_import(&core_import);
 
@@ -85,9 +85,9 @@ impl Backend for RustlerBackend {
         for typ in &api.types {
             for method in &typ.methods {
                 if method.is_async {
-                    builder.add_item(&gen_nif_async_method(&typ.name, method, &mapper));
+                    builder.add_item(&gen_nif_async_method(&typ.name, method, &mapper, typ.is_opaque));
                 } else {
-                    builder.add_item(&gen_nif_method(&typ.name, method, &mapper));
+                    builder.add_item(&gen_nif_method(&typ.name, method, &mapper, typ.is_opaque));
                 }
             }
         }
@@ -156,11 +156,13 @@ fn gen_opaque_resource(typ: &TypeDef, core_import: &str, _opaque_types: &AHashSe
 }
 
 /// Generate a Rustler NIF struct definition using the shared TypeMapper.
+/// Rustler 0.37: NifStruct is a derive macro with #[module = "..."] attribute.
 fn gen_struct(typ: &TypeDef, mapper: &RustlerMapper, module_prefix: &str) -> String {
-    let mut struct_builder = StructBuilder::new(&typ.name);
-    struct_builder.add_attr(&format!("rustler::NifStruct(module = \"{}\")", module_prefix));
-    struct_builder.add_derive("Clone");
-    struct_builder.add_derive("Debug");
+    use std::fmt::Write;
+    let mut out = String::with_capacity(512);
+    writeln!(out, "#[derive(Debug, Clone, rustler::NifStruct)]").unwrap();
+    writeln!(out, "#[module = \"{}.{}\"]", module_prefix, typ.name).unwrap();
+    writeln!(out, "pub struct {} {{", typ.name).unwrap();
 
     for field in &typ.fields {
         let field_type = if field.optional {
@@ -168,17 +170,17 @@ fn gen_struct(typ: &TypeDef, mapper: &RustlerMapper, module_prefix: &str) -> Str
         } else {
             mapper.map_type(&field.ty)
         };
-        struct_builder.add_field(&field.name, &field_type, vec![]);
+        writeln!(out, "    pub {}: {},", field.name, field_type).unwrap();
     }
 
-    struct_builder.build()
+    write!(out, "}}").unwrap();
+    out
 }
 
 /// Generate a Rustler NIF enum definition (unit enum).
 fn gen_enum(enum_def: &EnumDef) -> String {
     let mut lines = vec![
-        "#[derive(NifUnitEnum)]".to_string(),
-        "#[derive(Clone, Copy)]".to_string(),
+        "#[derive(Debug, Clone, Copy, rustler::NifUnitEnum)]".to_string(),
         format!("pub enum {} {{", enum_def.name),
     ];
 
@@ -224,11 +226,15 @@ fn gen_nif_async_function(func: &FunctionDef, mapper: &RustlerMapper) -> String 
 }
 
 /// Generate a Rustler NIF method for a struct using the shared TypeMapper.
-fn gen_nif_method(struct_name: &str, method: &MethodDef, mapper: &RustlerMapper) -> String {
+fn gen_nif_method(struct_name: &str, method: &MethodDef, mapper: &RustlerMapper, is_opaque: bool) -> String {
     let method_fn_name = format!("{}_{}", struct_name.to_lowercase(), method.name);
 
     let mut params = if method.receiver.is_some() {
-        vec![format!("resource: ResourceArc<{}>", struct_name)]
+        if is_opaque {
+            vec![format!("resource: ResourceArc<{}>", struct_name)]
+        } else {
+            vec![format!("obj: {}", struct_name)]
+        }
     } else {
         vec![]
     };
@@ -251,11 +257,15 @@ fn gen_nif_method(struct_name: &str, method: &MethodDef, mapper: &RustlerMapper)
 }
 
 /// Generate a Rustler NIF async method for a struct (sync wrapper scheduled on DirtyCpu).
-fn gen_nif_async_method(struct_name: &str, method: &MethodDef, mapper: &RustlerMapper) -> String {
+fn gen_nif_async_method(struct_name: &str, method: &MethodDef, mapper: &RustlerMapper, is_opaque: bool) -> String {
     let method_fn_name = format!("{}_{}_async", struct_name.to_lowercase(), method.name);
 
     let mut params = if method.receiver.is_some() {
-        vec![format!("resource: ResourceArc<{}>", struct_name)]
+        if is_opaque {
+            vec![format!("resource: ResourceArc<{}>", struct_name)]
+        } else {
+            vec![format!("obj: {}", struct_name)]
+        }
     } else {
         vec![]
     };

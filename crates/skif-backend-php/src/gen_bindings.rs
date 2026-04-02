@@ -178,20 +178,46 @@ fn gen_opaque_struct_methods(typ: &TypeDef, mapper: &PhpMapper, _opaque_types: &
     impl_builder.build()
 }
 
+/// Return true if a TypeRef contains a Named type (another struct/class that
+/// ext-php-rs cannot deserialize from a PHP value as an owned parameter).
+fn type_ref_has_named(ty: &skif_core::ir::TypeRef) -> bool {
+    use skif_core::ir::TypeRef;
+    match ty {
+        TypeRef::Named(_) => true,
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => type_ref_has_named(inner),
+        TypeRef::Map(k, v) => type_ref_has_named(k) || type_ref_has_named(v),
+        _ => false,
+    }
+}
+
 /// Generate ext-php-rs methods for a struct.
 fn gen_struct_methods(typ: &TypeDef, mapper: &PhpMapper) -> String {
     let mut impl_builder = ImplBuilder::new(&typ.name);
     impl_builder.add_attr("php_impl");
 
     if !typ.fields.is_empty() {
-        let map_fn = |ty: &skif_core::ir::TypeRef| mapper.map_type(ty);
-        let (param_list, _, assignments) = constructor_parts(&typ.fields, &map_fn);
-        let constructor = format!(
-            "pub fn __construct({param_list}) -> Self {{\n    \
-             Self {{ {assignments} }}\n\
-             }}"
-        );
-        impl_builder.add_method(&constructor);
+        let has_named_params = typ.fields.iter().any(|f| type_ref_has_named(&f.ty));
+        if has_named_params {
+            // ext-php-rs cannot convert PHP values into #[php_class] structs as owned
+            // constructor parameters (FromZvalMut not satisfied). Generate a todo!()
+            // constructor to keep the class visible in PHP but defer implementation.
+            let constructor = format!(
+                "pub fn __construct() -> Self {{\n    \
+                 todo!(\"constructor for {} requires complex params — implement manually\")\n\
+                 }}",
+                typ.name
+            );
+            impl_builder.add_method(&constructor);
+        } else {
+            let map_fn = |ty: &skif_core::ir::TypeRef| mapper.map_type(ty);
+            let (param_list, _, assignments) = constructor_parts(&typ.fields, &map_fn);
+            let constructor = format!(
+                "pub fn __construct({param_list}) -> Self {{\n    \
+                 Self {{ {assignments} }}\n\
+                 }}"
+            );
+            impl_builder.add_method(&constructor);
+        }
     }
 
     let (instance, statics) = partition_methods(&typ.methods);
