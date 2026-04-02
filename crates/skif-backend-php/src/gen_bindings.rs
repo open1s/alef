@@ -53,7 +53,8 @@ impl Backend for PhpBackend {
     }
 
     fn generate_bindings(&self, api: &ApiSurface, config: &SkifConfig) -> anyhow::Result<Vec<GeneratedFile>> {
-        let mapper = PhpMapper;
+        let enum_names = api.enums.iter().map(|e| e.name.clone()).collect();
+        let mapper = PhpMapper { enum_names };
         let core_import = config.core_import();
         let cfg = Self::binding_config(&core_import);
 
@@ -111,9 +112,15 @@ impl Backend for PhpBackend {
         }
 
         let convertible = skif_codegen::conversions::convertible_types(api);
-        // From/Into conversions with PHP-specific i64 casts
+        // From/Into conversions with PHP-specific i64 casts.
+        // Skip types with enum Named fields: PhpMapper maps enum Named→String, so the
+        // binding stores a String where the core has an enum. Auto-generated .into()
+        // calls would require From<String> for the core enum which doesn't exist.
+        let enum_names_ref = &mapper.enum_names;
         for typ in &api.types {
-            if skif_codegen::conversions::can_generate_conversion(typ, &convertible) {
+            if skif_codegen::conversions::can_generate_conversion(typ, &convertible)
+                && !has_enum_named_field(typ, enum_names_ref)
+            {
                 builder.add_item(&gen_php_from_binding_to_core(typ, &core_import));
                 builder.add_item(&gen_php_from_core_to_binding(typ, &core_import));
             }
@@ -400,6 +407,22 @@ fn php_field_conversion(name: &str, ty: &skif_core::ir::TypeRef, optional: bool,
         },
         _ => format!("{name}: {val}.{name}"),
     }
+}
+
+/// Return true if any field of the type (recursively through Optional/Vec) is a Named type
+/// that is an enum. PHP maps enum Named types to String, so From/Into impls would need
+/// From<String> for the core enum which doesn't exist — skip generation for such types.
+fn has_enum_named_field(typ: &skif_core::ir::TypeDef, enum_names: &AHashSet<String>) -> bool {
+    fn type_ref_has_enum_named(ty: &skif_core::ir::TypeRef, enum_names: &AHashSet<String>) -> bool {
+        use skif_core::ir::TypeRef;
+        match ty {
+            TypeRef::Named(name) => enum_names.contains(name.as_str()),
+            TypeRef::Optional(inner) | TypeRef::Vec(inner) => type_ref_has_enum_named(inner, enum_names),
+            TypeRef::Map(k, v) => type_ref_has_enum_named(k, enum_names) || type_ref_has_enum_named(v, enum_names),
+            _ => false,
+        }
+    }
+    typ.fields.iter().any(|f| type_ref_has_enum_named(&f.ty, enum_names))
 }
 
 /// Generate a global Tokio runtime for PHP async support.

@@ -17,7 +17,7 @@ impl TypeMapper for WasmMapper {
     fn named<'a>(&self, name: &'a str) -> Cow<'a, str> {
         match self.overrides.get(name) {
             Some(override_ty) => Cow::Owned(override_ty.clone()),
-            None => Cow::Borrowed(name),
+            None => Cow::Owned(format!("Js{name}")),
         }
     }
 

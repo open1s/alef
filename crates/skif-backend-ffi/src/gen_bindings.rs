@@ -158,14 +158,14 @@ fn clear_last_error() {{
 }}
 
 /// Return the last error code (0 means no error).
-#[no_mangle]
-pub extern "C" fn {prefix}_last_error_code() -> i32 {{
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn {prefix}_last_error_code() -> i32 {{
     LAST_ERROR_CODE.get()
 }}
 
 /// Return the last error message. The pointer is valid until the next FFI call on this thread.
-#[no_mangle]
-pub extern "C" fn {prefix}_last_error_context() -> *const c_char {{
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn {prefix}_last_error_context() -> *const c_char {{
     LAST_ERROR_CONTEXT.with_borrow(|ctx| {{
         ctx.as_ref().map_or(std::ptr::null(), |c| c.as_ptr())
     }})
@@ -181,8 +181,8 @@ pub extern "C" fn {prefix}_last_error_context() -> *const c_char {{
 fn gen_free_string(prefix: &str) -> String {
     format!(
         r#"/// Free a string previously returned by this library.
-#[no_mangle]
-pub extern "C" fn {prefix}_free_string(ptr: *mut c_char) {{
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn {prefix}_free_string(ptr: *mut c_char) {{
     if !ptr.is_null() {{
         unsafe {{ drop(CString::from_raw(ptr)); }}
     }}
@@ -198,8 +198,8 @@ pub extern "C" fn {prefix}_free_string(ptr: *mut c_char) {{
 fn gen_version(prefix: &str) -> String {
     format!(
         r#"/// Return the library version string. The pointer is static and must NOT be freed.
-#[no_mangle]
-pub extern "C" fn {prefix}_version() -> *const c_char {{
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn {prefix}_version() -> *const c_char {{
     static VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
     VERSION.as_ptr() as *const c_char
 }}"#,
@@ -221,10 +221,10 @@ fn gen_type_from_json(typ: &TypeDef, prefix: &str) -> String {
         "/// Create a `{type_name}` from a JSON string. Returns null on failure."
     )
     .unwrap();
-    writeln!(out, "#[no_mangle]").unwrap();
+    writeln!(out, "#[unsafe(no_mangle)]").unwrap();
     writeln!(
         out,
-        "pub extern \"C\" fn {prefix}_{type_snake}_from_json(json: *const c_char) -> *mut {type_name} {{"
+        "pub unsafe extern \"C\" fn {prefix}_{type_snake}_from_json(json: *const c_char) -> *mut {type_name} {{"
     )
     .unwrap();
     writeln!(out, "    clear_last_error();").unwrap();
@@ -265,10 +265,10 @@ fn gen_type_free(typ: &TypeDef, prefix: &str) -> String {
     let mut out = String::with_capacity(2048);
 
     writeln!(out, "/// Free a `{type_name}` handle.").unwrap();
-    writeln!(out, "#[no_mangle]").unwrap();
+    writeln!(out, "#[unsafe(no_mangle)]").unwrap();
     writeln!(
         out,
-        "pub extern \"C\" fn {prefix}_{type_snake}_free(ptr: *mut {type_name}) {{"
+        "pub unsafe extern \"C\" fn {prefix}_{type_snake}_free(ptr: *mut {type_name}) {{"
     )
     .unwrap();
     writeln!(out, "    if !ptr.is_null() {{").unwrap();
@@ -302,7 +302,7 @@ fn gen_field_accessor(typ: &TypeDef, field: &FieldDef, prefix: &str) -> String {
     let mut out = String::with_capacity(2048);
 
     writeln!(out, "/// Get the `{field_name}` field from a `{type_name}`.").unwrap();
-    writeln!(out, "#[no_mangle]").unwrap();
+    writeln!(out, "#[unsafe(no_mangle)]").unwrap();
 
     // Determine if we need an extra out-param for byte-length
     let needs_len_out = matches!(field.ty, TypeRef::Bytes) && !field.optional;
@@ -310,13 +310,13 @@ fn gen_field_accessor(typ: &TypeDef, field: &FieldDef, prefix: &str) -> String {
     if needs_len_out {
         writeln!(
             out,
-            "pub extern \"C\" fn {prefix}_{type_snake}_{field_name}(ptr: *const {type_name}, out_len: *mut usize) -> {ret_type} {{"
+            "pub unsafe extern \"C\" fn {prefix}_{type_snake}_{field_name}(ptr: *const {type_name}, out_len: *mut usize) -> {ret_type} {{"
         )
         .unwrap();
     } else {
         writeln!(
             out,
-            "pub extern \"C\" fn {prefix}_{type_snake}_{field_name}(ptr: *const {type_name}) -> {ret_type} {{"
+            "pub unsafe extern \"C\" fn {prefix}_{type_snake}_{field_name}(ptr: *const {type_name}) -> {ret_type} {{"
         )
         .unwrap();
     }
@@ -454,9 +454,11 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, prefix: &str, core_impo
     let mut out = String::with_capacity(2048);
 
     if !method.doc.is_empty() {
-        writeln!(out, "/// {}", method.doc).unwrap();
+        for line in method.doc.lines() {
+            writeln!(out, "/// {}", line).unwrap();
+        }
     }
-    writeln!(out, "#[no_mangle]").unwrap();
+    writeln!(out, "#[unsafe(no_mangle)]").unwrap();
 
     // Build parameter list
     let mut params = Vec::new();
@@ -495,11 +497,11 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, prefix: &str, core_impo
     }
 
     if is_void_return(&method.return_type) && !has_error {
-        writeln!(out, "pub extern \"C\" fn {fn_name}(").unwrap();
+        writeln!(out, "pub unsafe extern \"C\" fn {fn_name}(").unwrap();
         writeln!(out, "{}", params.join(",\n")).unwrap();
         writeln!(out, ") {{").unwrap();
     } else {
-        writeln!(out, "pub extern \"C\" fn {fn_name}(").unwrap();
+        writeln!(out, "pub unsafe extern \"C\" fn {fn_name}(").unwrap();
         writeln!(out, "{}", params.join(",\n")).unwrap();
         writeln!(out, ") -> {ret_type} {{").unwrap();
     }
@@ -588,9 +590,11 @@ fn gen_free_function(func: &FunctionDef, prefix: &str, core_import: &str) -> Str
     let mut out = String::with_capacity(2048);
 
     if !func.doc.is_empty() {
-        writeln!(out, "/// {}", func.doc).unwrap();
+        for line in func.doc.lines() {
+            writeln!(out, "/// {}", line).unwrap();
+        }
     }
-    writeln!(out, "#[no_mangle]").unwrap();
+    writeln!(out, "#[unsafe(no_mangle)]").unwrap();
 
     // Build parameter list
     let mut params = Vec::new();
@@ -610,11 +614,11 @@ fn gen_free_function(func: &FunctionDef, prefix: &str, core_import: &str) -> Str
     };
 
     if is_void_return(&func.return_type) && !has_error {
-        writeln!(out, "pub extern \"C\" fn {ffi_name}(").unwrap();
+        writeln!(out, "pub unsafe extern \"C\" fn {ffi_name}(").unwrap();
         writeln!(out, "{}", params.join(",\n")).unwrap();
         writeln!(out, ") {{").unwrap();
     } else {
-        writeln!(out, "pub extern \"C\" fn {ffi_name}(").unwrap();
+        writeln!(out, "pub unsafe extern \"C\" fn {ffi_name}(").unwrap();
         writeln!(out, "{}", params.join(",\n")).unwrap();
         writeln!(out, ") -> {ret_type} {{").unwrap();
     }
@@ -939,10 +943,10 @@ fn gen_enum_from_i32(enum_def: &EnumDef, prefix: &str) -> String {
         "/// Convert an integer to a `{enum_name}` variant. Returns -1 on invalid input."
     )
     .unwrap();
-    writeln!(out, "#[no_mangle]").unwrap();
+    writeln!(out, "#[unsafe(no_mangle)]").unwrap();
     writeln!(
         out,
-        "pub extern \"C\" fn {prefix}_{enum_snake}_from_i32(value: i32) -> i32 {{"
+        "pub unsafe extern \"C\" fn {prefix}_{enum_snake}_from_i32(value: i32) -> i32 {{"
     )
     .unwrap();
     writeln!(out, "    match value {{").unwrap();
@@ -968,10 +972,10 @@ fn gen_enum_to_i32(enum_def: &EnumDef, prefix: &str) -> String {
         "/// Convert a `{enum_name}` variant name (C string) to its integer value. Returns -1 on invalid input."
     )
     .unwrap();
-    writeln!(out, "#[no_mangle]").unwrap();
+    writeln!(out, "#[unsafe(no_mangle)]").unwrap();
     writeln!(
         out,
-        "pub extern \"C\" fn {prefix}_{enum_snake}_from_str(name: *const c_char) -> i32 {{"
+        "pub unsafe extern \"C\" fn {prefix}_{enum_snake}_from_str(name: *const c_char) -> i32 {{"
     )
     .unwrap();
     writeln!(out, "    if name.is_null() {{").unwrap();

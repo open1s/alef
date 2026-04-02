@@ -1,3 +1,4 @@
+use ahash::AHashSet;
 use skif_codegen::type_mapper::TypeMapper;
 use skif_core::ir::PrimitiveType;
 use std::borrow::Cow;
@@ -5,7 +6,12 @@ use std::borrow::Cow;
 /// TypeMapper for ext-php-rs bindings.
 /// PHP integers are signed, so U64/Usize/Isize map to i64.
 /// JSON is handled as String.
-pub struct PhpMapper;
+/// Enum named types map to String (ext-php-rs does not support Rust enums as PHP
+/// types; they are represented as string constants instead).
+pub struct PhpMapper {
+    /// Names of enum types in the API surface. These are mapped to String.
+    pub enum_names: AHashSet<String>,
+}
 
 impl TypeMapper for PhpMapper {
     fn primitive(&self, prim: &PrimitiveType) -> Cow<'static, str> {
@@ -28,6 +34,18 @@ impl TypeMapper for PhpMapper {
 
     fn json(&self) -> Cow<'static, str> {
         Cow::Borrowed("String")
+    }
+
+    /// Map enum types to String for PHP.
+    /// ext-php-rs does not support Rust enums as PHP types; enum fields are
+    /// represented as strings and paired with the generated string constants.
+    /// Struct (class) types pass through unchanged so PHP can pass objects.
+    fn named<'a>(&self, name: &'a str) -> Cow<'a, str> {
+        if self.enum_names.contains(name) {
+            Cow::Borrowed("String")
+        } else {
+            Cow::Borrowed(name)
+        }
     }
 
     fn error_wrapper(&self) -> &str {

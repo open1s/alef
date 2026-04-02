@@ -197,7 +197,7 @@ fn gen_opaque_method(method: &MethodDef, mapper: &WasmMapper, _type_name: &str) 
 
     let js_name = to_node_name(&method.name);
     let js_name_attr = if js_name != method.name {
-        format!(", js_name = \"{}\"", js_name)
+        format!("(js_name = \"{}\")", js_name)
     } else {
         String::new()
     };
@@ -372,7 +372,7 @@ fn gen_method(method: &MethodDef, mapper: &WasmMapper, type_name: &str) -> Strin
 
     let js_name = to_node_name(&method.name);
     let js_name_attr = if js_name != method.name {
-        format!(", js_name = \"{}\"", js_name)
+        format!("(js_name = \"{}\")", js_name)
     } else {
         String::new()
     };
@@ -466,7 +466,7 @@ fn gen_function(func: &FunctionDef, mapper: &WasmMapper) -> String {
 
     let js_name = to_node_name(&func.name);
     let js_name_attr = if js_name != func.name {
-        format!(", js_name = \"{}\"", js_name)
+        format!("(js_name = \"{}\")", js_name)
     } else {
         String::new()
     };
