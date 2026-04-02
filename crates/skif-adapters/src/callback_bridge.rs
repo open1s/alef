@@ -79,13 +79,25 @@ fn gen_python_body(adapter: &AdapterConfig, _config: &SkifConfig) -> (String, St
     let struct_name = format!("Py{}Bridge", to_pascal_case(name));
     let trait_nm = trait_name(adapter);
     let method_nm = method_name(adapter);
-    let returns = returns_type(adapter);
+    let _returns = returns_type(adapter);
     let error = error_type(adapter);
-    let params = params_str(adapter);
-    let args = call_args(adapter);
+    let _params = params_str(adapter);
+    let _args = call_args(adapter);
+
+    // Import the trait and error type from core_path
+    let core_path = &adapter.core_path;
+    let import_base = core_path
+        .rsplit("::")
+        .skip(1)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("::");
 
     let struct_code = format!(
-        "/// Generated FFI bridge for {trait_nm} trait — Python implementation.\n\
+        "use {import_base}::{{{trait_nm}, {error}}};\n\n\
+         /// Generated FFI bridge for {trait_nm} trait — Python implementation.\n\
          pub struct {struct_name} {{\n    \
              callback: pyo3::Py<pyo3::PyAny>,\n    \
              is_async: bool,\n\
@@ -108,39 +120,33 @@ fn gen_python_body(adapter: &AdapterConfig, _config: &SkifConfig) -> (String, St
 
     let impl_code = format!(
         "impl {trait_nm} for {struct_name} {{\n    \
-             async fn {method_nm}(&self, {params}) -> Result<{returns}, {error}> {{\n        \
-                 let callback = self.callback.clone();\n        \
-                 let is_async = self.is_async;\n\
-         \n        \
-                 // Convert request to Python and call handler\n        \
-                 let result = tokio::task::spawn_blocking(move || {{\n            \
-                     pyo3::Python::attach(|py| {{\n                \
-                         let py_args = pyo3::types::PyTuple::new(py, [\n                    \
-                             // TODO: convert each param to Python representation\n                    \
-                             {args}\n                \
-                         ])?;\n\
-         \n                \
-                         let result = callback.call1(py, py_args)?;\n\
-         \n                \
-                         if is_async {{\n                    \
-                             // Await the coroutine\n                    \
-                             let asyncio = py.import(\"asyncio\")?;\n                    \
-                             let event_loop = asyncio.call_method0(\"new_event_loop\")?;\n                    \
-                             let awaited = event_loop.call_method1(\"run_until_complete\", (result.bind(py),))?;\n                    \
-                             Ok::<_, pyo3::PyErr>(awaited.unbind())\n                \
-                         }} else {{\n                    \
-                             Ok(result)\n                \
-                         }}\n            \
-                     }})\n        \
-                 }}).await\n        \
-                 .map_err(|e| {error}::from(e.to_string()))?\n        \
-                 .map_err(|e: pyo3::PyErr| {error}::from(e.to_string()))?;\n\
-         \n        \
-                 // Convert Python result to Rust\n        \
-                 pyo3::Python::attach(|py| {{\n            \
-                     let _bound = result.bind(py);\n            \
-                     // TODO: interpret response based on return type\n            \
-                     todo!(\"convert Python result to {returns}\")\n        \
+             type Input = pyo3::Py<pyo3::PyAny>;\n    \
+             type Output = pyo3::Py<pyo3::PyAny>;\n\n    \
+             fn prepare_request(&self, request_data: &spikard_http::handler_trait::RequestData) -> Result<Self::Input, {error}> {{\n        \
+                 todo!(\"convert RequestData to Python object\")\n    \
+             }}\n\n    \
+             fn interpret_response(&self, output: Self::Output) -> Result<axum::http::Response<axum::body::Body>, {error}> {{\n        \
+                 todo!(\"convert Python response to HTTP Response\")\n    \
+             }}\n\n    \
+             fn {method_nm}(&self, input: Self::Input) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Output, {error}>> + Send + '_>> {{\n        \
+                 Box::pin(async move {{\n            \
+                     let callback = self.callback.clone();\n            \
+                     let is_async = self.is_async;\n            \
+                     let result = tokio::task::spawn_blocking(move || {{\n                \
+                         pyo3::Python::attach(|py| {{\n                    \
+                             let result = callback.call1(py, (input,))?;\n                    \
+                             if is_async {{\n                        \
+                                 let asyncio = py.import(\"asyncio\")?;\n                        \
+                                 let event_loop = asyncio.call_method0(\"new_event_loop\")?;\n                        \
+                                 let awaited = event_loop.call_method1(\"run_until_complete\", (result.bind(py),))?;\n                        \
+                                 Ok::<_, pyo3::PyErr>(awaited.unbind())\n                    \
+                             }} else {{\n                        \
+                                 Ok(result)\n                    \
+                             }}\n                \
+                         }})\n            \
+                     }}).await\n            \
+                     .map_err(|e| {error}::Execution(e.to_string()))?\n            \
+                     .map_err(|e: pyo3::PyErr| {error}::Execution(e.to_string()))\n        \
                  }})\n    \
              }}\n\
          }}"

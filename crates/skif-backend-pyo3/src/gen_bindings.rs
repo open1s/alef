@@ -98,13 +98,26 @@ impl Backend for Pyo3Backend {
             builder.add_item(&format!("pub mod {module};"));
         }
 
-        // Add streaming iterator structs from adapters
+        // Add adapter-generated standalone items (streaming iterators, callback bridges)
         for adapter in &config.adapters {
-            if matches!(adapter.pattern, AdapterPattern::Streaming) {
-                let key = format!("{}.__stream_struct__", adapter.item_type.as_deref().unwrap_or(""));
-                if let Some(struct_code) = adapter_bodies.get(&key) {
-                    builder.add_item(struct_code);
+            match adapter.pattern {
+                AdapterPattern::Streaming => {
+                    let key = format!("{}.__stream_struct__", adapter.item_type.as_deref().unwrap_or(""));
+                    if let Some(struct_code) = adapter_bodies.get(&key) {
+                        builder.add_item(struct_code);
+                    }
                 }
+                AdapterPattern::CallbackBridge => {
+                    let struct_key = format!("{}.__bridge_struct__", adapter.name);
+                    let impl_key = format!("{}.__bridge_impl__", adapter.name);
+                    if let Some(struct_code) = adapter_bodies.get(&struct_key) {
+                        builder.add_item(struct_code);
+                    }
+                    if let Some(impl_code) = adapter_bodies.get(&impl_key) {
+                        builder.add_item(impl_code);
+                    }
+                }
+                _ => {}
             }
         }
 
