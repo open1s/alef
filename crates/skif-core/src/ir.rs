@@ -23,6 +23,10 @@ pub struct TypeDef {
     pub doc: String,
     #[serde(default)]
     pub cfg: Option<String>,
+    /// True if this type was extracted from a trait definition.
+    /// Trait types need `dyn` keyword when used as opaque inner types.
+    #[serde(default)]
+    pub is_trait: bool,
 }
 
 /// A field on a public struct.
@@ -50,6 +54,10 @@ pub struct MethodDef {
     pub error_type: Option<String>,
     pub doc: String,
     pub receiver: Option<ReceiverKind>,
+    /// True if any param or return type was sanitized during unknown type resolution.
+    /// Methods with sanitized signatures cannot be auto-delegated.
+    #[serde(default)]
+    pub sanitized: bool,
 }
 
 /// How `self` is received.
@@ -72,6 +80,9 @@ pub struct FunctionDef {
     pub doc: String,
     #[serde(default)]
     pub cfg: Option<String>,
+    /// True if any param or return type was sanitized during unknown type resolution.
+    #[serde(default)]
+    pub sanitized: bool,
 }
 
 /// A function/method parameter.
@@ -81,6 +92,9 @@ pub struct ParamDef {
     pub ty: TypeRef,
     pub optional: bool,
     pub default: Option<String>,
+    /// True if this param's type was sanitized during unknown type resolution.
+    #[serde(default)]
+    pub sanitized: bool,
 }
 
 /// A public enum.

@@ -228,7 +228,7 @@ pub fn init_async_runtime() -> PyResult<()> {
 fn gen_module_init(module_name: &str, api: &ApiSurface, config: &SkifConfig) -> String {
     let mut lines = vec![
         "#[pymodule]".to_string(),
-        format!("fn {module_name}(m: &Bound<'_, PyModule>) -> PyResult<()> {{"),
+        format!("pub fn {module_name}(m: &Bound<'_, PyModule>) -> PyResult<()> {{"),
     ];
 
     // Check if we have async functions

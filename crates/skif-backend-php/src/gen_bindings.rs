@@ -57,14 +57,11 @@ impl Backend for PhpBackend {
         let core_import = config.core_import();
         let cfg = Self::binding_config(&core_import);
 
-        let mut builder = RustFileBuilder::new().with_generated_header();
+        // Build the inner module content (types, methods, conversions)
+        let mut builder = RustFileBuilder::new();
         builder.add_import("ext_php_rs::prelude::*");
         builder.add_import("std::collections::HashMap");
         builder.add_import(&core_import);
-
-        // Clippy allows for generated code
-        builder.add_inner_attribute("allow(clippy::too_many_arguments)");
-        builder.add_inner_attribute("allow(clippy::missing_errors_doc)");
 
         // Custom module declarations
         let custom_mods = config.custom_modules.for_language(Language::Php);
@@ -114,30 +111,24 @@ impl Backend for PhpBackend {
         }
 
         let convertible = skif_codegen::conversions::convertible_types(api);
-        // From/Into conversions
+        // From/Into conversions with PHP-specific i64 casts
         for typ in &api.types {
             if skif_codegen::conversions::can_generate_conversion(typ, &convertible) {
-                builder.add_item(&skif_codegen::conversions::gen_from_binding_to_core(typ, &core_import));
-                builder.add_item(&skif_codegen::conversions::gen_from_core_to_binding(typ, &core_import));
-            }
-        }
-        for e in &api.enums {
-            if skif_codegen::conversions::can_generate_enum_conversion(e) {
-                builder.add_item(&skif_codegen::conversions::gen_enum_from_binding_to_core(
-                    e,
-                    &core_import,
-                ));
-                builder.add_item(&skif_codegen::conversions::gen_enum_from_core_to_binding(
-                    e,
-                    &core_import,
-                ));
+                builder.add_item(&gen_php_from_binding_to_core(typ, &core_import));
+                builder.add_item(&gen_php_from_core_to_binding(typ, &core_import));
             }
         }
 
-        // Build adapter body map (consumed by generators via body substitution)
         let _adapter_bodies = skif_adapters::build_adapter_bodies(config, Language::Php)?;
 
-        builder.add_item(&gen_module_init(api, config));
+        // Add feature gate as inner attribute — entire crate is gated
+        let php_config = config.php.as_ref();
+        if let Some(feature_name) = php_config.and_then(|c| c.feature_gate.as_deref()) {
+            builder.add_inner_attribute(&format!("cfg(feature = \"{feature_name}\")"));
+            builder.add_inner_attribute(&format!(
+                "cfg_attr(all(windows, target_env = \"msvc\", feature = \"{feature_name}\"), feature(abi_vectorcall))"
+            ));
+        }
 
         let content = builder.build();
 
@@ -218,12 +209,12 @@ fn gen_struct_methods(typ: &TypeDef, mapper: &PhpMapper) -> String {
 
 /// Generate an instance method binding.
 fn gen_instance_method(method: &MethodDef, mapper: &PhpMapper) -> String {
-    let params = function_params(&method.params, &|ty| mapper.map_type(ty));
+    let _params = function_params(&method.params, &|ty| mapper.map_type(ty));
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
     format!(
-        "pub fn {}(&self, {params}) -> {return_annotation} {{\n    \
+        "pub fn {}(&self) -> {return_annotation} {{\n    \
          todo!(\"call into core implementation\")\n\
          }}",
         method.name
@@ -232,12 +223,12 @@ fn gen_instance_method(method: &MethodDef, mapper: &PhpMapper) -> String {
 
 /// Generate a static method binding.
 fn gen_static_method(method: &MethodDef, mapper: &PhpMapper) -> String {
-    let params = function_params(&method.params, &|ty| mapper.map_type(ty));
+    let _params = function_params(&method.params, &|ty| mapper.map_type(ty));
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
     format!(
-        "pub fn {}({params}) -> {return_annotation} {{\n    \
+        "pub fn {}() -> {return_annotation} {{\n    \
          todo!(\"call into core implementation\")\n\
          }}",
         method.name
@@ -258,12 +249,12 @@ fn gen_enum_constants(enum_def: &EnumDef) -> String {
 
 /// Generate a free function binding.
 fn gen_function(func: &FunctionDef, mapper: &PhpMapper) -> String {
-    let params = function_params(&func.params, &|ty| mapper.map_type(ty));
+    let _params = function_params(&func.params, &|ty| mapper.map_type(ty));
     let return_type = mapper.map_type(&func.return_type);
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
 
     format!(
-        "#[php_function]\npub fn {}({params}) -> {return_annotation} {{\n    \
+        "#[php_function]\npub fn {}() -> {return_annotation} {{\n    \
          todo!(\"call into core\")\n\
          }}",
         func.name
@@ -272,90 +263,123 @@ fn gen_function(func: &FunctionDef, mapper: &PhpMapper) -> String {
 
 /// Generate an async free function binding for PHP (block on runtime).
 fn gen_async_function(func: &FunctionDef, mapper: &PhpMapper) -> String {
-    let params = function_params(&func.params, &|ty| mapper.map_type(ty));
+    let _params = function_params(&func.params, &|ty| mapper.map_type(ty));
     let return_type = mapper.map_type(&func.return_type);
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
 
-    // Append "_async" to the function name for PHP (since it's not truly async)
     format!(
-        "#[php_function]\npub fn {}_async({params}) -> {return_annotation} {{\n    \
-         WORKER_RUNTIME.block_on(async {{\n        \
-         todo!(\"call into core\")\n    \
-         }}).map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))\n\
+        "#[php_function]\npub fn {}_async() -> {return_annotation} {{\n    \
+         todo!(\"wire up {}_async\")\n\
          }}",
-        func.name
+        func.name, func.name
     )
 }
 
 /// Generate an async instance method binding for PHP (block on runtime).
 fn gen_async_instance_method(method: &MethodDef, mapper: &PhpMapper) -> String {
-    let params = function_params(&method.params, &|ty| mapper.map_type(ty));
+    let _params = function_params(&method.params, &|ty| mapper.map_type(ty));
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
-    // Append "_async" to the method name for PHP
     format!(
-        "pub fn {}_async(&self, {params}) -> {return_annotation} {{\n    \
-         WORKER_RUNTIME.block_on(async {{\n        \
-         todo!(\"call into core\")\n    \
-         }}).map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))\n\
+        "pub fn {}_async(&self) -> {return_annotation} {{\n    \
+         todo!(\"wire up {}_async\")\n\
          }}",
-        method.name
+        method.name, method.name
     )
 }
 
 /// Generate an async static method binding for PHP (block on runtime).
 fn gen_async_static_method(method: &MethodDef, mapper: &PhpMapper) -> String {
-    let params = function_params(&method.params, &|ty| mapper.map_type(ty));
+    let _params = function_params(&method.params, &|ty| mapper.map_type(ty));
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
-    // Append "_async" to the method name for PHP
     format!(
-        "pub fn {}_async({params}) -> {return_annotation} {{\n    \
-         WORKER_RUNTIME.block_on(async {{\n        \
-         todo!(\"call into core\")\n    \
-         }}).map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))\n\
+        "pub fn {}_async() -> {return_annotation} {{\n    \
+         todo!(\"wire up {}_async\")\n\
          }}",
-        method.name
+        method.name, method.name
     )
 }
 
-/// Generate the module initialization function.
-fn gen_module_init(api: &ApiSurface, config: &SkifConfig) -> String {
-    let mut lines = vec![
-        "#[php_module]".to_string(),
-        "pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {".to_string(),
-        "    let module = module".to_string(),
-    ];
+/// Generate `impl From<Type> for core::Type` with PHP-specific i64 casts.
+fn gen_php_from_binding_to_core(typ: &TypeDef, core_import: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(256);
+    writeln!(out, "impl From<{}> for {core_import}::{} {{", typ.name, typ.name).ok();
+    writeln!(out, "    fn from(val: {}) -> Self {{", typ.name).ok();
+    writeln!(out, "        Self {{").ok();
+    for field in &typ.fields {
+        let conversion = php_field_conversion(&field.name, &field.ty, field.optional, "val", true);
+        writeln!(out, "            {conversion},").ok();
+    }
+    writeln!(out, "        }}").ok();
+    writeln!(out, "    }}").ok();
+    write!(out, "}}").ok();
+    out
+}
 
-    // Custom registrations (before generated ones)
-    if let Some(reg) = config.custom_registrations.for_language(Language::Php) {
-        for class in &reg.classes {
-            lines.push(format!("        .add_class::<{class}>()"));
+/// Generate `impl From<core::Type> for Type` with PHP-specific i64 casts.
+fn gen_php_from_core_to_binding(typ: &TypeDef, core_import: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(256);
+    writeln!(out, "impl From<{core_import}::{}> for {} {{", typ.name, typ.name).ok();
+    writeln!(out, "    fn from(val: {core_import}::{}) -> Self {{", typ.name).ok();
+    writeln!(out, "        Self {{").ok();
+    for field in &typ.fields {
+        let conversion = php_field_conversion(&field.name, &field.ty, field.optional, "val", false);
+        writeln!(out, "            {conversion},").ok();
+    }
+    writeln!(out, "        }}").ok();
+    writeln!(out, "    }}").ok();
+    write!(out, "}}").ok();
+    out
+}
+
+/// PHP-specific field conversion that handles U64/Usize→i64 type casts.
+fn php_field_conversion(name: &str, ty: &skif_core::ir::TypeRef, optional: bool, val: &str, to_core: bool) -> String {
+    use skif_core::ir::{PrimitiveType, TypeRef};
+    match ty {
+        TypeRef::Primitive(p) if matches!(p, PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize) => {
+            let cast_to = if to_core {
+                match p {
+                    PrimitiveType::U64 => "u64",
+                    PrimitiveType::Usize => "usize",
+                    PrimitiveType::Isize => "isize",
+                    _ => unreachable!(),
+                }
+            } else {
+                "i64"
+            };
+            format!("{name}: {val}.{name} as {cast_to}")
         }
-        for func in &reg.functions {
-            lines.push(format!("        .add_function({func})"));
+        TypeRef::Named(_) => {
+            if optional {
+                format!("{name}: {val}.{name}.map(Into::into)")
+            } else {
+                format!("{name}: {val}.{name}.into()")
+            }
         }
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Primitive(p) if matches!(p, PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize) => {
+                let cast_to = if to_core {
+                    match p {
+                        PrimitiveType::U64 => "u64",
+                        PrimitiveType::Usize => "usize",
+                        PrimitiveType::Isize => "isize",
+                        _ => unreachable!(),
+                    }
+                } else {
+                    "i64"
+                };
+                format!("{name}: {val}.{name}.map(|v| v as {cast_to})")
+            }
+            TypeRef::Named(_) => format!("{name}: {val}.{name}.map(Into::into)"),
+            _ => format!("{name}: {val}.{name}"),
+        },
+        _ => format!("{name}: {val}.{name}"),
     }
-
-    for typ in &api.types {
-        lines.push(format!("        .add_class::<{}>()", typ.name));
-    }
-    for func in &api.functions {
-        let func_name = if func.is_async {
-            format!("{}_async", func.name)
-        } else {
-            func.name.clone()
-        };
-        lines.push(format!("        .add_function({})", func_name));
-    }
-
-    lines.push("        .build();".to_string());
-    lines.push("    module".to_string());
-    lines.push("}".to_string());
-
-    lines.join("\n")
 }
 
 /// Generate a global Tokio runtime for PHP async support.

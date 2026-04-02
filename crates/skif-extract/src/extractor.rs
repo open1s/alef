@@ -107,6 +107,7 @@ fn extract_items(
                         methods: vec![],
                         is_opaque: true, // type aliases are opaque (no fields)
                         is_clone: false,
+                        is_trait: false,
                         doc,
                         cfg: None,
                     });
@@ -154,6 +155,7 @@ fn extract_items(
                                     error_type,
                                     doc: method_doc,
                                     receiver,
+                                    sanitized: false,
                                 })
                             } else {
                                 None
@@ -170,6 +172,7 @@ fn extract_items(
                         is_clone: false,
                         doc,
                         cfg: None,
+                        is_trait: true,
                     });
                 }
             }
@@ -352,6 +355,7 @@ fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_path: &str) -
         methods: vec![],
         is_opaque,
         is_clone,
+        is_trait: false,
         doc,
         cfg,
     })
@@ -470,6 +474,7 @@ fn extract_function(item: &syn::ItemFn, crate_name: &str, module_path: &str) -> 
         error_type,
         doc,
         cfg,
+        sanitized: false,
     })
 }
 
@@ -540,6 +545,7 @@ fn extract_impl_block(
             methods,
             is_opaque: true,
             is_clone: false,
+            is_trait: false,
             doc: String::new(),
             cfg: None,
         });
@@ -611,6 +617,7 @@ fn extract_method(method: &syn::ImplItemFn, _crate_name: &str) -> MethodDef {
         error_type,
         doc,
         receiver,
+        sanitized: false,
     }
 }
 
@@ -741,6 +748,7 @@ fn extract_params(inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::token::C
                     ty,
                     optional,
                     default: None,
+                    sanitized: false,
                 })
             } else {
                 None // Skip self receiver
@@ -1568,6 +1576,7 @@ mod tests {
                 methods: vec![],
                 is_opaque: true,
                 is_clone: false,
+                is_trait: false,
                 doc: String::new(),
                 cfg: None,
             }],
@@ -1587,6 +1596,7 @@ mod tests {
                     methods: vec![],
                     is_opaque: true,
                     is_clone: false,
+                    is_trait: false,
                     doc: String::new(),
                     cfg: None,
                 },
@@ -1597,6 +1607,7 @@ mod tests {
                     methods: vec![],
                     is_opaque: true,
                     is_clone: false,
+                    is_trait: false,
                     doc: String::new(),
                     cfg: None,
                 },
@@ -1634,6 +1645,7 @@ mod tests {
                     methods: vec![],
                     is_opaque: true,
                     is_clone: false,
+                    is_trait: false,
                     doc: String::new(),
                     cfg: None,
                 },
@@ -1644,6 +1656,7 @@ mod tests {
                     methods: vec![],
                     is_opaque: true,
                     is_clone: false,
+                    is_trait: false,
                     doc: String::new(),
                     cfg: None,
                 },

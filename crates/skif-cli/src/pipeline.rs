@@ -472,17 +472,35 @@ fn sanitize_unknown_types(api: &mut ApiSurface) {
             }
         }
         for method in &mut typ.methods {
+            let mut method_sanitized = false;
             for param in &mut method.params {
-                sanitize_type_ref(&mut param.ty, &known_types, &known_enums);
+                if sanitize_type_ref(&mut param.ty, &known_types, &known_enums) {
+                    param.sanitized = true;
+                    method_sanitized = true;
+                }
             }
-            sanitize_type_ref(&mut method.return_type, &known_types, &known_enums);
+            if sanitize_type_ref(&mut method.return_type, &known_types, &known_enums) {
+                method_sanitized = true;
+            }
+            if method_sanitized {
+                method.sanitized = true;
+            }
         }
     }
     for func in &mut api.functions {
+        let mut func_sanitized = false;
         for param in &mut func.params {
-            sanitize_type_ref(&mut param.ty, &known_types, &known_enums);
+            if sanitize_type_ref(&mut param.ty, &known_types, &known_enums) {
+                param.sanitized = true;
+                func_sanitized = true;
+            }
         }
-        sanitize_type_ref(&mut func.return_type, &known_types, &known_enums);
+        if sanitize_type_ref(&mut func.return_type, &known_types, &known_enums) {
+            func_sanitized = true;
+        }
+        if func_sanitized {
+            func.sanitized = true;
+        }
     }
 }
 

@@ -75,6 +75,8 @@ fn wrap_opaque_return(expr: &str, return_type: &TypeRef, type_name: &str, opaque
             // Non-opaque Named return type — From impl may not exist, use todo!()
             format!("todo!(\"convert return type {n} from core\")")
         }
+        // Use .into() for String/Bytes/Path returns to handle &str→String, &[u8]→Vec<u8> etc.
+        TypeRef::String | TypeRef::Bytes | TypeRef::Path => format!("{expr}.into()"),
         _ => expr.to_string(),
     }
 }
@@ -123,6 +125,7 @@ pub fn gen_struct(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfi
 }
 
 /// Generate an opaque wrapper struct with `inner: Arc<core::Type>`.
+/// For trait types, uses `Arc<dyn Type + Send + Sync>`.
 pub fn gen_opaque_struct(typ: &TypeDef, cfg: &RustBindingConfig) -> String {
     let mut out = String::with_capacity(512);
     if let Some(ref cfg_condition) = typ.cfg {
@@ -136,7 +139,11 @@ pub fn gen_opaque_struct(typ: &TypeDef, cfg: &RustBindingConfig) -> String {
     }
     writeln!(out, "pub struct {} {{", typ.name).ok();
     let core_path = typ.rust_path.replace('-', "_");
-    writeln!(out, "    inner: std::sync::Arc<{core_path}>,").ok();
+    if typ.is_trait {
+        writeln!(out, "    inner: std::sync::Arc<dyn {core_path} + Send + Sync>,").ok();
+    } else {
+        writeln!(out, "    inner: std::sync::Arc<{core_path}>,").ok();
+    }
     write!(out, "}}").ok();
     out
 }
@@ -152,7 +159,11 @@ pub fn gen_opaque_struct_prefixed(typ: &TypeDef, cfg: &RustBindingConfig, prefix
     }
     let core_path = typ.rust_path.replace('-', "_");
     writeln!(out, "pub struct {}{} {{", prefix, typ.name).ok();
-    writeln!(out, "    inner: std::sync::Arc<{core_path}>,").ok();
+    if typ.is_trait {
+        writeln!(out, "    inner: std::sync::Arc<dyn {core_path} + Send + Sync>,").ok();
+    } else {
+        writeln!(out, "    inner: std::sync::Arc<{core_path}>,").ok();
+    }
     write!(out, "}}").ok();
     out
 }
@@ -249,9 +260,10 @@ pub fn gen_method(
 
     let call_args = gen_call_args(&method.params);
 
-    // Only auto-delegate opaque methods with NO params, non-async, no error, simple return.
-    // Params may have been sanitized (Duration→u64) so don't match core signatures.
+    // Only auto-delegate opaque methods with NO params, non-async, no error, simple return,
+    // and no sanitized signature (sanitized types don't match core signatures).
     let opaque_can_delegate = is_opaque
+        && !method.sanitized
         && method.params.is_empty()
         && !method.is_async
         && method.error_type.is_none()
@@ -409,16 +421,12 @@ pub fn gen_method(
         }
     };
 
-    let self_param = if params.is_empty() && !method.is_async {
-        "&self"
-    } else if params.is_empty() && method.is_async && cfg.async_pattern == AsyncPattern::Pyo3FutureIntoPy {
-        "py: Python<'_>, &self"
-    } else if method.is_async && cfg.async_pattern == AsyncPattern::Pyo3FutureIntoPy {
-        "py: Python<'_>, &self, "
-    } else if params.is_empty() {
-        "&self"
-    } else {
-        "&self, "
+    let needs_py = method.is_async && cfg.async_pattern == AsyncPattern::Pyo3FutureIntoPy;
+    let self_param = match (needs_py, params.is_empty()) {
+        (true, true) => "&self, py: Python<'_>",
+        (true, false) => "&self, py: Python<'_>, ",
+        (false, true) => "&self",
+        (false, false) => "&self, ",
     };
 
     // Wrap long signature if necessary
@@ -436,8 +444,9 @@ pub fn gen_method(
             })
             .collect::<Vec<_>>()
             .join(",\n        ");
+        let py_param = if needs_py { "\n        py: Python<'_>," } else { "" };
         (
-            format!("pub fn {}(\n        &self,\n        ", method.name),
+            format!("pub fn {}(\n        &self,{}\n        ", method.name, py_param),
             wrapped_params,
             "\n    ) -> ".to_string(),
         )

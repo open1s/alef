@@ -1085,6 +1085,7 @@ mod tests {
                 is_clone: true,
                 doc: "Configuration struct.".to_string(),
                 cfg: None,
+                is_trait: false,
             }],
             functions: vec![FunctionDef {
                 name: "extract".to_string(),
@@ -1094,12 +1095,14 @@ mod tests {
                     ty: TypeRef::Path,
                     optional: false,
                     default: None,
+                    sanitized: false,
                 }],
                 return_type: TypeRef::Named("ExtractionResult".to_string()),
                 is_async: false,
                 error_type: Some("MyError".to_string()),
                 doc: "Extract content from a file.".to_string(),
                 cfg: None,
+                sanitized: false,
             }],
             enums: vec![EnumDef {
                 name: "OutputFormat".to_string(),

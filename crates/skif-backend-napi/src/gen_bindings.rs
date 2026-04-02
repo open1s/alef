@@ -3,7 +3,7 @@ use ahash::AHashSet;
 use skif_codegen::builder::{ImplBuilder, RustFileBuilder, StructBuilder};
 use skif_codegen::generators::{AsyncPattern, RustBindingConfig};
 use skif_codegen::naming::to_node_name;
-use skif_codegen::shared::{constructor_parts, function_params, partition_methods};
+use skif_codegen::shared::{function_params, partition_methods};
 use skif_codegen::type_mapper::TypeMapper;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
 use skif_core::config::{Language, SkifConfig, resolve_output_dir};
@@ -103,8 +103,9 @@ impl Backend for NapiBackend {
                 builder.add_item(&skif_codegen::generators::gen_opaque_struct_prefixed(typ, &cfg, "Js"));
                 builder.add_item(&gen_opaque_struct_methods(typ, &mapper, &cfg, &opaque_types));
             } else {
+                // Non-opaque structs use #[napi(object)] — plain JS objects without methods.
+                // napi(object) structs cannot have #[napi] impl blocks.
                 builder.add_item(&gen_struct(typ, &mapper));
-                builder.add_item(&gen_struct_methods(typ, &mapper, &cfg));
             }
         }
 
@@ -153,7 +154,8 @@ impl Backend for NapiBackend {
 /// Generate a NAPI struct with Js-prefixed name and fields wrapped in Option only if optional.
 fn gen_struct(typ: &TypeDef, mapper: &NapiMapper) -> String {
     let mut struct_builder = StructBuilder::new(&format!("Js{}", typ.name));
-    struct_builder.add_attr("napi");
+    // Use napi(object) so the struct can be used as function/method parameters (FromNapiValue)
+    struct_builder.add_attr("napi(object)");
     struct_builder.add_derive("Clone");
 
     for field in &typ.fields {
@@ -173,26 +175,6 @@ fn gen_struct(typ: &TypeDef, mapper: &NapiMapper) -> String {
     }
 
     struct_builder.build()
-}
-
-/// Generate NAPI methods for a struct.
-fn gen_struct_methods(typ: &TypeDef, mapper: &NapiMapper, _cfg: &RustBindingConfig) -> String {
-    let mut impl_builder = ImplBuilder::new(&format!("Js{}", typ.name));
-    impl_builder.add_attr("napi");
-
-    let constructor = gen_constructor(typ, mapper);
-    impl_builder.add_method(&constructor);
-
-    let (instance, statics) = partition_methods(&typ.methods);
-
-    for method in &instance {
-        impl_builder.add_method(&gen_instance_method(method, mapper));
-    }
-    for method in &statics {
-        impl_builder.add_method(&gen_static_method(method, mapper));
-    }
-
-    impl_builder.build()
 }
 
 /// Generate NAPI methods for an opaque struct (delegates to self.inner).
@@ -219,104 +201,51 @@ fn gen_opaque_struct_methods(
 
 /// Generate an opaque instance method that delegates to self.inner.
 fn gen_opaque_instance_method(method: &MethodDef, mapper: &NapiMapper) -> String {
+    use skif_core::ir::TypeRef;
+
     let params = function_params(&method.params, &|ty| mapper.map_type(ty));
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
-    let call_args: Vec<String> = method
-        .params
-        .iter()
-        .map(|p| {
-            if matches!(p.ty, skif_core::ir::TypeRef::Named(_)) {
-                if p.optional {
-                    format!("{}.map(Into::into)", p.name)
-                } else {
-                    format!("{}.into()", p.name)
-                }
-            } else {
-                p.name.clone()
+    let js_name = to_node_name(&method.name);
+    let js_name_attr = if js_name != method.name {
+        format!("(js_name = \"{}\")", js_name)
+    } else {
+        String::new()
+    };
+
+    let async_kw = if method.is_async { "async " } else { "" };
+
+    // Check if this method can be auto-delegated:
+    // - Not sanitized
+    // - No params (params may need conversion)
+    // - Not async (async needs runtime bridging)
+    // - No error type
+    // - Simple return type
+    let can_delegate = !method.sanitized
+        && method.params.is_empty()
+        && !method.is_async
+        && method.error_type.is_none()
+        && matches!(
+            method.return_type,
+            TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Unit
+        );
+
+    let body = if can_delegate {
+        // Simple delegation — return type is compatible
+        match &method.return_type {
+            TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
+                format!("self.inner.{}().into()", method.name)
             }
-        })
-        .collect();
-    let args_str = call_args.join(", ");
-
-    let js_name = to_node_name(&method.name);
-    let js_name_attr = if js_name != method.name {
-        format!(", js_name = \"{}\"", js_name)
+            _ => format!("self.inner.{}()", method.name),
+        }
     } else {
-        String::new()
-    };
-
-    let async_kw = if method.is_async { "async " } else { "" };
-
-    let body = if method.is_async {
-        let err_map = if method.error_type.is_some() {
-            "\n        .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?"
-        } else {
-            ""
-        };
-        format!(
-            "let result = self.inner.{}({}).await{};",
-            method.name, args_str, err_map
-        )
-    } else {
-        let err_map = if method.error_type.is_some() {
-            ".map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?"
-        } else {
-            ""
-        };
-        format!("let result = self.inner.{}({}){};", method.name, args_str, err_map)
+        format!("todo!(\"wire up {}\")", method.name)
     };
 
     format!(
         "#[napi{js_name_attr}]\npub {async_kw}fn {}(&self, {params}) -> {return_annotation} {{\n    \
-         {body}\n    Ok({return_type}::from(result))\n}}",
-        method.name
-    )
-}
-
-/// Generate a constructor with params wrapped in Option only if optional.
-fn gen_constructor(typ: &TypeDef, mapper: &NapiMapper) -> String {
-    let params: Vec<String> = typ
-        .fields
-        .iter()
-        .map(|f| {
-            let mapped_type = mapper.map_type(&f.ty);
-            let param_type = if f.optional {
-                format!("Option<{}>", mapped_type)
-            } else {
-                mapped_type
-            };
-            format!("{}: {}", f.name, param_type)
-        })
-        .collect();
-
-    let (_, _, assignments) = constructor_parts(&typ.fields, &|ty| mapper.map_type(ty));
-
-    format!(
-        "#[napi(constructor)]\npub fn new({}) -> Self {{\n    Self {{ {} }}\n}}",
-        params.join(", "),
-        assignments
-    )
-}
-
-/// Generate an instance method binding.
-fn gen_instance_method(method: &MethodDef, mapper: &NapiMapper) -> String {
-    let params = function_params(&method.params, &|ty| mapper.map_type(ty));
-    let return_type = mapper.map_type(&method.return_type);
-    let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
-
-    let js_name = to_node_name(&method.name);
-    let js_name_attr = if js_name != method.name {
-        format!(", js_name = \"{}\"", js_name)
-    } else {
-        String::new()
-    };
-
-    let async_kw = if method.is_async { "async " } else { "" };
-    format!(
-        "#[napi{js_name_attr}]\npub {async_kw}fn {}(&self, {params}) -> {return_annotation} {{\n    \
-         todo!(\"call into core\")\n}}",
+         {body}\n}}",
         method.name
     )
 }
@@ -329,7 +258,7 @@ fn gen_static_method(method: &MethodDef, mapper: &NapiMapper) -> String {
 
     let js_name = to_node_name(&method.name);
     let js_name_attr = if js_name != method.name {
-        format!(", js_name = \"{}\"", js_name)
+        format!("(js_name = \"{}\")", js_name)
     } else {
         String::new()
     };
@@ -366,7 +295,7 @@ fn gen_function(func: &FunctionDef, mapper: &NapiMapper) -> String {
 
     let js_name = to_node_name(&func.name);
     let js_name_attr = if js_name != func.name {
-        format!(", js_name = \"{}\"", js_name)
+        format!("(js_name = \"{}\")", js_name)
     } else {
         String::new()
     };
@@ -387,7 +316,7 @@ fn gen_from_js_binding_to_core(typ: &TypeDef, core_import: &str) -> String {
     writeln!(out, "    fn from(val: {}) -> Self {{", js_name).ok();
     writeln!(out, "        Self {{").ok();
     for field in &typ.fields {
-        let conversion = skif_codegen::conversions::field_conversion_to_core(&field.name, &field.ty, field.optional);
+        let conversion = napi_field_conversion(&field.name, &field.ty, field.optional, "val", true);
         writeln!(out, "            {conversion},").ok();
     }
     writeln!(out, "        }}").ok();
@@ -404,13 +333,58 @@ fn gen_from_core_to_js_binding(typ: &TypeDef, core_import: &str) -> String {
     writeln!(out, "    fn from(val: {core_import}::{}) -> Self {{", typ.name).ok();
     writeln!(out, "        Self {{").ok();
     for field in &typ.fields {
-        let conversion = skif_codegen::conversions::field_conversion_from_core(&field.name, &field.ty, field.optional);
+        let conversion = napi_field_conversion(&field.name, &field.ty, field.optional, "val", false);
         writeln!(out, "            {conversion},").ok();
     }
     writeln!(out, "        }}").ok();
     writeln!(out, "    }}").ok();
     write!(out, "}}").ok();
     out
+}
+
+/// NAPI-specific field conversion that handles U64/Usize→i64 type casts.
+/// `to_core=true`: NAPI binding → core (i64 → u64/usize via `as`)
+/// `to_core=false`: core → NAPI binding (u64/usize → i64 via `as`)
+fn napi_field_conversion(name: &str, ty: &skif_core::ir::TypeRef, optional: bool, val: &str, to_core: bool) -> String {
+    use skif_core::ir::TypeRef;
+    match ty {
+        TypeRef::Primitive(p) if needs_napi_cast(p) => {
+            let cast_to = if to_core { core_prim_str(p) } else { "i64" };
+            format!("{name}: {val}.{name} as {cast_to}")
+        }
+        TypeRef::Named(_) => {
+            if optional {
+                format!("{name}: {val}.{name}.map(Into::into)")
+            } else {
+                format!("{name}: {val}.{name}.into()")
+            }
+        }
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Primitive(p) if needs_napi_cast(p) => {
+                let cast_to = if to_core { core_prim_str(p) } else { "i64" };
+                format!("{name}: {val}.{name}.map(|v| v as {cast_to})")
+            }
+            TypeRef::Named(_) => format!("{name}: {val}.{name}.map(Into::into)"),
+            _ => format!("{name}: {val}.{name}"),
+        },
+        _ => format!("{name}: {val}.{name}"),
+    }
+}
+
+fn needs_napi_cast(p: &skif_core::ir::PrimitiveType) -> bool {
+    matches!(
+        p,
+        skif_core::ir::PrimitiveType::U64 | skif_core::ir::PrimitiveType::Usize | skif_core::ir::PrimitiveType::Isize
+    )
+}
+
+fn core_prim_str(p: &skif_core::ir::PrimitiveType) -> &'static str {
+    match p {
+        skif_core::ir::PrimitiveType::U64 => "u64",
+        skif_core::ir::PrimitiveType::Usize => "usize",
+        skif_core::ir::PrimitiveType::Isize => "isize",
+        _ => unreachable!(),
+    }
 }
 
 /// Generate `impl From<JsEnum> for core::Enum` (NAPI binding -> core).

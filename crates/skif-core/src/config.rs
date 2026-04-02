@@ -167,6 +167,10 @@ pub struct RubyConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhpConfig {
     pub extension_name: Option<String>,
+    /// Feature gate for ext-php-rs (default: "extension-module").
+    /// All generated code is wrapped in `#[cfg(feature = "...")]`.
+    #[serde(default)]
+    pub feature_gate: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -242,6 +242,7 @@ mod tests {
             methods: vec![],
             is_opaque: false,
             is_clone: true,
+            is_trait: false,
             doc: String::new(),
             cfg: None,
         }
