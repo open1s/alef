@@ -226,7 +226,7 @@ fn gen_opaque_method(method: &MethodDef, mapper: &WasmMapper, _type_name: &str) 
         )
     } else if method.is_static {
         format!(
-            "#[wasm_bindgen(static{js_name_attr})]\npub fn {}({}) -> {} {{\n    \
+            "#[wasm_bindgen{js_name_attr}]\npub fn {}({}) -> {} {{\n    \
              todo!(\"call into core implementation\")\n}}",
             method.name,
             params.join(", "),
@@ -418,7 +418,7 @@ fn gen_method(method: &MethodDef, mapper: &WasmMapper, type_name: &str) -> Strin
         )
     } else if method.is_static {
         format!(
-            "#[wasm_bindgen(static{js_name_attr})]\npub fn {}({}) -> {} {{\n    \
+            "#[wasm_bindgen{js_name_attr}]\npub fn {}({}) -> {} {{\n    \
              todo!(\"call into core implementation\")\n}}",
             method.name,
             params.join(", "),

@@ -103,12 +103,12 @@ fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &SkifConfig) -> String {
 
     // Struct opaque-handle functions (from_json + free + field accessors + methods)
     for typ in &api.types {
-        builder.add_item(&gen_type_from_json(typ, prefix));
-        builder.add_item(&gen_type_free(typ, prefix));
+        builder.add_item(&gen_type_from_json(typ, prefix, &core_import));
+        builder.add_item(&gen_type_free(typ, prefix, &core_import));
 
         // Field accessors for every struct
         for field in &typ.fields {
-            builder.add_item(&gen_field_accessor(typ, field, prefix));
+            builder.add_item(&gen_field_accessor(typ, field, prefix, &core_import));
         }
 
         // Method wrappers
@@ -120,8 +120,8 @@ fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &SkifConfig) -> String {
     // Enum functions (from_i32 + to_i32) — only for simple unit-variant enums
     for enum_def in &api.enums {
         if skif_codegen::conversions::can_generate_enum_conversion(enum_def) {
-            builder.add_item(&gen_enum_from_i32(enum_def, prefix));
-            builder.add_item(&gen_enum_to_i32(enum_def, prefix));
+            builder.add_item(&gen_enum_from_i32(enum_def, prefix, &core_import));
+            builder.add_item(&gen_enum_to_i32(enum_def, prefix, &core_import));
         }
     }
 
@@ -148,19 +148,19 @@ fn gen_last_error(prefix: &str) -> String {
 }}
 
 fn set_last_error(code: i32, message: &str) {{
-    LAST_ERROR_CODE.set(code);
-    LAST_ERROR_CONTEXT.set(CString::new(message).ok());
+    LAST_ERROR_CODE.with_borrow_mut(|c| *c = code);
+    LAST_ERROR_CONTEXT.with_borrow_mut(|c| *c = CString::new(message).ok());
 }}
 
 fn clear_last_error() {{
-    LAST_ERROR_CODE.set(0);
-    LAST_ERROR_CONTEXT.set(None);
+    LAST_ERROR_CODE.with_borrow_mut(|c| *c = 0);
+    LAST_ERROR_CONTEXT.with_borrow_mut(|c| *c = None);
 }}
 
 /// Return the last error code (0 means no error).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {prefix}_last_error_code() -> i32 {{
-    LAST_ERROR_CODE.get()
+    LAST_ERROR_CODE.with_borrow(|c| *c)
 }}
 
 /// Return the last error message. The pointer is valid until the next FFI call on this thread.
@@ -211,9 +211,10 @@ pub unsafe extern "C" fn {prefix}_version() -> *const c_char {{
 // Type: from_json + free
 // ---------------------------------------------------------------------------
 
-fn gen_type_from_json(typ: &TypeDef, prefix: &str) -> String {
+fn gen_type_from_json(typ: &TypeDef, prefix: &str, core_import: &str) -> String {
     let type_snake = typ.name.to_snake_case();
     let type_name = &typ.name;
+    let qualified = format!("{core_import}::{type_name}");
     let mut out = String::with_capacity(2048);
 
     writeln!(
@@ -224,7 +225,7 @@ fn gen_type_from_json(typ: &TypeDef, prefix: &str) -> String {
     writeln!(out, "#[unsafe(no_mangle)]").unwrap();
     writeln!(
         out,
-        "pub unsafe extern \"C\" fn {prefix}_{type_snake}_from_json(json: *const c_char) -> *mut {type_name} {{"
+        "pub unsafe extern \"C\" fn {prefix}_{type_snake}_from_json(json: *const c_char) -> *mut {qualified} {{"
     )
     .unwrap();
     writeln!(out, "    clear_last_error();").unwrap();
@@ -247,7 +248,7 @@ fn gen_type_from_json(typ: &TypeDef, prefix: &str) -> String {
     writeln!(out, "            return std::ptr::null_mut();").unwrap();
     writeln!(out, "        }}").unwrap();
     writeln!(out, "    }};").unwrap();
-    writeln!(out, "    match serde_json::from_str::<{type_name}>(c_str) {{").unwrap();
+    writeln!(out, "    match serde_json::from_str::<{qualified}>(c_str) {{").unwrap();
     writeln!(out, "        Ok(val) => Box::into_raw(Box::new(val)),").unwrap();
     writeln!(out, "        Err(e) => {{").unwrap();
     writeln!(out, "            set_last_error(2, &e.to_string());").unwrap();
@@ -259,16 +260,17 @@ fn gen_type_from_json(typ: &TypeDef, prefix: &str) -> String {
     out
 }
 
-fn gen_type_free(typ: &TypeDef, prefix: &str) -> String {
+fn gen_type_free(typ: &TypeDef, prefix: &str, core_import: &str) -> String {
     let type_snake = typ.name.to_snake_case();
     let type_name = &typ.name;
+    let qualified = format!("{core_import}::{type_name}");
     let mut out = String::with_capacity(2048);
 
     writeln!(out, "/// Free a `{type_name}` handle.").unwrap();
     writeln!(out, "#[unsafe(no_mangle)]").unwrap();
     writeln!(
         out,
-        "pub unsafe extern \"C\" fn {prefix}_{type_snake}_free(ptr: *mut {type_name}) {{"
+        "pub unsafe extern \"C\" fn {prefix}_{type_snake}_free(ptr: *mut {qualified}) {{"
     )
     .unwrap();
     writeln!(out, "    if !ptr.is_null() {{").unwrap();
@@ -283,9 +285,10 @@ fn gen_type_free(typ: &TypeDef, prefix: &str) -> String {
 // Field accessors
 // ---------------------------------------------------------------------------
 
-fn gen_field_accessor(typ: &TypeDef, field: &FieldDef, prefix: &str) -> String {
+fn gen_field_accessor(typ: &TypeDef, field: &FieldDef, prefix: &str, core_import: &str) -> String {
     let type_snake = typ.name.to_snake_case();
     let type_name = &typ.name;
+    let qualified = format!("{core_import}::{type_name}");
     let field_name = &field.name;
 
     let effective_ty = if field.optional {
@@ -294,10 +297,10 @@ fn gen_field_accessor(typ: &TypeDef, field: &FieldDef, prefix: &str) -> String {
         field.ty.clone()
     };
 
-    let mut ret_type = c_return_type(&effective_ty).into_owned();
-    // Replace "Self" with the actual type name in FFI signatures
+    let mut ret_type = c_return_type(&effective_ty, core_import).into_owned();
+    // Replace "Self" with the actual qualified type name in FFI signatures
     if ret_type.contains("Self") {
-        ret_type = ret_type.replace("Self", type_name);
+        ret_type = ret_type.replace("Self", &qualified);
     }
     let mut out = String::with_capacity(2048);
 
@@ -310,13 +313,13 @@ fn gen_field_accessor(typ: &TypeDef, field: &FieldDef, prefix: &str) -> String {
     if needs_len_out {
         writeln!(
             out,
-            "pub unsafe extern \"C\" fn {prefix}_{type_snake}_{field_name}(ptr: *const {type_name}, out_len: *mut usize) -> {ret_type} {{"
+            "pub unsafe extern \"C\" fn {prefix}_{type_snake}_{field_name}(ptr: *const {qualified}, out_len: *mut usize) -> {ret_type} {{"
         )
         .unwrap();
     } else {
         writeln!(
             out,
-            "pub unsafe extern \"C\" fn {prefix}_{type_snake}_{field_name}(ptr: *const {type_name}) -> {ret_type} {{"
+            "pub unsafe extern \"C\" fn {prefix}_{type_snake}_{field_name}(ptr: *const {qualified}) -> {ret_type} {{"
         )
         .unwrap();
     }
@@ -340,10 +343,15 @@ fn gen_field_access_body(field: &FieldDef, needs_len_out: bool) -> String {
     let mut out = String::with_capacity(2048);
 
     if field.optional {
-        // Wrap in match on Option
+        // Wrap in match on Option — val is a reference from &Option<T> destructure
+        let val_expr = if matches!(field.ty, TypeRef::Primitive(_)) {
+            "*val" // dereference for Copy types
+        } else {
+            "val"
+        };
         writeln!(out, "    match &obj.{field_name} {{").unwrap();
         writeln!(out, "        Some(val) => {{").unwrap();
-        write!(out, "{}", gen_value_to_c("val", &field.ty, "            ")).unwrap();
+        write!(out, "{}", gen_value_to_c(val_expr, &field.ty, "            ")).unwrap();
         writeln!(out, "        }}").unwrap();
         writeln!(
             out,
@@ -376,8 +384,13 @@ fn gen_field_access_body(field: &FieldDef, needs_len_out: bool) -> String {
 fn gen_value_to_c(expr: &str, ty: &TypeRef, indent: &str) -> String {
     let mut out = String::with_capacity(2048);
     match ty {
-        TypeRef::Primitive(_) => {
-            writeln!(out, "{indent}{expr}").unwrap();
+        TypeRef::Primitive(p) => {
+            // Bool needs cast to i32 for C ABI; other primitives may need deref if from Option
+            if matches!(p, skif_core::ir::PrimitiveType::Bool) {
+                writeln!(out, "{indent}{expr} as i32").unwrap();
+            } else {
+                writeln!(out, "{indent}{expr}").unwrap();
+            }
         }
         TypeRef::String | TypeRef::Path => {
             writeln!(out, "{indent}match CString::new({expr}.clone()) {{").unwrap();
@@ -436,7 +449,10 @@ fn null_return_value(ty: &TypeRef) -> &'static str {
         TypeRef::Bytes => "std::ptr::null_mut()",
         TypeRef::Named(_) => "std::ptr::null_mut()",
         TypeRef::Vec(_) | TypeRef::Map(_, _) => "std::ptr::null_mut()",
-        TypeRef::Optional(_) => "std::ptr::null_mut()",
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Primitive(_) => "0",
+            _ => "std::ptr::null_mut()",
+        },
         TypeRef::Unit => "()",
     }
 }
@@ -460,17 +476,19 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, prefix: &str, core_impo
     }
     writeln!(out, "#[unsafe(no_mangle)]").unwrap();
 
+    let qualified = format!("{core_import}::{type_name}");
+
     // Build parameter list
     let mut params = Vec::new();
     if !method.is_static {
         let receiver_ty = match method.receiver.as_ref().unwrap_or(&ReceiverKind::Ref) {
-            ReceiverKind::Ref => format!("*const {type_name}"),
-            ReceiverKind::RefMut | ReceiverKind::Owned => format!("*mut {type_name}"),
+            ReceiverKind::Ref => format!("*const {qualified}"),
+            ReceiverKind::RefMut | ReceiverKind::Owned => format!("*mut {qualified}"),
         };
         params.push(format!("    this: {receiver_ty}"));
     }
     for p in &method.params {
-        params.push(format!("    {}: {}", p.name, c_param_type(&p.ty)));
+        params.push(format!("    {}: {}", p.name, c_param_type(&p.ty, core_import)));
         // Bytes parameters need a separate length parameter
         if matches!(p.ty, TypeRef::Bytes) {
             params.push(format!("    {}_len: usize", p.name));
@@ -484,16 +502,16 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, prefix: &str, core_impo
     } else if has_error {
         // Fallible + non-void: return nullable pointer
         match &method.return_type {
-            TypeRef::Primitive(_) => c_return_type(&method.return_type).into_owned(), // can't make pointer; use last_error
-            _ => c_return_type(&method.return_type).into_owned(),
+            TypeRef::Primitive(_) => c_return_type(&method.return_type, core_import).into_owned(),
+            _ => c_return_type(&method.return_type, core_import).into_owned(),
         }
     } else {
-        c_return_type(&method.return_type).into_owned()
+        c_return_type(&method.return_type, core_import).into_owned()
     };
 
-    // Replace "Self" with the actual type name in FFI signatures
+    // Replace "Self" with the actual qualified type name in FFI signatures
     if ret_type.contains("Self") {
-        ret_type = ret_type.replace("Self", type_name);
+        ret_type = ret_type.replace("Self", &qualified);
     }
 
     if is_void_return(&method.return_type) && !has_error {
@@ -532,7 +550,12 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, prefix: &str, core_impo
 
     // Null-check and convert each parameter
     for p in &method.params {
-        write!(out, "{}", gen_param_conversion(p, has_error, &method.return_type)).unwrap();
+        write!(
+            out,
+            "{}",
+            gen_param_conversion(p, has_error, &method.return_type, core_import)
+        )
+        .unwrap();
     }
 
     // Build the call expression
@@ -599,7 +622,7 @@ fn gen_free_function(func: &FunctionDef, prefix: &str, core_import: &str) -> Str
     // Build parameter list
     let mut params = Vec::new();
     for p in &func.params {
-        params.push(format!("    {}: {}", p.name, c_param_type(&p.ty)));
+        params.push(format!("    {}: {}", p.name, c_param_type(&p.ty, core_import)));
         // Bytes parameters need a separate length parameter
         if matches!(p.ty, TypeRef::Bytes) {
             params.push(format!("    {}_len: usize", p.name));
@@ -610,7 +633,7 @@ fn gen_free_function(func: &FunctionDef, prefix: &str, core_import: &str) -> Str
     let ret_type = if has_error && is_void_return(&func.return_type) {
         "i32".to_string()
     } else {
-        c_return_type(&func.return_type).into_owned()
+        c_return_type(&func.return_type, core_import).into_owned()
     };
 
     if is_void_return(&func.return_type) && !has_error {
@@ -627,7 +650,12 @@ fn gen_free_function(func: &FunctionDef, prefix: &str, core_import: &str) -> Str
 
     // Convert parameters
     for p in &func.params {
-        write!(out, "{}", gen_param_conversion(p, has_error, &func.return_type)).unwrap();
+        write!(
+            out,
+            "{}",
+            gen_param_conversion(p, has_error, &func.return_type, core_import)
+        )
+        .unwrap();
     }
 
     // Call
@@ -669,7 +697,7 @@ fn gen_free_function(func: &FunctionDef, prefix: &str, core_import: &str) -> Str
 // Parameter conversion (C types -> Rust)
 // ---------------------------------------------------------------------------
 
-fn gen_param_conversion(param: &ParamDef, has_error: bool, return_type: &TypeRef) -> String {
+fn gen_param_conversion(param: &ParamDef, has_error: bool, return_type: &TypeRef, core_import: &str) -> String {
     let name = &param.name;
     let rs_name = format!("{name}_rs");
     let mut out = String::with_capacity(2048);
@@ -706,12 +734,13 @@ fn gen_param_conversion(param: &ParamDef, has_error: bool, return_type: &TypeRef
                 writeln!(out, "    }};").unwrap();
             }
             TypeRef::Named(type_name) => {
+                let qualified = format!("{core_import}::{type_name}");
                 writeln!(out, "    let {rs_name} = if {name}.is_null() {{").unwrap();
                 writeln!(out, "        None").unwrap();
                 writeln!(out, "    }} else {{").unwrap();
                 writeln!(
                     out,
-                    "        Some(unsafe {{ &*({name} as *const {type_name}) }}.clone())"
+                    "        Some(unsafe {{ &*({name} as *const {qualified}) }}.clone())"
                 )
                 .unwrap();
                 writeln!(out, "    }};").unwrap();
@@ -933,7 +962,7 @@ fn gen_owned_value_to_c(expr: &str, ty: &TypeRef, indent: &str) -> String {
 // Enum conversions
 // ---------------------------------------------------------------------------
 
-fn gen_enum_from_i32(enum_def: &EnumDef, prefix: &str) -> String {
+fn gen_enum_from_i32(enum_def: &EnumDef, prefix: &str, _core_import: &str) -> String {
     let enum_snake = enum_def.name.to_snake_case();
     let enum_name = &enum_def.name;
     let mut out = String::with_capacity(2048);
@@ -962,7 +991,7 @@ fn gen_enum_from_i32(enum_def: &EnumDef, prefix: &str) -> String {
     out
 }
 
-fn gen_enum_to_i32(enum_def: &EnumDef, prefix: &str) -> String {
+fn gen_enum_to_i32(enum_def: &EnumDef, prefix: &str, _core_import: &str) -> String {
     let enum_snake = enum_def.name.to_snake_case();
     let enum_name = &enum_def.name;
     let mut out = String::with_capacity(2048);

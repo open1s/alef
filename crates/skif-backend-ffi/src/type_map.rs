@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use skif_core::ir::{PrimitiveType, TypeRef};
 
 /// Maps a TypeRef to the C FFI parameter type (input position).
-pub fn c_param_type(ty: &TypeRef) -> Cow<'static, str> {
+pub fn c_param_type(ty: &TypeRef, core_import: &str) -> Cow<'static, str> {
     match ty {
         TypeRef::Primitive(prim) => c_primitive(prim),
         TypeRef::String => Cow::Borrowed("*const std::ffi::c_char"),
@@ -12,17 +12,17 @@ pub fn c_param_type(ty: &TypeRef) -> Cow<'static, str> {
             // Optional params use nullable pointers or sentinel values
             match inner.as_ref() {
                 TypeRef::Primitive(PrimitiveType::Bool) => Cow::Borrowed("i32"), // -1 = None, 0 = false, 1 = true
-                TypeRef::Primitive(_) => c_param_type(inner),                    // caller uses sentinel
+                TypeRef::Primitive(_) => c_param_type(inner, core_import),       // caller uses sentinel
                 TypeRef::String | TypeRef::Path | TypeRef::Json => {
                     Cow::Borrowed("*const std::ffi::c_char") // null = None
                 }
-                TypeRef::Named(_) => Cow::Owned(format!("*const {}", c_param_type(inner))), // null = None
+                TypeRef::Named(_) => Cow::Owned(format!("*const {}", c_param_type(inner, core_import))), // null = None
                 _ => Cow::Borrowed("*const std::ffi::c_char"), // fallback: JSON string, null = None
             }
         }
         TypeRef::Vec(_) => Cow::Borrowed("*const std::ffi::c_char"), // JSON array string
         TypeRef::Map(_, _) => Cow::Borrowed("*const std::ffi::c_char"), // JSON object string
-        TypeRef::Named(name) => Cow::Owned(format!("*const {name}")),
+        TypeRef::Named(name) => Cow::Owned(format!("*const {core_import}::{name}")),
         TypeRef::Path => Cow::Borrowed("*const std::ffi::c_char"),
         TypeRef::Unit => Cow::Borrowed(""),
         TypeRef::Json => Cow::Borrowed("*const std::ffi::c_char"),
@@ -30,7 +30,7 @@ pub fn c_param_type(ty: &TypeRef) -> Cow<'static, str> {
 }
 
 /// Maps a TypeRef to the C FFI return type (output position).
-pub fn c_return_type(ty: &TypeRef) -> Cow<'static, str> {
+pub fn c_return_type(ty: &TypeRef, core_import: &str) -> Cow<'static, str> {
     match ty {
         TypeRef::Primitive(prim) => c_primitive(prim),
         TypeRef::String => Cow::Borrowed("*mut std::ffi::c_char"),
@@ -39,15 +39,15 @@ pub fn c_return_type(ty: &TypeRef) -> Cow<'static, str> {
             // Optional returns use nullable pointers
             match inner.as_ref() {
                 TypeRef::Primitive(PrimitiveType::Bool) => Cow::Borrowed("i32"), // -1 = None
-                TypeRef::Primitive(_) => c_return_type(inner),
+                TypeRef::Primitive(_) => c_return_type(inner, core_import),
                 TypeRef::String | TypeRef::Path | TypeRef::Json => Cow::Borrowed("*mut std::ffi::c_char"),
-                TypeRef::Named(name) => Cow::Owned(format!("*mut {name}")),
+                TypeRef::Named(name) => Cow::Owned(format!("*mut {core_import}::{name}")),
                 _ => Cow::Borrowed("*mut std::ffi::c_char"),
             }
         }
         TypeRef::Vec(_) => Cow::Borrowed("*mut std::ffi::c_char"), // JSON array string
         TypeRef::Map(_, _) => Cow::Borrowed("*mut std::ffi::c_char"), // JSON object string
-        TypeRef::Named(name) => Cow::Owned(format!("*mut {name}")),
+        TypeRef::Named(name) => Cow::Owned(format!("*mut {core_import}::{name}")),
         TypeRef::Path => Cow::Borrowed("*mut std::ffi::c_char"),
         TypeRef::Unit => Cow::Borrowed("()"),
         TypeRef::Json => Cow::Borrowed("*mut std::ffi::c_char"),
