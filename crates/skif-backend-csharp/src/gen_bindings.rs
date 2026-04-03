@@ -464,40 +464,48 @@ fn gen_record_type(typ: &TypeDef, namespace: &str) -> String {
         out.push_str("/// </summary>\n");
     }
 
-    out.push_str(&format!("public record {}(\n", typ.name.to_pascal_case()));
+    out.push_str(&format!("public sealed class {}\n", typ.name.to_pascal_case()));
+    out.push_str("{\n");
 
-    // Sort fields: required (no default, not optional) first, then optional/defaulted.
-    // C# CS1737: optional parameters must appear after required parameters.
-    let mut fields: Vec<_> = typ.fields.iter().collect();
-    fields.sort_by_key(|f| {
-        let has_default = f.default.is_some() || f.optional;
-        if has_default { 1u8 } else { 0u8 }
-    });
+    for field in &typ.fields {
+        // Doc comment for field
+        if !field.doc.is_empty() {
+            out.push_str("    /// <summary>\n");
+            for line in field.doc.lines() {
+                out.push_str(&format!("    /// {}\n", line));
+            }
+            out.push_str("    /// </summary>\n");
+        }
 
-    // Record parameters
-    for (i, field) in fields.iter().enumerate() {
-        let field_type = if field.optional {
-            format!("{}?", csharp_type(&field.ty))
+        // [JsonPropertyName("camelCaseName")]
+        let json_name = field.name.to_lower_camel_case();
+        out.push_str(&format!("    [JsonPropertyName(\"{}\")]\n", json_name));
+
+        let cs_name = to_csharp_name(&field.name);
+
+        if field.optional {
+            // Optional fields: nullable type, no `required`, default = null
+            let field_type = format!("{}?", csharp_type(&field.ty));
+            out.push_str(&format!("    public {} {} {{ get; set; }}", field_type, cs_name));
+            out.push_str(" = null;\n");
+        } else if let Some(default) = &field.default {
+            // Field with an explicit default value
+            let field_type = csharp_type(&field.ty).to_string();
+            out.push_str(&format!("    public {} {} {{ get; set; }}", field_type, cs_name));
+            out.push_str(&format!(" = {};\n", default));
         } else {
-            csharp_type(&field.ty).to_string()
-        };
-
-        out.push_str(&format!("    {} {}", field_type, to_csharp_name(&field.name)));
-
-        if let Some(default) = &field.default {
-            out.push_str(&format!(" = {}", default));
-        } else if field.optional {
-            // Optional fields are rendered as nullable (`T?`), so null is always valid.
-            out.push_str(" = null");
+            // Required field: no default, not optional
+            let field_type = csharp_type(&field.ty).to_string();
+            out.push_str(&format!(
+                "    public required {} {} {{ get; set; }}\n",
+                field_type, cs_name
+            ));
         }
 
-        if i < fields.len() - 1 {
-            out.push(',');
-        }
         out.push('\n');
     }
 
-    out.push_str(");\n");
+    out.push_str("}\n");
 
     out
 }
