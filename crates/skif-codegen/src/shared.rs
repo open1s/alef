@@ -6,27 +6,48 @@ use skif_core::ir::{FieldDef, MethodDef, ParamDef, TypeRef};
 pub fn can_auto_delegate_function(func: &skif_core::ir::FunctionDef) -> bool {
     !func.sanitized
         && func.params.iter().all(|p| !p.sanitized && is_delegatable_type(&p.ty))
-        && is_delegatable_type(&func.return_type)
+        && is_delegatable_return(&func.return_type)
 }
 
 /// Check if all params and return type are delegatable.
-/// Delegatable = any type that can be passed through with .into() or direct copy.
-/// Non-delegatable = Json (no standard conversion), sanitized types.
-/// Methods with sanitized signatures cannot be delegated.
 pub fn can_auto_delegate(method: &MethodDef) -> bool {
     !method.sanitized
         && method.params.iter().all(|p| !p.sanitized && is_delegatable_type(&p.ty))
-        && is_delegatable_type(&method.return_type)
+        && is_delegatable_return(&method.return_type)
 }
 
-/// A type is delegatable if it can cross the binding boundary.
-/// Named types use .into() conversion. Json types are not delegatable.
+/// Return types are more permissive — Named types work via .into() (core→binding From exists).
+fn is_delegatable_return(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
+        TypeRef::Named(_) => true, // core→binding From impl generated for all convertible types
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_delegatable_return(inner),
+        TypeRef::Map(k, v) => is_delegatable_return(k) && is_delegatable_return(v),
+        TypeRef::Json => false,
+    }
+}
+
+/// A type is delegatable if it can cross the binding boundary without From impls.
+/// Named types are NOT delegatable as function params (may lack From impls).
+/// For opaque methods, Named types are handled separately via Arc wrap/unwrap.
 pub fn is_delegatable_type(ty: &TypeRef) -> bool {
     match ty {
         TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
-        TypeRef::Named(_) => true, // Uses .into() conversion
+        TypeRef::Named(_) => false, // Requires From impl which may not exist
         TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_delegatable_type(inner),
         TypeRef::Map(k, v) => is_delegatable_type(k) && is_delegatable_type(v),
+        TypeRef::Json => false,
+    }
+}
+
+/// Check if a type is delegatable in the opaque method context.
+/// Opaque methods can handle Named params via Arc unwrap and Named returns via Arc wrap.
+pub fn is_opaque_delegatable_type(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
+        TypeRef::Named(_) => true, // Opaque: Arc unwrap/wrap. Non-opaque: .into()
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_opaque_delegatable_type(inner),
+        TypeRef::Map(k, v) => is_opaque_delegatable_type(k) && is_opaque_delegatable_type(v),
         TypeRef::Json => false,
     }
 }

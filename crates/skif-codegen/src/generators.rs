@@ -438,8 +438,8 @@ pub fn gen_method(
         && method
             .params
             .iter()
-            .all(|p| !p.sanitized && crate::shared::is_delegatable_type(&p.ty))
-        && crate::shared::is_delegatable_type(&method.return_type);
+            .all(|p| !p.sanitized && crate::shared::is_opaque_delegatable_type(&p.ty))
+        && crate::shared::is_opaque_delegatable_type(&method.return_type);
 
     // Build the core call expression: opaque types delegate to self.inner directly,
     // non-opaque types convert self to core type first.
