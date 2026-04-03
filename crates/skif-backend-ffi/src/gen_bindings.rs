@@ -95,6 +95,9 @@ fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &SkifConfig) -> String {
     // Clippy allows for generated code
     builder.add_inner_attribute("allow(clippy::too_many_arguments)");
     builder.add_inner_attribute("allow(clippy::missing_errors_doc)");
+    builder.add_inner_attribute("allow(unused_variables)");
+    builder.add_inner_attribute("allow(dead_code)");
+    builder.add_inner_attribute("allow(clippy::should_implement_trait)");
 
     // Custom module declarations
     let custom_mods = config.custom_modules.for_language(Language::Ffi);
@@ -489,6 +492,23 @@ fn gen_value_to_c(expr: &str, ty: &TypeRef, indent: &str) -> String {
     out
 }
 
+/// Generate a type-appropriate unimplemented body for FFI (no todo!()).
+/// Uses set_last_error + null/zero return instead of panicking.
+fn gen_ffi_unimplemented_body(return_type: &TypeRef, fn_name: &str, has_error: bool) -> String {
+    let err_msg = format!("Not implemented: {fn_name}");
+    if has_error && is_void_return(return_type) {
+        // Fallible + void: return error code
+        format!("    set_last_error(99, \"{err_msg}\");\n    -1")
+    } else if is_void_return(return_type) {
+        // Infallible void: just set error context and return
+        format!("    set_last_error(99, \"{err_msg}\");")
+    } else {
+        // Non-void: set error and return null/zero
+        let ret = null_return_value(return_type);
+        format!("    set_last_error(99, \"{err_msg}\");\n    {ret}")
+    }
+}
+
 /// Return the null/zero value for a given type in return position.
 fn null_return_value(ty: &TypeRef) -> &'static str {
     match ty {
@@ -598,7 +618,8 @@ fn gen_method_wrapper(
     if method.sanitized || has_opaque_param || has_opaque_return {
         writeln!(
             out,
-            "    todo!(\"wire up {type_name}::{method_name} — requires manual FFI bridge\")"
+            "{}",
+            gen_ffi_unimplemented_body(&method.return_type, &format!("{type_name}::{method_name}"), has_error)
         )
         .unwrap();
         write!(out, "}}").unwrap();
@@ -763,7 +784,12 @@ fn gen_free_function(
         .any(|p| matches!(&p.ty, TypeRef::Named(n) if opaque_types.contains(n)));
     let has_opaque_return = has_opaque_type_in_return(&func.return_type, opaque_types);
     if func.sanitized || has_opaque_param || has_opaque_return {
-        writeln!(out, "    todo!(\"wire up {func_name} — requires manual FFI bridge\")").unwrap();
+        writeln!(
+            out,
+            "{}",
+            gen_ffi_unimplemented_body(&func.return_type, func_name, has_error)
+        )
+        .unwrap();
         write!(out, "}}").unwrap();
         return out;
     }

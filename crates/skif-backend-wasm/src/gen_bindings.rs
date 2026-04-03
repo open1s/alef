@@ -62,6 +62,9 @@ impl Backend for WasmBackend {
         // Clippy allows for generated code
         builder.add_inner_attribute("allow(clippy::too_many_arguments)");
         builder.add_inner_attribute("allow(clippy::missing_errors_doc)");
+        builder.add_inner_attribute("allow(unused_variables)");
+        builder.add_inner_attribute("allow(dead_code)");
+        builder.add_inner_attribute("allow(clippy::should_implement_trait)");
 
         // Custom module declarations
         let custom_mods = config.custom_modules.for_language(Language::Wasm);
@@ -207,7 +210,7 @@ fn gen_opaque_method(method: &MethodDef, mapper: &WasmMapper, _type_name: &str) 
     let body = if can_delegate {
         format!("self.inner.{}()", method.name)
     } else {
-        format!("todo!(\"wire up {}\")", method.name)
+        gen_wasm_unimplemented_body(&method.return_type, &method.name, method.error_type.is_some())
     };
 
     format!(
@@ -383,17 +386,19 @@ fn gen_method(method: &MethodDef, mapper: &WasmMapper, type_name: &str, core_imp
             return_annotation
         )
     } else if method.is_static {
+        let body = gen_wasm_unimplemented_body(&method.return_type, &method.name, method.error_type.is_some());
         format!(
             "#[wasm_bindgen{js_name_attr}]\npub fn {}({}) -> {} {{\n    \
-             todo!(\"call into core implementation\")\n}}",
+             {body}\n}}",
             method.name,
             params.join(", "),
             return_annotation
         )
     } else {
+        let body = gen_wasm_unimplemented_body(&method.return_type, &method.name, method.error_type.is_some());
         format!(
             "#[wasm_bindgen{js_name_attr}]\npub fn {}(&self, {}) -> {} {{\n    \
-             todo!(\"call into core implementation\")\n}}",
+             {body}\n}}",
             method.name,
             params.join(", "),
             return_annotation
@@ -473,13 +478,38 @@ fn gen_function(func: &FunctionDef, mapper: &WasmMapper, core_import: &str) -> S
             return_annotation
         )
     } else {
+        let body = gen_wasm_unimplemented_body(&func.return_type, &func.name, func.error_type.is_some());
         format!(
             "#[wasm_bindgen{js_name_attr}]\npub fn {}({}) -> {} {{\n    \
-             todo!(\"call into core implementation\")\n}}",
+             {body}\n}}",
             func.name,
             params.join(", "),
             return_annotation
         )
+    }
+}
+
+/// Generate a type-appropriate unimplemented body for WASM (no todo!()).
+fn gen_wasm_unimplemented_body(return_type: &TypeRef, fn_name: &str, has_error: bool) -> String {
+    let err_msg = format!("Not implemented: {fn_name}");
+    if has_error {
+        format!("Err(JsValue::from_str(\"{err_msg}\"))")
+    } else {
+        match return_type {
+            TypeRef::Unit => "()".to_string(),
+            TypeRef::String | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
+            TypeRef::Bytes => "Vec::new()".to_string(),
+            TypeRef::Primitive(p) => match p {
+                skif_core::ir::PrimitiveType::Bool => "false".to_string(),
+                _ => "0".to_string(),
+            },
+            TypeRef::Optional(_) => "None".to_string(),
+            TypeRef::Vec(_) => "Vec::new()".to_string(),
+            TypeRef::Map(_, _) => "Default::default()".to_string(),
+            TypeRef::Named(_) | TypeRef::Json => {
+                format!("todo!(\"Not auto-delegatable: {fn_name} -- return type requires custom implementation\")")
+            }
+        }
     }
 }
 

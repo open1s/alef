@@ -58,6 +58,9 @@ impl Backend for MagnusBackend {
         // Clippy allows for generated code
         builder.add_inner_attribute("allow(clippy::too_many_arguments)");
         builder.add_inner_attribute("allow(clippy::missing_errors_doc)");
+        builder.add_inner_attribute("allow(unused_variables)");
+        builder.add_inner_attribute("allow(dead_code)");
+        builder.add_inner_attribute("allow(clippy::should_implement_trait)");
 
         // Custom module declarations
         let custom_mods = config.custom_modules.for_language(Language::Ruby);
@@ -218,9 +221,10 @@ fn gen_opaque_instance_method(method: &MethodDef, mapper: &MagnusMapper) -> Stri
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
+    let body = gen_magnus_unimplemented_body(&method.return_type, &method.name, method.error_type.is_some());
     format!(
         "fn {}(&self, {params}) -> {return_annotation} {{\n        \
-         todo!(\"delegate to self.inner\")\n    }}",
+         {body}\n    }}",
         method.name
     )
 }
@@ -231,13 +235,14 @@ fn gen_opaque_async_instance_method(method: &MethodDef, mapper: &MagnusMapper) -
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
+    let body = gen_magnus_unimplemented_body(
+        &method.return_type,
+        &format!("{}_async", method.name),
+        method.error_type.is_some(),
+    );
     format!(
         "fn {}_async(&self, {params}) -> {return_annotation} {{\n        \
-         let rt = tokio::runtime::Runtime::new()\n            \
-         .map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))?;\n        \
-         rt.block_on(async {{\n            \
-         todo!(\"delegate to self.inner\")\n        \
-         }}).map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))\n    \
+         {body}\n    \
          }}",
         method.name
     )
@@ -344,9 +349,10 @@ fn gen_instance_method(method: &MethodDef, mapper: &MagnusMapper) -> String {
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
+    let body = gen_magnus_unimplemented_body(&method.return_type, &method.name, method.error_type.is_some());
     format!(
         "fn {}(&self, {params}) -> {return_annotation} {{\n        \
-         todo!(\"call into core\")\n    }}",
+         {body}\n    }}",
         method.name
     )
 }
@@ -357,14 +363,15 @@ fn gen_async_instance_method(method: &MethodDef, mapper: &MagnusMapper) -> Strin
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
+    let body = gen_magnus_unimplemented_body(
+        &method.return_type,
+        &format!("{}_async", method.name),
+        method.error_type.is_some(),
+    );
     // Append "_async" to the method name for Ruby
     format!(
         "fn {}_async(&self, {params}) -> {return_annotation} {{\n        \
-         let rt = tokio::runtime::Runtime::new()\n            \
-         .map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))?;\n        \
-         rt.block_on(async {{\n            \
-         todo!(\"call into core\")\n        \
-         }}).map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))\n    \
+         {body}\n    \
          }}",
         method.name
     )
@@ -451,9 +458,10 @@ fn gen_function(func: &FunctionDef, mapper: &MagnusMapper) -> String {
     let return_type = mapper.map_type(&func.return_type);
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
 
+    let body = gen_magnus_unimplemented_body(&func.return_type, &func.name, func.error_type.is_some());
     format!(
         "fn {}({params}) -> {return_annotation} {{\n    \
-         todo!(\"call into core\")\n}}",
+         {body}\n}}",
         func.name
     )
 }
@@ -464,17 +472,43 @@ fn gen_async_function(func: &FunctionDef, mapper: &MagnusMapper) -> String {
     let return_type = mapper.map_type(&func.return_type);
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
 
+    let body = gen_magnus_unimplemented_body(
+        &func.return_type,
+        &format!("{}_async", func.name),
+        func.error_type.is_some(),
+    );
     // Append "_async" to the function name for Ruby
     format!(
         "fn {}_async({params}) -> {return_annotation} {{\n    \
-         let rt = tokio::runtime::Runtime::new()\n        \
-         .map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))?;\n    \
-         rt.block_on(async {{\n        \
-         todo!(\"call into core\")\n    \
-         }}).map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))\n\
+         {body}\n\
          }}",
         func.name
     )
+}
+
+/// Generate a type-appropriate unimplemented body for Magnus (no todo!()).
+fn gen_magnus_unimplemented_body(return_type: &skif_core::ir::TypeRef, fn_name: &str, has_error: bool) -> String {
+    use skif_core::ir::TypeRef;
+    let err_msg = format!("Not implemented: {fn_name}");
+    if has_error {
+        format!("Err(magnus::Error::new(magnus::exception::runtime_error(), \"{err_msg}\"))")
+    } else {
+        match return_type {
+            TypeRef::Unit => "()".to_string(),
+            TypeRef::String | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
+            TypeRef::Bytes => "Vec::new()".to_string(),
+            TypeRef::Primitive(p) => match p {
+                skif_core::ir::PrimitiveType::Bool => "false".to_string(),
+                _ => "0".to_string(),
+            },
+            TypeRef::Optional(_) => "None".to_string(),
+            TypeRef::Vec(_) => "Vec::new()".to_string(),
+            TypeRef::Map(_, _) => "Default::default()".to_string(),
+            TypeRef::Named(_) | TypeRef::Json => {
+                format!("todo!(\"Not auto-delegatable: {fn_name} -- return type requires custom implementation\")")
+            }
+        }
+    }
 }
 
 /// Generate the module initialization function.

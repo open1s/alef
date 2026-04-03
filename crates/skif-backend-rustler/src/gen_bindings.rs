@@ -41,6 +41,9 @@ impl Backend for RustlerBackend {
         // Clippy allows for generated code
         builder.add_inner_attribute("allow(clippy::too_many_arguments)");
         builder.add_inner_attribute("allow(clippy::missing_errors_doc)");
+        builder.add_inner_attribute("allow(unused_variables)");
+        builder.add_inner_attribute("allow(dead_code)");
+        builder.add_inner_attribute("allow(clippy::should_implement_trait)");
 
         // Custom module declarations
         let custom_mods = config.custom_modules.for_language(Language::Elixir);
@@ -229,9 +232,10 @@ fn gen_nif_function(func: &FunctionDef, mapper: &RustlerMapper, opaque_types: &A
     let return_type = map_return_type(&func.return_type, mapper, opaque_types);
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
 
+    let body = gen_rustler_unimplemented_body(&func.return_type, &func.name, func.error_type.is_some());
     format!(
         "#[rustler::nif]\npub fn {}({params_str}) -> {return_annotation} {{\n    \
-         todo!(\"call into core\")\n}}",
+         {body}\n}}",
         func.name
     )
 }
@@ -257,15 +261,15 @@ fn gen_nif_async_function(func: &FunctionDef, mapper: &RustlerMapper, opaque_typ
     let return_type = map_return_type(&func.return_type, mapper, opaque_types);
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
 
+    let body = gen_rustler_unimplemented_body(
+        &func.return_type,
+        &format!("{}_async", func.name),
+        func.error_type.is_some(),
+    );
     // Append "_async" to function name for Rustler
     format!(
         "#[rustler::nif(schedule = \"DirtyCpu\")]\npub fn {}_async({params_str}) -> {return_annotation} {{\n    \
-         let rt = tokio::runtime::Runtime::new()\n        \
-         .map_err(|e| e.to_string())?;\n    \
-         rt.block_on(async {{\n        \
-         todo!(\"call into core\")\n    \
-         }}).map_err(|e| e.to_string())\n        \
-         .map(ExtractionResult::from)\n\
+         {body}\n\
          }}",
         func.name
     )
@@ -307,9 +311,10 @@ fn gen_nif_method(
     let return_type = map_return_type(&method.return_type, mapper, opaque_types);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
+    let body = gen_rustler_unimplemented_body(&method.return_type, &method_fn_name, method.error_type.is_some());
     format!(
         "#[rustler::nif]\npub fn {}({}) -> {} {{\n    \
-         todo!(\"call into core\")\n}}",
+         {body}\n}}",
         method_fn_name,
         params.join(", "),
         return_annotation
@@ -352,19 +357,40 @@ fn gen_nif_async_method(
     let return_type = map_return_type(&method.return_type, mapper, opaque_types);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
+    let body = gen_rustler_unimplemented_body(&method.return_type, &method_fn_name, method.error_type.is_some());
     format!(
         "#[rustler::nif(schedule = \"DirtyCpu\")]\npub fn {}({}) -> {} {{\n    \
-         let rt = tokio::runtime::Runtime::new()\n        \
-         .map_err(|e| e.to_string())?;\n    \
-         rt.block_on(async {{\n        \
-         todo!(\"call into core\")\n    \
-         }}).map_err(|e| e.to_string())\n        \
-         .map(ExtractionResult::from)\n\
+         {body}\n\
          }}",
         method_fn_name,
         params.join(", "),
         return_annotation
     )
+}
+
+/// Generate a type-appropriate unimplemented body for Rustler (no todo!()).
+fn gen_rustler_unimplemented_body(return_type: &skif_core::ir::TypeRef, fn_name: &str, has_error: bool) -> String {
+    use skif_core::ir::TypeRef;
+    let err_msg = format!("Not implemented: {fn_name}");
+    if has_error {
+        format!("Err(String::from(\"{err_msg}\"))")
+    } else {
+        match return_type {
+            TypeRef::Unit => "()".to_string(),
+            TypeRef::String | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
+            TypeRef::Bytes => "Vec::new()".to_string(),
+            TypeRef::Primitive(p) => match p {
+                skif_core::ir::PrimitiveType::Bool => "false".to_string(),
+                _ => "0".to_string(),
+            },
+            TypeRef::Optional(_) => "None".to_string(),
+            TypeRef::Vec(_) => "Vec::new()".to_string(),
+            TypeRef::Map(_, _) => "Default::default()".to_string(),
+            TypeRef::Named(_) | TypeRef::Json => {
+                format!("todo!(\"Not auto-delegatable: {fn_name} -- return type requires custom implementation\")")
+            }
+        }
+    }
 }
 
 /// Map a return type, wrapping opaque Named types in ResourceArc.

@@ -65,6 +65,13 @@ impl Backend for PhpBackend {
         builder.add_import("std::collections::HashMap");
         builder.add_import(&core_import);
 
+        // Clippy allows for generated code
+        builder.add_inner_attribute("allow(clippy::too_many_arguments)");
+        builder.add_inner_attribute("allow(clippy::missing_errors_doc)");
+        builder.add_inner_attribute("allow(unused_variables)");
+        builder.add_inner_attribute("allow(dead_code)");
+        builder.add_inner_attribute("allow(clippy::should_implement_trait)");
+
         // Custom module declarations
         let custom_mods = config.custom_modules.for_language(Language::Php);
         for module in custom_mods {
@@ -203,8 +210,8 @@ fn gen_struct_methods(typ: &TypeDef, mapper: &PhpMapper) -> String {
             // constructor parameters (FromZvalMut not satisfied). Generate a todo!()
             // constructor to keep the class visible in PHP but defer implementation.
             let constructor = format!(
-                "pub fn __construct() -> Self {{\n    \
-                 todo!(\"constructor for {} requires complex params — implement manually\")\n\
+                "pub fn __construct() -> PhpResult<Self> {{\n    \
+                 Err(PhpException::default(\"Not implemented: constructor for {} requires complex params\".to_string()).into())\n\
                  }}",
                 typ.name
             );
@@ -247,9 +254,10 @@ fn gen_instance_method(method: &MethodDef, mapper: &PhpMapper) -> String {
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
+    let body = gen_php_unimplemented_body(&method.return_type, &method.name, method.error_type.is_some());
     format!(
         "pub fn {}(&self) -> {return_annotation} {{\n    \
-         todo!(\"call into core implementation\")\n\
+         {body}\n\
          }}",
         method.name
     )
@@ -261,9 +269,10 @@ fn gen_static_method(method: &MethodDef, mapper: &PhpMapper) -> String {
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
+    let body = gen_php_unimplemented_body(&method.return_type, &method.name, method.error_type.is_some());
     format!(
         "pub fn {}() -> {return_annotation} {{\n    \
-         todo!(\"call into core implementation\")\n\
+         {body}\n\
          }}",
         method.name
     )
@@ -287,9 +296,10 @@ fn gen_function(func: &FunctionDef, mapper: &PhpMapper) -> String {
     let return_type = mapper.map_type(&func.return_type);
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
 
+    let body = gen_php_unimplemented_body(&func.return_type, &func.name, func.error_type.is_some());
     format!(
         "#[php_function]\npub fn {}() -> {return_annotation} {{\n    \
-         todo!(\"call into core\")\n\
+         {body}\n\
          }}",
         func.name
     )
@@ -301,11 +311,16 @@ fn gen_async_function(func: &FunctionDef, mapper: &PhpMapper) -> String {
     let return_type = mapper.map_type(&func.return_type);
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
 
+    let body = gen_php_unimplemented_body(
+        &func.return_type,
+        &format!("{}_async", func.name),
+        func.error_type.is_some(),
+    );
     format!(
         "#[php_function]\npub fn {}_async() -> {return_annotation} {{\n    \
-         todo!(\"wire up {}_async\")\n\
+         {body}\n\
          }}",
-        func.name, func.name
+        func.name
     )
 }
 
@@ -315,11 +330,16 @@ fn gen_async_instance_method(method: &MethodDef, mapper: &PhpMapper) -> String {
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
+    let body = gen_php_unimplemented_body(
+        &method.return_type,
+        &format!("{}_async", method.name),
+        method.error_type.is_some(),
+    );
     format!(
         "pub fn {}_async(&self) -> {return_annotation} {{\n    \
-         todo!(\"wire up {}_async\")\n\
+         {body}\n\
          }}",
-        method.name, method.name
+        method.name
     )
 }
 
@@ -329,12 +349,42 @@ fn gen_async_static_method(method: &MethodDef, mapper: &PhpMapper) -> String {
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
+    let body = gen_php_unimplemented_body(
+        &method.return_type,
+        &format!("{}_async", method.name),
+        method.error_type.is_some(),
+    );
     format!(
         "pub fn {}_async() -> {return_annotation} {{\n    \
-         todo!(\"wire up {}_async\")\n\
+         {body}\n\
          }}",
-        method.name, method.name
+        method.name
     )
+}
+
+/// Generate a type-appropriate unimplemented body for PHP (no todo!()).
+fn gen_php_unimplemented_body(return_type: &skif_core::ir::TypeRef, fn_name: &str, has_error: bool) -> String {
+    use skif_core::ir::TypeRef;
+    let err_msg = format!("Not implemented: {fn_name}");
+    if has_error {
+        format!("Err(ext_php_rs::exception::PhpException::default(\"{err_msg}\".to_string()).into())")
+    } else {
+        match return_type {
+            TypeRef::Unit => "()".to_string(),
+            TypeRef::String | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
+            TypeRef::Bytes => "Vec::new()".to_string(),
+            TypeRef::Primitive(p) => match p {
+                skif_core::ir::PrimitiveType::Bool => "false".to_string(),
+                _ => "0".to_string(),
+            },
+            TypeRef::Optional(_) => "None".to_string(),
+            TypeRef::Vec(_) => "Vec::new()".to_string(),
+            TypeRef::Map(_, _) => "Default::default()".to_string(),
+            TypeRef::Named(_) | TypeRef::Json => {
+                format!("todo!(\"Not auto-delegatable: {fn_name} -- return type requires custom implementation\")")
+            }
+        }
+    }
 }
 
 /// Generate `impl From<Type> for core::Type` with PHP-specific i64 casts.

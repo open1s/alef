@@ -70,6 +70,9 @@ impl Backend for NapiBackend {
         // Clippy allows for generated code
         builder.add_inner_attribute("allow(clippy::too_many_arguments)");
         builder.add_inner_attribute("allow(clippy::missing_errors_doc)");
+        builder.add_inner_attribute("allow(unused_variables)");
+        builder.add_inner_attribute("allow(dead_code)");
+        builder.add_inner_attribute("allow(clippy::should_implement_trait)");
 
         // Custom module declarations (NAPI auto-exports, no explicit registration needed)
         let custom_mods = config.custom_modules.for_language(Language::Node);
@@ -255,7 +258,7 @@ fn gen_opaque_instance_method(method: &MethodDef, mapper: &NapiMapper) -> String
             _ => format!("self.inner.{}()", method.name),
         }
     } else {
-        format!("todo!(\"wire up {}\")", method.name)
+        gen_napi_unimplemented_body(&method.return_type, &method.name, method.error_type.is_some())
     };
 
     format!(
@@ -279,9 +282,10 @@ fn gen_static_method(method: &MethodDef, mapper: &NapiMapper) -> String {
     };
 
     let async_kw = if method.is_async { "async " } else { "" };
+    let body = gen_napi_unimplemented_body(&method.return_type, &method.name, method.error_type.is_some());
     format!(
         "#[napi{js_name_attr}]\npub {async_kw}fn {}({params}) -> {return_annotation} {{\n    \
-         todo!(\"call into core\")\n}}",
+         {body}\n}}",
         method.name
     )
 }
@@ -316,9 +320,10 @@ fn gen_function(func: &FunctionDef, mapper: &NapiMapper) -> String {
     };
 
     let async_kw = if func.is_async { "async " } else { "" };
+    let body = gen_napi_unimplemented_body(&func.return_type, &func.name, func.error_type.is_some());
     format!(
         "#[napi{js_name_attr}]\npub {async_kw}fn {}({params}) -> {return_annotation} {{\n    \
-         todo!(\"call into core\")\n}}",
+         {body}\n}}",
         func.name
     )
 }
@@ -469,6 +474,31 @@ fn gen_enum_from_core_to_js_binding(enum_def: &EnumDef, core_import: &str) -> St
     writeln!(out, "    }}").ok();
     write!(out, "}}").ok();
     out
+}
+
+/// Generate a type-appropriate unimplemented body for NAPI (no todo!()).
+fn gen_napi_unimplemented_body(return_type: &skif_core::ir::TypeRef, fn_name: &str, has_error: bool) -> String {
+    use skif_core::ir::TypeRef;
+    let err_msg = format!("Not implemented: {fn_name}");
+    if has_error {
+        format!("Err(napi::Error::new(napi::Status::GenericFailure, \"{err_msg}\"))")
+    } else {
+        match return_type {
+            TypeRef::Unit => "()".to_string(),
+            TypeRef::String | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
+            TypeRef::Bytes => "Vec::new()".to_string(),
+            TypeRef::Primitive(p) => match p {
+                skif_core::ir::PrimitiveType::Bool => "false".to_string(),
+                _ => "0".to_string(),
+            },
+            TypeRef::Optional(_) => "None".to_string(),
+            TypeRef::Vec(_) => "Vec::new()".to_string(),
+            TypeRef::Map(_, _) => "Default::default()".to_string(),
+            TypeRef::Named(_) | TypeRef::Json => {
+                format!("todo!(\"Not auto-delegatable: {fn_name} -- return type requires custom implementation\")")
+            }
+        }
+    }
 }
 
 /// Generate a global Tokio runtime for NAPI async support.
