@@ -1,5 +1,5 @@
 use ahash::AHashSet;
-use skif_core::ir::{ApiSurface, EnumDef, TypeDef, TypeRef};
+use skif_core::ir::{ApiSurface, EnumDef, FieldDef, TypeDef, TypeRef};
 use std::fmt::Write;
 
 /// Build the set of types that can have From/Into safely generated.
@@ -66,9 +66,70 @@ fn is_field_convertible(ty: &TypeRef, convertible_enums: &AHashSet<&str>, known_
 }
 
 /// Check if an enum can have From/Into safely generated.
-/// Only simple unit-variant enums are supported.
+/// Supports unit-variant enums and enums whose data variants contain only
+/// simple convertible field types (primitives, String, Bytes, Path, Unit).
 pub fn can_generate_enum_conversion(enum_def: &EnumDef) -> bool {
-    enum_def.variants.iter().all(|v| v.fields.is_empty())
+    enum_def
+        .variants
+        .iter()
+        .all(|v| v.fields.iter().all(|f| is_simple_type(&f.ty)))
+}
+
+/// Returns true for types that are trivially convertible without needing
+/// to consult the convertible_enums/known_types sets.
+fn is_simple_type(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_simple_type(inner),
+        TypeRef::Map(k, v) => is_simple_type(k) && is_simple_type(v),
+        TypeRef::Named(_) | TypeRef::Json => false,
+    }
+}
+
+/// Returns true if fields represent a tuple variant (positional: _0, _1, ...).
+fn is_tuple_variant(fields: &[FieldDef]) -> bool {
+    !fields.is_empty()
+        && fields[0]
+            .name
+            .strip_prefix('_')
+            .is_some_and(|rest: &str| rest.chars().all(|c: char| c.is_ascii_digit()))
+}
+
+/// Generate a match arm for binding -> core direction.
+/// Binding enums are always unit-variant-only. Core enums may have data variants.
+/// For data variants: `BindingEnum::Variant => CoreEnum::Variant(Default::default(), ...)`
+fn binding_to_core_match_arm(binding_prefix: &str, variant_name: &str, fields: &[FieldDef]) -> String {
+    if fields.is_empty() {
+        format!("{binding_prefix}::{variant_name} => Self::{variant_name},")
+    } else if is_tuple_variant(fields) {
+        let defaults: Vec<&str> = fields.iter().map(|_| "Default::default()").collect();
+        format!(
+            "{binding_prefix}::{variant_name} => Self::{variant_name}({}),",
+            defaults.join(", ")
+        )
+    } else {
+        let defaults: Vec<String> = fields
+            .iter()
+            .map(|f| format!("{}: Default::default()", f.name))
+            .collect();
+        format!(
+            "{binding_prefix}::{variant_name} => Self::{variant_name} {{ {} }},",
+            defaults.join(", ")
+        )
+    }
+}
+
+/// Generate a match arm for core -> binding direction.
+/// Core enums may have data variants; binding enums are always unit-variant-only.
+/// For data variants: `CoreEnum::Variant(..) => Self::Variant`
+fn core_to_binding_match_arm(core_prefix: &str, variant_name: &str, fields: &[FieldDef]) -> String {
+    if fields.is_empty() {
+        format!("{core_prefix}::{variant_name} => Self::{variant_name},")
+    } else if is_tuple_variant(fields) {
+        format!("{core_prefix}::{variant_name}(..) => Self::{variant_name},")
+    } else {
+        format!("{core_prefix}::{variant_name} {{ .. }} => Self::{variant_name},")
+    }
 }
 
 /// Derive the Rust import path from rust_path, replacing hyphens with underscores.
@@ -136,6 +197,8 @@ fn core_enum_path(enum_def: &EnumDef, core_import: &str) -> String {
 }
 
 /// Generate `impl From<BindingEnum> for core::Enum` (binding -> core).
+/// Binding enums are always unit-variant-only. Core enums may have data variants,
+/// in which case Default::default() is used for fields.
 pub fn gen_enum_from_binding_to_core(enum_def: &EnumDef, core_import: &str) -> String {
     let core_path = core_enum_path(enum_def, core_import);
     let mut out = String::with_capacity(256);
@@ -143,12 +206,8 @@ pub fn gen_enum_from_binding_to_core(enum_def: &EnumDef, core_import: &str) -> S
     writeln!(out, "    fn from(val: {}) -> Self {{", enum_def.name).ok();
     writeln!(out, "        match val {{").ok();
     for variant in &enum_def.variants {
-        writeln!(
-            out,
-            "            {}::{} => Self::{},",
-            enum_def.name, variant.name, variant.name
-        )
-        .ok();
+        let arm = binding_to_core_match_arm(&enum_def.name, &variant.name, &variant.fields);
+        writeln!(out, "            {arm}").ok();
     }
     writeln!(out, "        }}").ok();
     writeln!(out, "    }}").ok();
@@ -157,6 +216,8 @@ pub fn gen_enum_from_binding_to_core(enum_def: &EnumDef, core_import: &str) -> S
 }
 
 /// Generate `impl From<core::Enum> for BindingEnum` (core -> binding).
+/// Core enums may have data variants; binding enums are always unit-variant-only,
+/// so data fields are discarded.
 pub fn gen_enum_from_core_to_binding(enum_def: &EnumDef, core_import: &str) -> String {
     let core_path = core_enum_path(enum_def, core_import);
     let mut out = String::with_capacity(256);
@@ -164,12 +225,8 @@ pub fn gen_enum_from_core_to_binding(enum_def: &EnumDef, core_import: &str) -> S
     writeln!(out, "    fn from(val: {core_path}) -> Self {{").ok();
     writeln!(out, "        match val {{").ok();
     for variant in &enum_def.variants {
-        writeln!(
-            out,
-            "            {core_path}::{} => Self::{},",
-            variant.name, variant.name
-        )
-        .ok();
+        let arm = core_to_binding_match_arm(&core_path, &variant.name, &variant.fields);
+        writeln!(out, "            {arm}").ok();
     }
     writeln!(out, "        }}").ok();
     writeln!(out, "    }}").ok();

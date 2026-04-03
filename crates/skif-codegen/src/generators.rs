@@ -673,6 +673,9 @@ pub fn gen_static_method(
 
 /// Generate an enum.
 pub fn gen_enum(enum_def: &EnumDef, cfg: &RustBindingConfig) -> String {
+    // All enums are generated as unit-variant-only in the binding layer.
+    // Data variants are flattened to unit variants; the From/Into conversions
+    // handle the lossy mapping (discarding / providing defaults for field data).
     let mut out = String::with_capacity(512);
     if let Some(ref cfg_condition) = enum_def.cfg {
         writeln!(out, "#[cfg({cfg_condition})]").ok();
