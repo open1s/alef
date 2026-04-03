@@ -452,6 +452,7 @@ dependencies = [
 name = "skif-backend-extendr"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "anyhow",
  "skif-adapters",
  "skif-codegen",

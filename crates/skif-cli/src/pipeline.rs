@@ -30,6 +30,9 @@ pub fn extract(config: &SkifConfig, config_path: &Path, clean: bool) -> anyhow::
     // Apply global filters (includes and excludes)
     let mut api = apply_filters(api, config);
 
+    // Inject declared opaque types from config (external crate types skif can't extract)
+    inject_declared_opaque_types(&mut api, config);
+
     // Replace references to types not in the API surface with String
     sanitize_unknown_types(&mut api);
 
@@ -456,6 +459,28 @@ fn to_pascal_case(s: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Inject declared opaque types from config into the API surface.
+/// These are external crate types that skif can't extract but needs to generate wrappers for.
+fn inject_declared_opaque_types(api: &mut ApiSurface, config: &SkifConfig) {
+    for (name, rust_path) in &config.opaque_types {
+        // Only add if not already in the API surface
+        if !api.types.iter().any(|t| t.name == *name) && !api.enums.iter().any(|e| e.name == *name) {
+            api.types.push(skif_core::ir::TypeDef {
+                name: name.clone(),
+                rust_path: rust_path.clone(),
+                fields: vec![],
+                methods: vec![],
+                is_opaque: true,
+                is_clone: false,
+                doc: String::new(),
+                cfg: None,
+                is_trait: false,
+            });
+            debug!("Injected declared opaque type: {name} -> {rust_path}");
+        }
+    }
 }
 
 /// Replace `TypeRef::Named(name)` references that don't exist in the API surface

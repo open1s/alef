@@ -109,6 +109,7 @@ fn test_basic_generation() {
         adapters: vec![],
         custom_modules: skif_core::config::CustomModulesConfig::default(),
         custom_registrations: skif_core::config::CustomRegistrationsConfig::default(),
+        opaque_types: std::collections::HashMap::new(),
     };
 
     // Generate bindings
@@ -228,6 +229,7 @@ fn test_package_default() {
         adapters: vec![],
         custom_modules: skif_core::config::CustomModulesConfig::default(),
         custom_registrations: skif_core::config::CustomRegistrationsConfig::default(),
+        opaque_types: std::collections::HashMap::new(),
     };
 
     let result = backend.generate_bindings(&api, &config);

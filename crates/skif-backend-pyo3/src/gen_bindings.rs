@@ -145,7 +145,13 @@ impl Backend for Pyo3Backend {
             builder.add_item(&generators::gen_enum(e, &cfg));
         }
         for f in &api.functions {
-            builder.add_item(&generators::gen_function(f, &mapper, &cfg, &adapter_bodies));
+            builder.add_item(&generators::gen_function(
+                f,
+                &mapper,
+                &cfg,
+                &adapter_bodies,
+                &opaque_types,
+            ));
         }
 
         let convertible = skif_codegen::conversions::convertible_types(api);

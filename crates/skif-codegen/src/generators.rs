@@ -82,12 +82,21 @@ fn wrap_opaque_return(expr: &str, return_type: &TypeRef, type_name: &str, opaque
 }
 
 /// Build call argument expressions from parameters.
-/// - Named types: `.into()` for conversion
-/// - String/Path: `&param` since core functions typically take `&str`/`&Path`
-fn gen_call_args(params: &[ParamDef]) -> String {
+/// - Opaque Named types: unwrap Arc wrapper via `(*param.inner).clone()`
+/// - Non-opaque Named types: `.into()` for From conversion
+/// - String/Path/Bytes: `&param` since core functions typically take `&str`/`&Path`/`&[u8]`
+fn gen_call_args(params: &[ParamDef], opaque_types: &AHashSet<String>) -> String {
     params
         .iter()
         .map(|p| match &p.ty {
+            TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
+                // Opaque type: unwrap the Arc wrapper to get the core type
+                if p.optional {
+                    format!("{}.map(|v| (*v.inner).clone())", p.name)
+                } else {
+                    format!("(*{}.inner).clone()", p.name)
+                }
+            }
             TypeRef::Named(_) => {
                 if p.optional {
                     format!("{}.map(Into::into)", p.name)
@@ -206,7 +215,7 @@ pub fn gen_opaque_impl_block(
 
     // Static methods
     for m in &statics {
-        out.push_str(&gen_static_method(m, mapper, cfg, typ, adapter_bodies));
+        out.push_str(&gen_static_method(m, mapper, cfg, typ, adapter_bodies, opaque_types));
         out.push_str("\n\n");
     }
 
@@ -263,19 +272,19 @@ pub fn gen_method(
     let return_type = mapper.map_type(&method.return_type);
     let ret = mapper.wrap_return(&return_type, method.error_type.is_some());
 
-    let call_args = gen_call_args(&method.params);
+    let call_args = gen_call_args(&method.params, opaque_types);
 
-    // Only auto-delegate opaque methods with NO params, non-async, no error, simple return,
-    // and no sanitized signature (sanitized types don't match core signatures).
+    // Auto-delegate opaque methods: unwrap Arc for params, wrap Arc for returns.
+    // Allows Named params/returns (opaque types use Arc unwrap/wrap, non-opaque use .into()).
     let opaque_can_delegate = is_opaque
         && !method.sanitized
-        && method.params.is_empty()
         && !method.is_async
         && method.error_type.is_none()
-        && matches!(
-            method.return_type,
-            TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Unit
-        );
+        && method
+            .params
+            .iter()
+            .all(|p| !p.sanitized && crate::shared::is_delegatable_type(&p.ty))
+        && crate::shared::is_delegatable_type(&method.return_type);
 
     // Build the core call expression: opaque types delegate to self.inner directly,
     // non-opaque types convert self to core type first.
@@ -485,6 +494,7 @@ pub fn gen_static_method(
     cfg: &RustBindingConfig,
     typ: &TypeDef,
     adapter_bodies: &AdapterBodies,
+    opaque_types: &AHashSet<String>,
 ) -> String {
     let type_name = &typ.name;
     // Use the full rust_path (with hyphens replaced by underscores) for core type references
@@ -494,7 +504,7 @@ pub fn gen_static_method(
     let return_type = mapper.map_type(&method.return_type);
     let ret = mapper.wrap_return(&return_type, method.error_type.is_some());
 
-    let call_args = gen_call_args(&method.params);
+    let call_args = gen_call_args(&method.params, opaque_types);
 
     let can_delegate = crate::shared::can_auto_delegate(method);
 
@@ -664,13 +674,14 @@ pub fn gen_function(
     mapper: &dyn TypeMapper,
     cfg: &RustBindingConfig,
     adapter_bodies: &AdapterBodies,
+    opaque_types: &AHashSet<String>,
 ) -> String {
     let map_fn = |ty: &skif_core::ir::TypeRef| mapper.map_type(ty);
     let params = function_params(&func.params, &map_fn);
     let return_type = mapper.map_type(&func.return_type);
     let ret = mapper.wrap_return(&return_type, func.error_type.is_some());
 
-    let call_args = gen_call_args(&func.params);
+    let call_args = gen_call_args(&func.params, opaque_types);
     let core_import = cfg.core_import;
 
     // Use the function's rust_path for correct module path resolution
@@ -763,19 +774,41 @@ pub fn gen_function(
         }
     } else {
         let core_call = format!("{core_fn_path}({call_args})");
-        if func.error_type.is_some() {
-            format!("{core_call}.map_err(|e| e.into())")
-        } else {
-            // Wrap return for types that may need conversion (&str→String, &[u8]→Vec<u8>)
+
+        // Determine return wrapping strategy
+        let wrap_return = |expr: &str| -> String {
             match &func.return_type {
-                TypeRef::String | TypeRef::Bytes | TypeRef::Path => format!("{core_call}.into()"),
-                TypeRef::Optional(inner)
-                    if matches!(inner.as_ref(), TypeRef::String | TypeRef::Bytes | TypeRef::Path) =>
-                {
-                    format!("{core_call}.map(Into::into)")
+                // Opaque type return: wrap in Arc
+                TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
+                    format!("{name} {{ inner: std::sync::Arc::new({expr}) }}")
                 }
-                _ => core_call,
+                // Non-opaque Named: use .into()
+                TypeRef::Named(_) => format!("{expr}.into()"),
+                // String/Bytes/Path: .into() handles &str→String etc.
+                TypeRef::String | TypeRef::Bytes | TypeRef::Path => format!("{expr}.into()"),
+                // Optional with opaque inner
+                TypeRef::Optional(inner) => match inner.as_ref() {
+                    TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
+                        format!("{expr}.map(|v| {name} {{ inner: std::sync::Arc::new(v) }})")
+                    }
+                    TypeRef::Named(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
+                        format!("{expr}.map(Into::into)")
+                    }
+                    _ => expr.to_string(),
+                },
+                _ => expr.to_string(),
             }
+        };
+
+        if func.error_type.is_some() {
+            let wrapped = wrap_return("val");
+            if wrapped == "val" {
+                format!("{core_call}.map_err(|e| e.into())")
+            } else {
+                format!("{core_call}.map(|val| {wrapped}).map_err(|e| e.into())")
+            }
+        } else {
+            wrap_return(&core_call)
         }
     };
 
@@ -880,7 +913,7 @@ pub fn gen_impl_block(
 
     // Static methods
     for m in &statics {
-        out.push_str(&gen_static_method(m, mapper, cfg, typ, adapter_bodies));
+        out.push_str(&gen_static_method(m, mapper, cfg, typ, adapter_bodies, &empty_opaque));
         out.push_str("\n\n");
     }
 

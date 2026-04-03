@@ -124,6 +124,7 @@ fn test_generated_code_example() {
         adapters: vec![],
         custom_modules: skif_core::config::CustomModulesConfig::default(),
         custom_registrations: skif_core::config::CustomRegistrationsConfig::default(),
+        opaque_types: std::collections::HashMap::new(),
     };
 
     let files = backend.generate_bindings(&api, &config).unwrap();

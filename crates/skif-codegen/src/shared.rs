@@ -5,25 +5,34 @@ use skif_core::ir::{FieldDef, MethodDef, ParamDef, TypeRef};
 /// signature differs from the core crate's actual signature.
 pub fn can_auto_delegate_function(func: &skif_core::ir::FunctionDef) -> bool {
     !func.sanitized
-        && func.error_type.is_none()
-        && func.params.iter().all(|p| is_simple_type(&p.ty))
-        && is_simple_type(&func.return_type)
+        && func.params.iter().all(|p| !p.sanitized && is_delegatable_type(&p.ty))
+        && is_delegatable_type(&func.return_type)
 }
 
-/// Check if all params and return type are simple enough for auto-delegation.
-/// Simple = primitives, String, Bytes, bool, Vec<primitive>, Option<primitive>, Unit.
-/// Non-simple = Named types (need conversion), Json, complex nested.
-/// Also checks that the method has no error type (Result wrapping needs care).
-/// Methods with sanitized signatures cannot be delegated — the binding type
-/// differs from the core crate's actual type.
+/// Check if all params and return type are delegatable.
+/// Delegatable = any type that can be passed through with .into() or direct copy.
+/// Non-delegatable = Json (no standard conversion), sanitized types.
+/// Methods with sanitized signatures cannot be delegated.
 pub fn can_auto_delegate(method: &MethodDef) -> bool {
     !method.sanitized
-        && method.error_type.is_none()
-        && method.params.iter().all(|p| is_simple_type(&p.ty))
-        && is_simple_type(&method.return_type)
+        && method.params.iter().all(|p| !p.sanitized && is_delegatable_type(&p.ty))
+        && is_delegatable_type(&method.return_type)
 }
 
-fn is_simple_type(ty: &TypeRef) -> bool {
+/// A type is delegatable if it can cross the binding boundary.
+/// Named types use .into() conversion. Json types are not delegatable.
+pub fn is_delegatable_type(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
+        TypeRef::Named(_) => true, // Uses .into() conversion
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_delegatable_type(inner),
+        TypeRef::Map(k, v) => is_delegatable_type(k) && is_delegatable_type(v),
+        TypeRef::Json => false,
+    }
+}
+
+/// Check if a type is "simple" — can be passed without any conversion.
+pub fn is_simple_type(ty: &TypeRef) -> bool {
     match ty {
         TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
         TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_simple_type(inner),

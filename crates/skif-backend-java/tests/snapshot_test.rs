@@ -209,6 +209,7 @@ fn print_generated_java_code() {
         adapters: vec![],
         custom_modules: skif_core::config::CustomModulesConfig::default(),
         custom_registrations: skif_core::config::CustomRegistrationsConfig::default(),
+        opaque_types: std::collections::HashMap::new(),
     };
 
     let result = backend.generate_bindings(&api, &config).unwrap();

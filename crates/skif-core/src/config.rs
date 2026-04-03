@@ -50,6 +50,11 @@ pub struct SkifConfig {
     pub custom_modules: CustomModulesConfig,
     #[serde(default)]
     pub custom_registrations: CustomRegistrationsConfig,
+    /// Declare opaque types from external crates that skif can't extract.
+    /// Map of type name → Rust path (e.g., "Tree" = "tree_sitter_language_pack::Tree").
+    /// These get opaque wrapper structs in all backends.
+    #[serde(default)]
+    pub opaque_types: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

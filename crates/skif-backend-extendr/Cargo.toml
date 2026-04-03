@@ -8,6 +8,7 @@ description = "R (extendr) backend for skif"
 repository.workspace = true
 
 [dependencies]
+ahash = { workspace = true }
 anyhow = { workspace = true }
 skif-adapters = { workspace = true }
 skif-codegen = { path = "../skif-codegen" }

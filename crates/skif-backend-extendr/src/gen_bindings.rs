@@ -98,6 +98,13 @@ impl Backend for ExtendrBackend {
             builder.add_item(&format!("pub mod {module};"));
         }
 
+        let opaque_types: ahash::AHashSet<String> = api
+            .types
+            .iter()
+            .filter(|t| t.is_opaque)
+            .map(|t| t.name.clone())
+            .collect();
+
         // Generate type bindings
         for typ in &api.types {
             builder.add_item(&generators::gen_struct(typ, self, &cfg));
@@ -114,7 +121,13 @@ impl Backend for ExtendrBackend {
 
         // Generate function bindings
         for func in &api.functions {
-            builder.add_item(&generators::gen_function(func, self, &cfg, &adapter_bodies));
+            builder.add_item(&generators::gen_function(
+                func,
+                self,
+                &cfg,
+                &adapter_bodies,
+                &opaque_types,
+            ));
         }
 
         // Module registration

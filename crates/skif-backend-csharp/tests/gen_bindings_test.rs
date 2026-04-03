@@ -128,6 +128,7 @@ fn test_basic_generation() {
         adapters: vec![],
         custom_modules: skif_core::config::CustomModulesConfig::default(),
         custom_registrations: skif_core::config::CustomRegistrationsConfig::default(),
+        opaque_types: std::collections::HashMap::new(),
     };
 
     // Generate bindings
@@ -257,6 +258,7 @@ fn test_namespace_resolution() {
         adapters: vec![],
         custom_modules: skif_core::config::CustomModulesConfig::default(),
         custom_registrations: skif_core::config::CustomRegistrationsConfig::default(),
+        opaque_types: std::collections::HashMap::new(),
     };
 
     let result = backend.generate_bindings(&api, &config);
@@ -317,6 +319,7 @@ fn test_generated_header() {
         adapters: vec![],
         custom_modules: skif_core::config::CustomModulesConfig::default(),
         custom_registrations: skif_core::config::CustomRegistrationsConfig::default(),
+        opaque_types: std::collections::HashMap::new(),
     };
 
     let result = backend.generate_bindings(&api, &config);
@@ -425,6 +428,7 @@ fn test_type_mapping() {
         adapters: vec![],
         custom_modules: skif_core::config::CustomModulesConfig::default(),
         custom_registrations: skif_core::config::CustomRegistrationsConfig::default(),
+        opaque_types: std::collections::HashMap::new(),
     };
 
     let result = backend.generate_bindings(&api, &config);

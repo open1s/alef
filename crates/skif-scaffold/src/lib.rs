@@ -912,6 +912,7 @@ mod tests {
             adapters: vec![],
             custom_modules: CustomModulesConfig::default(),
             custom_registrations: CustomRegistrationsConfig::default(),
+            opaque_types: std::collections::HashMap::new(),
         }
     }
 
