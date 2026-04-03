@@ -199,6 +199,10 @@ pub struct FfiConfig {
     #[serde(default = "default_error_style")]
     pub error_style: String,
     pub header_name: Option<String>,
+    /// Native library name for Go cgo/Java Panama/C# P/Invoke (e.g., "ts_pack_ffi").
+    /// Defaults to `{prefix}_ffi`.
+    #[serde(default)]
+    pub lib_name: Option<String>,
 }
 
 fn default_error_style() -> String {
@@ -428,6 +432,15 @@ impl SkifConfig {
             .and_then(|f| f.prefix.as_ref())
             .cloned()
             .unwrap_or_else(|| self.crate_config.name.replace('-', "_"))
+    }
+
+    /// Get the FFI native library name (for Go cgo, Java Panama, C# P/Invoke).
+    pub fn ffi_lib_name(&self) -> String {
+        self.ffi
+            .as_ref()
+            .and_then(|f| f.lib_name.as_ref())
+            .cloned()
+            .unwrap_or_else(|| format!("{}_ffi", self.ffi_prefix()))
     }
 
     /// Get the FFI header name.

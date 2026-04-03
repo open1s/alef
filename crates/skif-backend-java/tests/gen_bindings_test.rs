@@ -94,6 +94,7 @@ fn test_basic_generation() {
             prefix: Some("test".to_string()),
             error_style: "last_error".to_string(),
             header_name: None,
+            lib_name: None,
         }),
         go: None,
         java: Some(JavaConfig {
@@ -217,6 +218,7 @@ fn test_package_default() {
             prefix: None,
             error_style: "last_error".to_string(),
             header_name: None,
+            lib_name: None,
         }),
         go: None,
         java: None, // No explicit package

@@ -49,7 +49,9 @@ impl Backend for GoBackend {
 
         let output_dir = resolve_output_dir(config.output.go.as_ref(), &config.crate_config.name, "packages/go/");
 
-        let content = gen_go_file(api, &ffi_prefix, &pkg_name);
+        let ffi_lib_name = config.ffi_lib_name();
+        let ffi_header = config.ffi_header_name();
+        let content = gen_go_file(api, &ffi_prefix, &pkg_name, &ffi_lib_name, &ffi_header);
 
         // Build adapter body map (consumed by generators via body substitution)
         let _adapter_bodies = skif_adapters::build_adapter_bodies(config, Language::Go)?;
@@ -63,15 +65,15 @@ impl Backend for GoBackend {
 }
 
 /// Generate the complete Go binding file wrapping the C FFI layer.
-fn gen_go_file(api: &ApiSurface, ffi_prefix: &str, pkg_name: &str) -> String {
+fn gen_go_file(api: &ApiSurface, ffi_prefix: &str, pkg_name: &str, ffi_lib_name: &str, ffi_header: &str) -> String {
     let mut out = String::with_capacity(4096);
 
     // Package header and imports
     writeln!(out, "package {}\n", pkg_name).ok();
     writeln!(
         out,
-        "/*\n#cgo LDFLAGS: -l{}_ffi\n#include \"{}.h\"\nimport \"C\"\n*/",
-        ffi_prefix, ffi_prefix
+        "/*\n#cgo LDFLAGS: -l{}\n#include \"{}\"\nimport \"C\"\n*/",
+        ffi_lib_name, ffi_header
     )
     .ok();
     writeln!(out).ok();

@@ -109,6 +109,7 @@ fn test_generated_code_example() {
             prefix: Some("kreuzberg".to_string()),
             error_style: "last_error".to_string(),
             header_name: None,
+            lib_name: None,
         }),
         go: None,
         java: None,

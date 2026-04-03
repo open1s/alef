@@ -10,15 +10,7 @@ use std::path::PathBuf;
 pub struct CsharpBackend;
 
 impl CsharpBackend {
-    /// Get the library name for P/Invoke.
-    fn lib_name(prefix: &str) -> String {
-        // Use just the prefix if it looks like a lib name, otherwise append _ffi
-        if prefix.ends_with("_ffi") || prefix == "ffi" {
-            prefix.to_string()
-        } else {
-            format!("{}_ffi", prefix)
-        }
-    }
+    // lib_name comes from config.ffi_lib_name()
 }
 
 impl Backend for CsharpBackend {
@@ -44,7 +36,7 @@ impl Backend for CsharpBackend {
     fn generate_bindings(&self, api: &ApiSurface, config: &SkifConfig) -> anyhow::Result<Vec<GeneratedFile>> {
         let namespace = config.csharp_namespace();
         let prefix = config.ffi_prefix();
-        let lib_name = Self::lib_name(&prefix);
+        let lib_name = config.ffi_lib_name();
 
         let output_dir = resolve_output_dir(
             config.output.csharp.as_ref(),
