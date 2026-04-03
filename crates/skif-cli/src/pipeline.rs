@@ -9,30 +9,63 @@ use crate::cache;
 use crate::registry;
 use tracing::{debug, info};
 
-/// Ensure `.skif/` is in `.gitignore` so cache files aren't committed.
-pub fn ensure_gitignore(base_dir: &Path) {
-    let gitignore = base_dir.join(".gitignore");
-    let entry = ".skif/";
+/// Ensure required entries are in `.gitignore` — creates the file if absent.
+/// Adds `.skif/` (cache) and language-specific build artifacts based on config.
+pub fn ensure_gitignore(base_dir: &Path, config: &SkifConfig) {
+    let gitignore_path = base_dir.join(".gitignore");
+    let existing = std::fs::read_to_string(&gitignore_path).unwrap_or_default();
+    let existing_lines: AHashSet<&str> = existing.lines().map(str::trim).collect();
 
-    if let Ok(content) = std::fs::read_to_string(&gitignore) {
-        if content.lines().any(|line| line.trim() == entry) {
-            return; // Already present
+    let mut entries: Vec<&str> = vec![".skif/"];
+
+    for lang in &config.languages {
+        match lang {
+            Language::Python => {
+                entries.extend_from_slice(&["__pycache__/", "*.so", "*.pyd", ".venv/", "*.egg-info/", "dist/"])
+            }
+            Language::Node => entries.extend_from_slice(&["node_modules/", "*.node"]),
+            Language::Ruby => entries.extend_from_slice(&[".gems/", "vendor/bundle/"]),
+            Language::Php => entries.extend_from_slice(&["vendor/"]),
+            Language::Ffi => entries.push("*.h.bak"),
+            Language::Go => entries.push("*.test"),
+            Language::Java => entries.extend_from_slice(&["target/", "*.class"]),
+            Language::Csharp => entries.extend_from_slice(&["bin/", "obj/", "*.nupkg"]),
+            Language::Wasm => entries.push("pkg/"),
+            _ => {}
         }
-        // Append to existing .gitignore
-        let separator = if content.ends_with('\n') { "" } else { "\n" };
-        if let Err(e) = std::fs::write(&gitignore, format!("{content}{separator}{entry}\n")) {
-            debug!("Could not update .gitignore: {e}");
+    }
+
+    let mut to_add = Vec::new();
+    for entry in &entries {
+        if !existing_lines.contains(entry) {
+            to_add.push(*entry);
         }
+    }
+
+    if to_add.is_empty() {
+        return;
+    }
+
+    let separator = if existing.is_empty() || existing.ends_with('\n') {
+        ""
     } else {
-        // No .gitignore — don't create one, the project may not use git
+        "\n"
+    };
+    let additions = to_add.join("\n");
+    let new_content = format!("{existing}{separator}{additions}\n");
+
+    if let Err(e) = std::fs::write(&gitignore_path, new_content) {
+        debug!("Could not update .gitignore: {e}");
+    } else {
+        debug!("Updated .gitignore with {} entries", to_add.len());
     }
 }
 
 /// Run extraction, with caching.
 pub fn extract(config: &SkifConfig, config_path: &Path, clean: bool) -> anyhow::Result<ApiSurface> {
-    // Ensure .skif/ cache dir is gitignored
+    // Ensure .gitignore has required entries
     if let Some(parent) = config_path.parent() {
-        ensure_gitignore(parent);
+        ensure_gitignore(parent, config);
     }
 
     let source_hash = cache::compute_source_hash(&config.crate_config.sources, config_path)?;
