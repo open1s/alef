@@ -75,8 +75,10 @@ fn wrap_opaque_return(expr: &str, return_type: &TypeRef, type_name: &str, opaque
             // Non-opaque Named return type — From impl may not exist, use todo!()
             format!("todo!(\"convert return type {n} from core\")")
         }
-        // Use .into() for String/Bytes/Path returns to handle &str→String, &[u8]→Vec<u8> etc.
-        TypeRef::String | TypeRef::Bytes | TypeRef::Path => format!("{expr}.into()"),
+        // String/Bytes: .into() handles &str→String, &[u8]→Vec<u8>
+        TypeRef::String | TypeRef::Bytes => format!("{expr}.into()"),
+        // Path: PathBuf→String needs to_string_lossy, &Path→String too
+        TypeRef::Path => format!("{expr}.to_string_lossy().to_string()"),
         _ => expr.to_string(),
     }
 }
@@ -788,8 +790,10 @@ pub fn gen_function(
                     // For now, attempt .into() — compilation will catch missing impls
                     format!("{expr}.into()")
                 }
-                // String/Bytes/Path: .into() handles &str→String etc.
-                TypeRef::String | TypeRef::Bytes | TypeRef::Path => format!("{expr}.into()"),
+                // String/Bytes: .into() handles &str→String etc.
+                TypeRef::String | TypeRef::Bytes => format!("{expr}.into()"),
+                // Path: PathBuf→String needs to_string_lossy
+                TypeRef::Path => format!("{expr}.to_string_lossy().to_string()"),
                 // Optional with opaque inner
                 TypeRef::Optional(inner) => match inner.as_ref() {
                     TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
@@ -797,6 +801,16 @@ pub fn gen_function(
                     }
                     TypeRef::Named(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
                         format!("{expr}.map(Into::into)")
+                    }
+                    _ => expr.to_string(),
+                },
+                // Vec<Named>: map each element through Into
+                TypeRef::Vec(inner) => match inner.as_ref() {
+                    TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
+                        format!("{expr}.into_iter().map(|v| {name} {{ inner: std::sync::Arc::new(v) }}).collect()")
+                    }
+                    TypeRef::Named(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
+                        format!("{expr}.into_iter().map(Into::into).collect()")
                     }
                     _ => expr.to_string(),
                 },

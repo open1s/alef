@@ -158,7 +158,10 @@ impl Backend for Pyo3Backend {
         // From/Into conversions
         for typ in &api.types {
             if skif_codegen::conversions::can_generate_conversion(typ, &convertible) {
-                builder.add_item(&skif_codegen::conversions::gen_from_binding_to_core(typ, &core_import));
+                // Only generate binding→core if no sanitized fields (lossy conversion)
+                if !skif_codegen::conversions::has_sanitized_fields(typ) {
+                    builder.add_item(&skif_codegen::conversions::gen_from_binding_to_core(typ, &core_import));
+                }
                 builder.add_item(&skif_codegen::conversions::gen_from_core_to_binding(typ, &core_import));
             }
         }

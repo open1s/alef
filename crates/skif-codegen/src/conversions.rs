@@ -78,7 +78,13 @@ fn core_type_path(typ: &TypeDef, core_import: &str) -> String {
     }
 }
 
+/// Check if a type has any sanitized fields (binding→core conversion is lossy).
+pub fn has_sanitized_fields(typ: &TypeDef) -> bool {
+    typ.fields.iter().any(|f| f.sanitized)
+}
+
 /// Generate `impl From<BindingType> for core::Type` (binding -> core).
+/// Only valid for types WITHOUT sanitized fields — sanitized fields can't be converted back.
 pub fn gen_from_binding_to_core(typ: &TypeDef, core_import: &str) -> String {
     let core_path = core_type_path(typ, core_import);
     let mut out = String::with_capacity(256);
