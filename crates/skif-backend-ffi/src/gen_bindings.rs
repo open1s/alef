@@ -73,6 +73,8 @@ impl Backend for FfiBackend {
 // ---------------------------------------------------------------------------
 
 fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &SkifConfig) -> String {
+    use std::collections::HashSet;
+
     let mut builder = RustFileBuilder::new().with_generated_header();
 
     // Imports
@@ -81,6 +83,14 @@ fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &SkifConfig) -> String {
     builder.add_import("serde_json");
     let core_import = config.core_import();
     builder.add_import(&core_import);
+
+    // Collect opaque type names for skipping serde/clone operations
+    let opaque_types: HashSet<String> = api
+        .types
+        .iter()
+        .filter(|t| t.is_opaque)
+        .map(|t| t.name.clone())
+        .collect();
 
     // Clippy allows for generated code
     builder.add_inner_attribute("allow(clippy::too_many_arguments)");
@@ -103,7 +113,11 @@ fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &SkifConfig) -> String {
 
     // Struct opaque-handle functions (from_json + free + field accessors + methods)
     for typ in &api.types {
-        builder.add_item(&gen_type_from_json(typ, prefix, &core_import));
+        // Opaque types don't implement serde Deserialize, so skip from_json.
+        // They are constructed through factory methods or returned from other functions.
+        if !typ.is_opaque {
+            builder.add_item(&gen_type_from_json(typ, prefix, &core_import));
+        }
         builder.add_item(&gen_type_free(typ, prefix, &core_import));
 
         // Field accessors — skip sanitized fields (binding type differs from core)
@@ -115,7 +129,7 @@ fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &SkifConfig) -> String {
 
         // Method wrappers
         for method in &typ.methods {
-            builder.add_item(&gen_method_wrapper(typ, method, prefix, &core_import));
+            builder.add_item(&gen_method_wrapper(typ, method, prefix, &core_import, &opaque_types));
         }
     }
 
@@ -129,7 +143,7 @@ fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &SkifConfig) -> String {
 
     // Free functions
     for func in &api.functions {
-        builder.add_item(&gen_free_function(func, prefix, &core_import));
+        builder.add_item(&gen_free_function(func, prefix, &core_import, &opaque_types));
     }
 
     // Build adapter body map (consumed by generators via body substitution)
@@ -473,7 +487,13 @@ fn null_return_value(ty: &TypeRef) -> &'static str {
 // Method wrappers
 // ---------------------------------------------------------------------------
 
-fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, prefix: &str, core_import: &str) -> String {
+fn gen_method_wrapper(
+    typ: &TypeDef,
+    method: &MethodDef,
+    prefix: &str,
+    core_import: &str,
+    opaque_types: &std::collections::HashSet<String>,
+) -> String {
     let type_snake = typ.name.to_snake_case();
     let type_name = &typ.name;
     let method_name = &method.name;
@@ -539,10 +559,17 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, prefix: &str, core_impo
     writeln!(out, "    clear_last_error();").unwrap();
 
     // If method signature was sanitized, generate todo!() — delegation would fail
-    if method.sanitized {
+    // Also skip if any param is an opaque Named type (no serde/Clone available)
+    // or if return type involves opaque types in Vec/Map (no serde Serialize)
+    let has_opaque_param = method
+        .params
+        .iter()
+        .any(|p| matches!(&p.ty, TypeRef::Named(n) if opaque_types.contains(n)));
+    let has_opaque_return = has_opaque_type_in_return(&method.return_type, opaque_types);
+    if method.sanitized || has_opaque_param || has_opaque_return {
         writeln!(
             out,
-            "    todo!(\"wire up {type_name}::{method_name} — sanitized signature\")"
+            "    todo!(\"wire up {type_name}::{method_name} — requires manual FFI bridge\")"
         )
         .unwrap();
         write!(out, "}}").unwrap();
@@ -554,11 +581,11 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, prefix: &str, core_impo
         writeln!(out, "    if this.is_null() {{").unwrap();
         writeln!(out, "        set_last_error(1, \"Null pointer passed for self\");").unwrap();
         let fail_ret = if has_error && is_void_return(&method.return_type) {
-            "return -1;"
+            "return -1;".to_string()
         } else if is_void_return(&method.return_type) {
-            "return;"
+            "return;".to_string()
         } else {
-            "return std::ptr::null_mut();"
+            format!("return {};", null_return_value(&method.return_type))
         };
         writeln!(out, "        {fail_ret}").unwrap();
         writeln!(out, "    }}").unwrap();
@@ -581,19 +608,21 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, prefix: &str, core_impo
         .unwrap();
     }
 
-    // Build the call expression — pass &ref for String/Path/Bytes/Named params
+    // Build the call expression — pass &ref for String/Bytes/Named params, owned for Path
     let arg_names: Vec<String> = method
         .params
         .iter()
         .map(|p| {
             let rs = format!("{}_rs", p.name);
             match &p.ty {
-                TypeRef::String | TypeRef::Path | TypeRef::Bytes | TypeRef::Named(_) if !p.optional => {
+                TypeRef::Path if !p.optional => rs, // PathBuf is passed owned
+                TypeRef::String | TypeRef::Bytes | TypeRef::Named(_) if !p.optional => {
                     format!("&{rs}")
                 }
-                TypeRef::String | TypeRef::Path | TypeRef::Bytes if p.optional => {
+                TypeRef::String | TypeRef::Bytes if p.optional => {
                     format!("{rs}.as_deref()")
                 }
+                TypeRef::Path if p.optional => rs, // Optional<PathBuf> passed owned
                 _ => rs,
             }
         })
@@ -643,7 +672,12 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, prefix: &str, core_impo
 // Free functions
 // ---------------------------------------------------------------------------
 
-fn gen_free_function(func: &FunctionDef, prefix: &str, core_import: &str) -> String {
+fn gen_free_function(
+    func: &FunctionDef,
+    prefix: &str,
+    core_import: &str,
+    opaque_types: &std::collections::HashSet<String>,
+) -> String {
     let fn_name_snake = func.name.to_snake_case();
     let ffi_name = format!("{prefix}_{fn_name_snake}");
     let func_name = &func.name;
@@ -686,9 +720,14 @@ fn gen_free_function(func: &FunctionDef, prefix: &str, core_import: &str) -> Str
 
     writeln!(out, "    clear_last_error();").unwrap();
 
-    // If function signature was sanitized, generate todo!()
-    if func.sanitized {
-        writeln!(out, "    todo!(\"wire up {func_name} — sanitized signature\")").unwrap();
+    // If function signature was sanitized or involves opaque types, generate todo!()
+    let has_opaque_param = func
+        .params
+        .iter()
+        .any(|p| matches!(&p.ty, TypeRef::Named(n) if opaque_types.contains(n)));
+    let has_opaque_return = has_opaque_type_in_return(&func.return_type, opaque_types);
+    if func.sanitized || has_opaque_param || has_opaque_return {
+        writeln!(out, "    todo!(\"wire up {func_name} — requires manual FFI bridge\")").unwrap();
         write!(out, "}}").unwrap();
         return out;
     }
@@ -703,19 +742,21 @@ fn gen_free_function(func: &FunctionDef, prefix: &str, core_import: &str) -> Str
         .unwrap();
     }
 
-    // Call — pass &ref for String/Path/Bytes/Named params (core takes references)
+    // Call — pass &ref for String/Bytes/Named params, owned for Path
     let arg_names: Vec<String> = func
         .params
         .iter()
         .map(|p| {
             let rs = format!("{}_rs", p.name);
             match &p.ty {
-                TypeRef::String | TypeRef::Path | TypeRef::Bytes | TypeRef::Named(_) if !p.optional => {
+                TypeRef::Path if !p.optional => rs, // PathBuf is passed owned
+                TypeRef::String | TypeRef::Bytes | TypeRef::Named(_) if !p.optional => {
                     format!("&{rs}")
                 }
-                TypeRef::String | TypeRef::Path | TypeRef::Bytes if p.optional => {
+                TypeRef::String | TypeRef::Bytes if p.optional => {
                     format!("{rs}.as_deref()")
                 }
+                TypeRef::Path if p.optional => rs, // Optional<PathBuf> passed owned
                 _ => rs,
             }
         })
@@ -826,7 +867,7 @@ fn gen_param_conversion(param: &ParamDef, has_error: bool, return_type: &TypeRef
         }
     } else {
         match &param.ty {
-            TypeRef::String | TypeRef::Path => {
+            TypeRef::String => {
                 writeln!(out, "    if {name}.is_null() {{").unwrap();
                 writeln!(
                     out,
@@ -841,6 +882,31 @@ fn gen_param_conversion(param: &ParamDef, has_error: bool, return_type: &TypeRef
                 )
                 .unwrap();
                 writeln!(out, "        Ok(s) => s.to_string(),").unwrap();
+                writeln!(out, "        Err(_) => {{").unwrap();
+                writeln!(
+                    out,
+                    "            set_last_error(1, \"Invalid UTF-8 in parameter '{name}'\");"
+                )
+                .unwrap();
+                writeln!(out, "            {fail_ret}").unwrap();
+                writeln!(out, "        }}").unwrap();
+                writeln!(out, "    }};").unwrap();
+            }
+            TypeRef::Path => {
+                writeln!(out, "    if {name}.is_null() {{").unwrap();
+                writeln!(
+                    out,
+                    "        set_last_error(1, \"Null pointer passed for parameter '{name}'\");"
+                )
+                .unwrap();
+                writeln!(out, "        {fail_ret}").unwrap();
+                writeln!(out, "    }}").unwrap();
+                writeln!(
+                    out,
+                    "    let {rs_name} = match unsafe {{ CStr::from_ptr({name}) }}.to_str() {{"
+                )
+                .unwrap();
+                writeln!(out, "        Ok(s) => std::path::PathBuf::from(s),").unwrap();
                 writeln!(out, "        Err(_) => {{").unwrap();
                 writeln!(
                     out,
@@ -958,6 +1024,17 @@ fn gen_param_conversion(param: &ParamDef, has_error: bool, return_type: &TypeRef
     out
 }
 
+/// Check if a return type involves opaque types in positions that need serde
+/// (Vec/Map of opaque types can't be serialized to JSON).
+fn has_opaque_type_in_return(ty: &TypeRef, opaque_types: &std::collections::HashSet<String>) -> bool {
+    match ty {
+        TypeRef::Vec(inner) | TypeRef::Optional(inner) => has_opaque_type_in_return(inner, opaque_types),
+        TypeRef::Map(k, v) => has_opaque_type_in_return(k, opaque_types) || has_opaque_type_in_return(v, opaque_types),
+        TypeRef::Named(n) => opaque_types.contains(n),
+        _ => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Convert owned Rust value to C return (non-Result path)
 // ---------------------------------------------------------------------------
@@ -973,8 +1050,18 @@ fn gen_owned_value_to_c(expr: &str, ty: &TypeRef, indent: &str) -> String {
                 writeln!(out, "{indent}{expr}").unwrap();
             }
         },
-        TypeRef::String | TypeRef::Path | TypeRef::Json => {
+        TypeRef::String | TypeRef::Json => {
             writeln!(out, "{indent}match CString::new({expr}) {{").unwrap();
+            writeln!(out, "{indent}    Ok(cs) => cs.into_raw(),").unwrap();
+            writeln!(out, "{indent}    Err(_) => std::ptr::null_mut(),").unwrap();
+            writeln!(out, "{indent}}}").unwrap();
+        }
+        TypeRef::Path => {
+            writeln!(
+                out,
+                "{indent}match CString::new({expr}.to_string_lossy().to_string()) {{"
+            )
+            .unwrap();
             writeln!(out, "{indent}    Ok(cs) => cs.into_raw(),").unwrap();
             writeln!(out, "{indent}    Err(_) => std::ptr::null_mut(),").unwrap();
             writeln!(out, "{indent}}}").unwrap();

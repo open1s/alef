@@ -110,7 +110,7 @@ fn is_simple_type(ty: &TypeRef) -> bool {
 }
 
 /// Returns true if fields represent a tuple variant (positional: _0, _1, ...).
-fn is_tuple_variant(fields: &[FieldDef]) -> bool {
+pub fn is_tuple_variant(fields: &[FieldDef]) -> bool {
     !fields.is_empty()
         && fields[0]
             .name
@@ -121,7 +121,7 @@ fn is_tuple_variant(fields: &[FieldDef]) -> bool {
 /// Generate a match arm for binding -> core direction.
 /// Binding enums are always unit-variant-only. Core enums may have data variants.
 /// For data variants: `BindingEnum::Variant => CoreEnum::Variant(Default::default(), ...)`
-fn binding_to_core_match_arm(binding_prefix: &str, variant_name: &str, fields: &[FieldDef]) -> String {
+pub fn binding_to_core_match_arm(binding_prefix: &str, variant_name: &str, fields: &[FieldDef]) -> String {
     if fields.is_empty() {
         format!("{binding_prefix}::{variant_name} => Self::{variant_name},")
     } else if is_tuple_variant(fields) {
@@ -145,7 +145,7 @@ fn binding_to_core_match_arm(binding_prefix: &str, variant_name: &str, fields: &
 /// Generate a match arm for core -> binding direction.
 /// Core enums may have data variants; binding enums are always unit-variant-only.
 /// For data variants: `CoreEnum::Variant(..) => Self::Variant`
-fn core_to_binding_match_arm(core_prefix: &str, variant_name: &str, fields: &[FieldDef]) -> String {
+pub fn core_to_binding_match_arm(core_prefix: &str, variant_name: &str, fields: &[FieldDef]) -> String {
     if fields.is_empty() {
         format!("{core_prefix}::{variant_name} => Self::{variant_name},")
     } else if is_tuple_variant(fields) {

@@ -1,6 +1,6 @@
 use crate::type_map::WasmMapper;
 use ahash::AHashSet;
-use skif_codegen::builder::{ImplBuilder, RustFileBuilder, StructBuilder};
+use skif_codegen::builder::{ImplBuilder, RustFileBuilder};
 use skif_codegen::naming::to_node_name;
 use skif_codegen::shared::constructor_parts;
 use skif_codegen::type_mapper::TypeMapper;
@@ -85,11 +85,11 @@ impl Backend for WasmBackend {
                 continue;
             }
             if typ.is_opaque {
-                builder.add_item(&gen_opaque_struct(typ));
+                builder.add_item(&gen_opaque_struct(typ, &core_import));
                 builder.add_item(&gen_opaque_struct_methods(typ, &mapper, &opaque_types));
             } else {
                 builder.add_item(&gen_struct(typ, &mapper));
-                builder.add_item(&gen_struct_methods(typ, &mapper, &exclude_types));
+                builder.add_item(&gen_struct_methods(typ, &mapper, &exclude_types, &core_import));
             }
         }
 
@@ -101,7 +101,7 @@ impl Backend for WasmBackend {
 
         for func in &api.functions {
             if !exclude_functions.contains(&func.name) {
-                builder.add_item(&gen_function(func, &mapper));
+                builder.add_item(&gen_function(func, &mapper, &core_import));
             }
         }
 
@@ -142,18 +142,15 @@ impl Backend for WasmBackend {
 }
 
 /// Generate an opaque wasm-bindgen struct with inner Arc.
-fn gen_opaque_struct(typ: &TypeDef) -> String {
+fn gen_opaque_struct(typ: &TypeDef, core_import: &str) -> String {
     let js_name = format!("Js{}", typ.name);
-    let mut struct_builder = StructBuilder::new(&js_name);
-    struct_builder.add_attr("wasm_bindgen");
-    struct_builder.add_derive("Clone");
 
     // We can't use StructBuilder for private fields, so build manually
     let mut out = String::with_capacity(256);
     writeln!(out, "#[derive(Clone)]").ok();
     writeln!(out, "#[wasm_bindgen]").ok();
     writeln!(out, "pub struct {} {{", js_name).ok();
-    writeln!(out, "    inner: std::sync::Arc<skif_core::{}>,", typ.name).ok();
+    writeln!(out, "    inner: std::sync::Arc<{core_import}::{}>,", typ.name).ok();
     write!(out, "}}").ok();
     out
 }
@@ -172,6 +169,7 @@ fn gen_opaque_struct_methods(typ: &TypeDef, mapper: &WasmMapper, _opaque_types: 
 }
 
 /// Generate a method for an opaque wasm-bindgen struct that delegates to self.inner.
+/// Only auto-delegates simple methods (no params, not async, not sanitized, simple return type).
 fn gen_opaque_method(method: &MethodDef, mapper: &WasmMapper, _type_name: &str) -> String {
     let params: Vec<String> = method
         .params
@@ -182,19 +180,6 @@ fn gen_opaque_method(method: &MethodDef, mapper: &WasmMapper, _type_name: &str) 
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
-    let call_args: Vec<String> = method
-        .params
-        .iter()
-        .map(|p| {
-            if matches!(p.ty, skif_core::ir::TypeRef::Named(_)) {
-                format!("{}.into()", p.name)
-            } else {
-                p.name.clone()
-            }
-        })
-        .collect();
-    let args_str = call_args.join(", ");
-
     let js_name = to_node_name(&method.name);
     let js_name_attr = if js_name != method.name {
         format!("(js_name = \"{}\")", js_name)
@@ -202,54 +187,36 @@ fn gen_opaque_method(method: &MethodDef, mapper: &WasmMapper, _type_name: &str) 
         String::new()
     };
 
-    if method.is_async {
-        let body = if method.error_type.is_some() {
-            format!(
-                "let result = self.inner.{}({}).await\n        \
-                 .map_err(|e| JsValue::from_str(&e.to_string()))?;\n    \
-                 Ok({}::from(result))",
-                method.name, args_str, return_type
-            )
-        } else {
-            format!(
-                "let result = self.inner.{}({}).await;\n    \
-                 Ok({}::from(result))",
-                method.name, args_str, return_type
-            )
-        };
-        format!(
-            "#[wasm_bindgen{js_name_attr}]\npub async fn {}(&self, {}) -> {} {{\n    \
-             {body}\n}}",
-            method.name,
-            params.join(", "),
-            return_annotation
-        )
-    } else if method.is_static {
-        format!(
-            "#[wasm_bindgen{js_name_attr}]\npub fn {}({}) -> {} {{\n    \
-             todo!(\"call into core implementation\")\n}}",
-            method.name,
-            params.join(", "),
-            return_annotation
-        )
+    // Check if this method can be auto-delegated:
+    // - Not sanitized
+    // - No params (params may need type conversions like String -> &str)
+    // - Not async (async needs runtime bridging)
+    // - No error type
+    // - Simple return type (primitives, String, etc. — not Named or complex)
+    let can_delegate = !method.sanitized
+        && method.params.is_empty()
+        && !method.is_async
+        && method.error_type.is_none()
+        && matches!(
+            method.return_type,
+            TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Unit
+        );
+
+    let async_kw = if method.is_async { "async " } else { "" };
+
+    let body = if can_delegate {
+        format!("self.inner.{}()", method.name)
     } else {
-        let body = if method.error_type.is_some() {
-            format!(
-                "self.inner.{}({})\n        .map(|r| {}::from(r))\n        \
-                 .map_err(|e| JsValue::from_str(&e.to_string()))",
-                method.name, args_str, return_type
-            )
-        } else {
-            format!("{}::from(self.inner.{}({}))", return_type, method.name, args_str)
-        };
-        format!(
-            "#[wasm_bindgen{js_name_attr}]\npub fn {}(&self, {}) -> {} {{\n    \
-             {body}\n}}",
-            method.name,
-            params.join(", "),
-            return_annotation
-        )
-    }
+        format!("todo!(\"wire up {}\")", method.name)
+    };
+
+    format!(
+        "#[wasm_bindgen{js_name_attr}]\npub {async_kw}fn {}(&self, {}) -> {} {{\n    \
+         {body}\n}}",
+        method.name,
+        params.join(", "),
+        return_annotation
+    )
 }
 
 /// Generate a wasm-bindgen struct definition with private fields.
@@ -275,7 +242,7 @@ fn gen_struct(typ: &TypeDef, mapper: &WasmMapper) -> String {
 }
 
 /// Generate wasm-bindgen methods for a struct.
-fn gen_struct_methods(typ: &TypeDef, mapper: &WasmMapper, exclude_types: &[String]) -> String {
+fn gen_struct_methods(typ: &TypeDef, mapper: &WasmMapper, exclude_types: &[String], core_import: &str) -> String {
     let js_name = format!("Js{}", typ.name);
     let mut impl_builder = ImplBuilder::new(&js_name);
     impl_builder.add_attr("wasm_bindgen");
@@ -291,7 +258,7 @@ fn gen_struct_methods(typ: &TypeDef, mapper: &WasmMapper, exclude_types: &[Strin
 
     if !exclude_types.contains(&typ.name) {
         for method in &typ.methods {
-            impl_builder.add_method(&gen_method(method, mapper, &typ.name));
+            impl_builder.add_method(&gen_method(method, mapper, &typ.name, core_import));
         }
     }
 
@@ -359,7 +326,7 @@ fn gen_setter(field: &FieldDef, mapper: &WasmMapper) -> String {
 }
 
 /// Generate a method binding for a struct method.
-fn gen_method(method: &MethodDef, mapper: &WasmMapper, type_name: &str) -> String {
+fn gen_method(method: &MethodDef, mapper: &WasmMapper, type_name: &str, core_import: &str) -> String {
     let params: Vec<String> = method
         .params
         .iter()
@@ -368,7 +335,6 @@ fn gen_method(method: &MethodDef, mapper: &WasmMapper, type_name: &str) -> Strin
 
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
-    let core_import = "skif_core";
 
     let js_name = to_node_name(&method.name);
     let js_name_attr = if js_name != method.name {
@@ -453,7 +419,7 @@ fn gen_enum(enum_def: &EnumDef) -> String {
 }
 
 /// Generate a free function binding.
-fn gen_function(func: &FunctionDef, mapper: &WasmMapper) -> String {
+fn gen_function(func: &FunctionDef, mapper: &WasmMapper, core_import: &str) -> String {
     let params: Vec<String> = func
         .params
         .iter()
@@ -462,7 +428,6 @@ fn gen_function(func: &FunctionDef, mapper: &WasmMapper) -> String {
 
     let return_type = mapper.map_type(&func.return_type);
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
-    let core_import = "skif_core";
 
     let js_name = to_node_name(&func.name);
     let js_name_attr = if js_name != func.name {
@@ -559,6 +524,8 @@ fn gen_from_core_to_js_binding(typ: &TypeDef, core_import: &str, opaque_types: &
 }
 
 /// Generate `impl From<JsEnum> for core::Enum` (WASM binding -> core).
+/// Binding enums are always unit-variant-only. Core enums may have data variants,
+/// in which case Default::default() is used for fields.
 fn gen_enum_from_js_binding_to_core(enum_def: &EnumDef, core_import: &str) -> String {
     let mut out = String::with_capacity(256);
     let js_name = format!("Js{}", enum_def.name);
@@ -566,12 +533,8 @@ fn gen_enum_from_js_binding_to_core(enum_def: &EnumDef, core_import: &str) -> St
     writeln!(out, "    fn from(val: {}) -> Self {{", js_name).unwrap();
     writeln!(out, "        match val {{").unwrap();
     for variant in &enum_def.variants {
-        writeln!(
-            out,
-            "            {}::{} => Self::{},",
-            js_name, variant.name, variant.name
-        )
-        .unwrap();
+        let arm = skif_codegen::conversions::binding_to_core_match_arm(&js_name, &variant.name, &variant.fields);
+        writeln!(out, "            {arm}").unwrap();
     }
     writeln!(out, "        }}").unwrap();
     writeln!(out, "    }}").unwrap();
@@ -580,19 +543,18 @@ fn gen_enum_from_js_binding_to_core(enum_def: &EnumDef, core_import: &str) -> St
 }
 
 /// Generate `impl From<core::Enum> for JsEnum` (core -> WASM binding).
+/// Core enums may have data variants; binding enums are always unit-variant-only,
+/// so data fields are discarded.
 fn gen_enum_from_core_to_js_binding(enum_def: &EnumDef, core_import: &str) -> String {
     let mut out = String::with_capacity(256);
     let js_name = format!("Js{}", enum_def.name);
+    let core_prefix = format!("{core_import}::{}", enum_def.name);
     writeln!(out, "impl From<{core_import}::{}> for {} {{", enum_def.name, js_name).unwrap();
     writeln!(out, "    fn from(val: {core_import}::{}) -> Self {{", enum_def.name).unwrap();
     writeln!(out, "        match val {{").unwrap();
     for variant in &enum_def.variants {
-        writeln!(
-            out,
-            "            {core_import}::{}::{} => Self::{},",
-            enum_def.name, variant.name, variant.name
-        )
-        .unwrap();
+        let arm = skif_codegen::conversions::core_to_binding_match_arm(&core_prefix, &variant.name, &variant.fields);
+        writeln!(out, "            {arm}").unwrap();
     }
     writeln!(out, "        }}").unwrap();
     writeln!(out, "    }}").unwrap();

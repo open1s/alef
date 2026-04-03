@@ -114,7 +114,18 @@ impl Backend for NapiBackend {
         }
 
         for func in &api.functions {
-            builder.add_item(&gen_function(func, &mapper));
+            // Skip functions with opaque type params — NAPI opaque structs don't implement FromNapiValue.
+            // These functions are todo!() stubs and need manual wiring via class methods instead.
+            let has_opaque_param = func.params.iter().any(|p| {
+                if let skif_core::ir::TypeRef::Named(n) = &p.ty {
+                    opaque_types.contains(n)
+                } else {
+                    false
+                }
+            });
+            if !has_opaque_param {
+                builder.add_item(&gen_function(func, &mapper));
+            }
         }
 
         let convertible = skif_codegen::conversions::convertible_types(api);
@@ -236,6 +247,9 @@ fn gen_opaque_instance_method(method: &MethodDef, mapper: &NapiMapper) -> String
         match &method.return_type {
             TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
                 format!("self.inner.{}().into()", method.name)
+            }
+            TypeRef::Primitive(p) if needs_napi_cast(p) => {
+                format!("self.inner.{}() as i64", method.name)
             }
             _ => format!("self.inner.{}()", method.name),
         }
@@ -378,12 +392,22 @@ fn napi_field_conversion(name: &str, ty: &skif_core::ir::TypeRef, optional: bool
                 let cast_to = if to_core { core_prim_str(p) } else { "i64" };
                 format!("{name}: {val}.{name}.map(|v| v as {cast_to})")
             }
-            TypeRef::Named(_) | TypeRef::Path => {
+            TypeRef::Named(_) => {
+                format!("{name}: {val}.{name}.map(Into::into)")
+            }
+            TypeRef::Path => {
                 if to_core {
                     format!("{name}: {val}.{name}.map(Into::into)")
                 } else {
                     format!("{name}: {val}.{name}.map(|p| p.to_string_lossy().to_string())")
                 }
+            }
+            _ => format!("{name}: {val}.{name}"),
+        },
+        // Vec of named types — map each element with Into
+        TypeRef::Vec(inner) => match inner.as_ref() {
+            TypeRef::Named(_) => {
+                format!("{name}: {val}.{name}.into_iter().map(Into::into).collect()")
             }
             _ => format!("{name}: {val}.{name}"),
         },
@@ -408,6 +432,8 @@ fn core_prim_str(p: &skif_core::ir::PrimitiveType) -> &'static str {
 }
 
 /// Generate `impl From<JsEnum> for core::Enum` (NAPI binding -> core).
+/// Binding enums are always unit-variant-only. Core enums may have data variants,
+/// in which case Default::default() is used for fields.
 fn gen_enum_from_js_binding_to_core(enum_def: &EnumDef, core_import: &str) -> String {
     let mut out = String::with_capacity(256);
     let js_name = format!("Js{}", enum_def.name);
@@ -415,12 +441,8 @@ fn gen_enum_from_js_binding_to_core(enum_def: &EnumDef, core_import: &str) -> St
     writeln!(out, "    fn from(val: {}) -> Self {{", js_name).ok();
     writeln!(out, "        match val {{").ok();
     for variant in &enum_def.variants {
-        writeln!(
-            out,
-            "            {}::{} => Self::{},",
-            js_name, variant.name, variant.name
-        )
-        .ok();
+        let arm = skif_codegen::conversions::binding_to_core_match_arm(&js_name, &variant.name, &variant.fields);
+        writeln!(out, "            {arm}").ok();
     }
     writeln!(out, "        }}").ok();
     writeln!(out, "    }}").ok();
@@ -429,19 +451,18 @@ fn gen_enum_from_js_binding_to_core(enum_def: &EnumDef, core_import: &str) -> St
 }
 
 /// Generate `impl From<core::Enum> for JsEnum` (core -> NAPI binding).
+/// Core enums may have data variants; binding enums are always unit-variant-only,
+/// so data fields are discarded.
 fn gen_enum_from_core_to_js_binding(enum_def: &EnumDef, core_import: &str) -> String {
     let mut out = String::with_capacity(256);
     let js_name = format!("Js{}", enum_def.name);
+    let core_prefix = format!("{core_import}::{}", enum_def.name);
     writeln!(out, "impl From<{core_import}::{}> for {} {{", enum_def.name, js_name).ok();
     writeln!(out, "    fn from(val: {core_import}::{}) -> Self {{", enum_def.name).ok();
     writeln!(out, "        match val {{").ok();
     for variant in &enum_def.variants {
-        writeln!(
-            out,
-            "            {core_import}::{}::{} => Self::{},",
-            enum_def.name, variant.name, variant.name
-        )
-        .ok();
+        let arm = skif_codegen::conversions::core_to_binding_match_arm(&core_prefix, &variant.name, &variant.fields);
+        writeln!(out, "            {arm}").ok();
     }
     writeln!(out, "        }}").ok();
     writeln!(out, "    }}").ok();
