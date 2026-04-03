@@ -514,12 +514,15 @@ pub fn gen_method(
 
     let call_args = gen_call_args(&method.params, opaque_types);
 
+    let is_owned_receiver = matches!(method.receiver.as_ref(), Some(skif_core::ir::ReceiverKind::Owned));
+
     // Auto-delegate opaque methods: unwrap Arc for params, wrap Arc for returns.
-    // Allows Named params/returns (opaque types use Arc unwrap/wrap, non-opaque use .into()).
-    // Opaque methods can delegate if params/return are delegatable.
-    // Async and error types are handled by gen_async_body and backend-specific error conversion.
+    // Async methods excluded (future_into_py changes return type).
+    // Owned receivers excluded (can't move out of Arc without Clone).
     let opaque_can_delegate = is_opaque
         && !method.sanitized
+        && !method.is_async
+        && !is_owned_receiver
         && method
             .params
             .iter()
@@ -530,7 +533,12 @@ pub fn gen_method(
     // non-opaque types convert self to core type first.
     let make_core_call = |method_name: &str| -> String {
         if is_opaque {
-            format!("self.inner.{method_name}({call_args})")
+            if is_owned_receiver {
+                // Owned receiver: clone out of Arc to get an owned value
+                format!("(*self.inner).clone().{method_name}({call_args})")
+            } else {
+                format!("self.inner.{method_name}({call_args})")
+            }
         } else {
             format!("{core_type_path}::from(self.clone()).{method_name}({call_args})")
         }
