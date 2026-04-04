@@ -167,8 +167,8 @@ pub fn gen_unimplemented_body(
             TypeRef::Map(_, _) => "Default::default()".to_string(),
             TypeRef::Duration => "0".to_string(),
             TypeRef::Named(_) | TypeRef::Json => {
-                // Named return without error type: can't return Err. Use Default if available.
-                "Default::default()".to_string()
+                // Named return without error type: can't return Err. Generate compilable panic.
+                format!("panic!(\"skif: {fn_name} not auto-delegatable\")")
             }
         }
     }
