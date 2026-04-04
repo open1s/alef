@@ -616,10 +616,12 @@ fn extract_trait_impl_methods(
             return None;
         }
         // Prefix with crate_name if the trait path is a single segment (local trait)
+        // Replace hyphens with underscores for Rust import paths
+        let crate_import = crate_name.replace('-', "_");
         if segments.len() == 1 {
-            Some(format!("{crate_name}::{}", segments[0]))
+            Some(format!("{crate_import}::{}", segments[0]))
         } else {
-            Some(segments.join("::"))
+            Some(segments.join("::").replace('-', "_"))
         }
     });
 

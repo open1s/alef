@@ -69,17 +69,12 @@ impl Backend for GoBackend {
 }
 
 /// Generate the complete Go binding file wrapping the C FFI layer.
-fn gen_go_file(api: &ApiSurface, ffi_prefix: &str, pkg_name: &str, ffi_lib_name: &str, ffi_header: &str) -> String {
+fn gen_go_file(api: &ApiSurface, ffi_prefix: &str, pkg_name: &str, _ffi_lib_name: &str, ffi_header: &str) -> String {
     let mut out = String::with_capacity(4096);
 
     // Package header and imports
     writeln!(out, "package {}\n", pkg_name).ok();
-    writeln!(
-        out,
-        "/*\n#cgo LDFLAGS: -l{}\n#include \"{}\"\nimport \"C\"\n*/",
-        ffi_lib_name, ffi_header
-    )
-    .ok();
+    writeln!(out, "/*\n#include \"{}\"\n*/\nimport \"C\"", ffi_header).ok();
     writeln!(out).ok();
     writeln!(out, "import (\n    \"encoding/json\"\n    \"fmt\"\n    \"unsafe\"\n)\n").ok();
 
