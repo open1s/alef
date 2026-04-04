@@ -75,6 +75,11 @@ impl Backend for PhpBackend {
             builder.add_import("serde_json");
         }
 
+        // Import traits needed for trait method dispatch
+        for trait_path in generators::collect_trait_imports(api) {
+            builder.add_import(&trait_path);
+        }
+
         // Only import HashMap when Map-typed fields or returns are present
         let has_maps = api
             .types
@@ -176,6 +181,10 @@ impl Backend for PhpBackend {
                 && skif_codegen::conversions::can_generate_conversion(typ, &convertible)
             {
                 builder.add_item(&gen_php_from_binding_to_core(typ, &core_import));
+            } else if enum_tainted.contains(&typ.name) && has_serde {
+                // Enum-tainted types can't use field-by-field From (no From<String> for core enum),
+                // but when serde is available we bridge via JSON serialization round-trip.
+                builder.add_item(&gen_serde_bridge_from(typ, &core_import));
             }
             // core→binding: always (enum→String via format, sanitized fields via format)
             if skif_codegen::conversions::can_generate_conversion(typ, &core_to_binding) {
@@ -426,6 +435,7 @@ fn gen_php_unimplemented_body(return_type: &skif_core::ir::TypeRef, fn_name: &st
             TypeRef::Named(_) | TypeRef::Json => {
                 format!("todo!(\"Not auto-delegatable: {fn_name} -- return type requires custom implementation\")")
             }
+            TypeRef::Duration => "std::time::Duration::default()".to_string(),
         }
     }
 }
@@ -445,6 +455,23 @@ fn gen_php_from_binding_to_core(typ: &TypeDef, core_import: &str) -> String {
     writeln!(out, "    }}").ok();
     write!(out, "}}").ok();
     out
+}
+
+/// Generate a serde JSON bridge `impl From<BindingType> for core::Type`.
+/// Used for enum-tainted types where field-by-field From can't work (no From<String> for core enums),
+/// but serde can round-trip through JSON since the binding type derives Serialize and the core type
+/// derives Deserialize.
+fn gen_serde_bridge_from(typ: &TypeDef, core_import: &str) -> String {
+    let core_path = skif_codegen::conversions::core_type_path(typ, core_import);
+    format!(
+        "impl From<{}> for {} {{\n    \
+         fn from(val: {}) -> Self {{\n        \
+         let json = serde_json::to_string(&val).expect(\"skif: serialize binding type\");\n        \
+         serde_json::from_str(&json).expect(\"skif: deserialize to core type\")\n    \
+         }}\n\
+         }}",
+        typ.name, core_path, typ.name
+    )
 }
 
 /// Generate `impl From<core::Type> for Type` with PHP-specific i64 casts.
@@ -486,7 +513,7 @@ fn php_field_conversion_from_core(
     }
     // PHP maps U64/Usize to i64 — need `as i64` cast for core→binding
     match ty {
-        TypeRef::Primitive(p) if matches!(p, PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize) => {
+        TypeRef::Primitive(PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize) => {
             if optional {
                 return format!("{name}: val.{name}.map(|v| v as i64)");
             }
@@ -534,7 +561,7 @@ fn php_field_conversion_from_core(
 fn php_field_conversion(name: &str, ty: &skif_core::ir::TypeRef, optional: bool, val: &str, to_core: bool) -> String {
     use skif_core::ir::{PrimitiveType, TypeRef};
     match ty {
-        TypeRef::Primitive(p) if matches!(p, PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize) => {
+        TypeRef::Primitive(p @ (PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize)) => {
             let cast_to = if to_core {
                 match p {
                     PrimitiveType::U64 => "u64",
@@ -569,7 +596,7 @@ fn php_field_conversion(name: &str, ty: &skif_core::ir::TypeRef, optional: bool,
             }
         }
         TypeRef::Optional(inner) => match inner.as_ref() {
-            TypeRef::Primitive(p) if matches!(p, PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize) => {
+            TypeRef::Primitive(p @ (PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize)) => {
                 let cast_to = if to_core {
                     match p {
                         PrimitiveType::U64 => "u64",
@@ -583,11 +610,7 @@ fn php_field_conversion(name: &str, ty: &skif_core::ir::TypeRef, optional: bool,
                 format!("{name}: {val}.{name}.map(|v| v as {cast_to})")
             }
             TypeRef::Named(_) | TypeRef::Path => {
-                if to_core {
-                    format!("{name}: {val}.{name}.map(Into::into)")
-                } else {
-                    format!("{name}: {val}.{name}.map(Into::into)")
-                }
+                format!("{name}: {val}.{name}.map(Into::into)")
             }
             TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Named(_)) => {
                 format!("{name}: {val}.{name}.map(|v| v.into_iter().map(Into::into).collect())")

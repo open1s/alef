@@ -1,6 +1,7 @@
 use crate::type_map::RustlerMapper;
 use ahash::AHashSet;
 use skif_codegen::builder::RustFileBuilder;
+use skif_codegen::generators;
 use skif_codegen::type_mapper::TypeMapper;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
 use skif_core::config::{Language, SkifConfig, resolve_output_dir};
@@ -35,6 +36,11 @@ impl Backend for RustlerBackend {
 
         let mut builder = RustFileBuilder::new().with_generated_header();
         builder.add_import("rustler::{Env, Term, NifResult, ResourceArc}");
+
+        // Import traits needed for trait method dispatch
+        for trait_path in generators::collect_trait_imports(api) {
+            builder.add_import(&trait_path);
+        }
 
         // Only import HashMap when Map-typed fields or returns are present
         let has_maps = api
@@ -398,6 +404,7 @@ fn gen_rustler_unimplemented_body(return_type: &skif_core::ir::TypeRef, fn_name:
             TypeRef::Optional(_) => "None".to_string(),
             TypeRef::Vec(_) => "Vec::new()".to_string(),
             TypeRef::Map(_, _) => "Default::default()".to_string(),
+            TypeRef::Duration => "0u64".to_string(),
             TypeRef::Named(_) | TypeRef::Json => {
                 format!("todo!(\"Not auto-delegatable: {fn_name} -- return type requires custom implementation\")")
             }

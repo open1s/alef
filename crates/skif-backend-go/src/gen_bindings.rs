@@ -565,6 +565,7 @@ fn type_name(ty: &TypeRef) -> String {
         TypeRef::Json => "JSON".to_string(),
         TypeRef::Path => "Path".to_string(),
         TypeRef::Unit => "Void".to_string(),
+        TypeRef::Duration => "U64".to_string(),
         TypeRef::Primitive(p) => match p {
             skif_core::ir::PrimitiveType::Bool => "Bool".to_string(),
             skif_core::ir::PrimitiveType::U8 => "U8".to_string(),

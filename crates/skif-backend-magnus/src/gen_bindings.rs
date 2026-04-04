@@ -1,6 +1,7 @@
 use crate::type_map::MagnusMapper;
 use ahash::AHashSet;
 use skif_codegen::builder::{ImplBuilder, RustFileBuilder, StructBuilder};
+use skif_codegen::generators;
 use skif_codegen::shared::{constructor_parts, function_params};
 use skif_codegen::type_mapper::TypeMapper;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
@@ -52,6 +53,11 @@ impl Backend for MagnusBackend {
         builder.add_import(
             "magnus::{function, method, prelude::*, Error, Ruby, IntoValueFromNative, try_convert::TryConvertOwned}",
         );
+
+        // Import traits needed for trait method dispatch
+        for trait_path in generators::collect_trait_imports(api) {
+            builder.add_import(&trait_path);
+        }
 
         // Only import HashMap when Map-typed fields or returns are present
         let has_maps = api
@@ -516,6 +522,7 @@ fn gen_magnus_unimplemented_body(return_type: &skif_core::ir::TypeRef, fn_name: 
             TypeRef::Optional(_) => "None".to_string(),
             TypeRef::Vec(_) => "Vec::new()".to_string(),
             TypeRef::Map(_, _) => "Default::default()".to_string(),
+            TypeRef::Duration => "0u64".to_string(),
             TypeRef::Named(_) | TypeRef::Json => {
                 format!("todo!(\"Not auto-delegatable: {fn_name} -- return type requires custom implementation\")")
             }

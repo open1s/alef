@@ -1,7 +1,7 @@
 use crate::type_map::NapiMapper;
 use ahash::AHashSet;
 use skif_codegen::builder::{ImplBuilder, RustFileBuilder, StructBuilder};
-use skif_codegen::generators::{AsyncPattern, RustBindingConfig};
+use skif_codegen::generators::{self, AsyncPattern, RustBindingConfig};
 use skif_codegen::naming::to_node_name;
 use skif_codegen::shared::{function_params, partition_methods};
 use skif_codegen::type_mapper::TypeMapper;
@@ -64,6 +64,11 @@ impl Backend for NapiBackend {
         builder.add_import("napi::*");
         builder.add_import("napi_derive::napi");
         builder.add_import("serde_json");
+
+        // Import traits needed for trait method dispatch
+        for trait_path in generators::collect_trait_imports(api) {
+            builder.add_import(&trait_path);
+        }
 
         // Only import HashMap when Map-typed fields or returns are present
         let has_maps = api
@@ -255,7 +260,7 @@ fn gen_opaque_instance_method(method: &MethodDef, mapper: &NapiMapper) -> String
         && method.error_type.is_none()
         && matches!(
             method.return_type,
-            TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Unit
+            TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Unit | TypeRef::Duration
         );
 
     let body = if can_delegate {
@@ -525,6 +530,7 @@ fn gen_napi_unimplemented_body(return_type: &skif_core::ir::TypeRef, fn_name: &s
             TypeRef::Optional(_) => "None".to_string(),
             TypeRef::Vec(_) => "Vec::new()".to_string(),
             TypeRef::Map(_, _) => "Default::default()".to_string(),
+            TypeRef::Duration => "0".to_string(),
             TypeRef::Named(_) | TypeRef::Json => {
                 format!("todo!(\"Not auto-delegatable: {fn_name} -- return type requires custom implementation\")")
             }

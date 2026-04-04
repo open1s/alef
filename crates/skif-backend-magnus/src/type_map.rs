@@ -52,5 +52,6 @@ pub fn rbs_type(ty: &TypeRef) -> String {
         TypeRef::Path => "String".to_string(),
         TypeRef::Json => "untyped".to_string(),
         TypeRef::Unit => "void".to_string(),
+        TypeRef::Duration => "Integer".to_string(),
     }
 }

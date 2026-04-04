@@ -156,6 +156,7 @@ fn extract_items(
                                     doc: method_doc,
                                     receiver,
                                     sanitized: false,
+                                    trait_source: None,
                                 })
                             } else {
                                 None
@@ -525,7 +526,7 @@ fn extract_impl_block(
                             }
                         }
                     }
-                    return Some(extract_method(method, crate_name, &type_name));
+                    return Some(extract_method(method, crate_name, &type_name, None));
                 }
             }
             None
@@ -579,6 +580,18 @@ fn extract_trait_impl_methods(
     let Some(&idx) = type_index.get(&type_name) else {
         return;
     };
+
+    // Extract the trait path from `impl TraitPath for Type`
+    let trait_source = item.trait_.as_ref().map(|(_, path, _)| {
+        let segments: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+        // Prefix with crate_name if the trait path is a single segment (local trait)
+        if segments.len() == 1 {
+            format!("{crate_name}::{}", segments[0])
+        } else {
+            segments.join("::")
+        }
+    });
+
     let type_def = &mut surface.types[idx];
 
     // Extract methods from the trait impl (trait methods are implicitly pub)
@@ -592,7 +605,7 @@ fn extract_trait_impl_methods(
             if has_cfg_attribute(&method.attrs) {
                 continue;
             }
-            let method_def = extract_method(method, crate_name, &type_name);
+            let method_def = extract_method(method, crate_name, &type_name, trait_source.clone());
             // Don't add duplicates
             if !type_def.methods.iter().any(|m| m.name == method_def.name) {
                 type_def.methods.push(method_def);
@@ -603,7 +616,13 @@ fn extract_trait_impl_methods(
 
 /// Extract a single method from an impl block.
 /// `parent_type_name` is used to resolve `Self` references in return types and params.
-fn extract_method(method: &syn::ImplItemFn, _crate_name: &str, parent_type_name: &str) -> MethodDef {
+/// `trait_source` is the fully qualified trait path if this method comes from a trait impl.
+fn extract_method(
+    method: &syn::ImplItemFn,
+    _crate_name: &str,
+    parent_type_name: &str,
+    trait_source: Option<String>,
+) -> MethodDef {
     let name = method.sig.ident.to_string();
     let doc = extract_doc_comments(&method.attrs);
     let mut is_async = method.sig.asyncness.is_some();
@@ -638,6 +657,7 @@ fn extract_method(method: &syn::ImplItemFn, _crate_name: &str, parent_type_name:
         doc,
         receiver,
         sanitized: false,
+        trait_source,
     }
 }
 

@@ -78,6 +78,11 @@ impl Backend for Pyo3Backend {
             builder.add_import("serde_json");
         }
 
+        // Import traits needed for trait method dispatch
+        for trait_path in generators::collect_trait_imports(api) {
+            builder.add_import(&trait_path);
+        }
+
         // Check if we have non-sanitized async functions (sanitized async methods produce stubs, not async code)
         let has_async = api.functions.iter().any(|f| f.is_async && !f.sanitized)
             || api

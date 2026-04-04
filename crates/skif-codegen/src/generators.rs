@@ -2,7 +2,7 @@ use crate::builder::StructBuilder;
 use crate::shared::{constructor_parts, function_params, function_sig_defaults, partition_methods};
 use crate::type_mapper::TypeMapper;
 use ahash::{AHashMap, AHashSet};
-use skif_core::ir::{EnumDef, FunctionDef, MethodDef, ParamDef, TypeDef, TypeRef};
+use skif_core::ir::{ApiSurface, EnumDef, FunctionDef, MethodDef, ParamDef, TypeDef, TypeRef};
 use std::fmt::Write;
 
 /// Map of adapter-generated method/function bodies.
@@ -89,6 +89,8 @@ fn wrap_return(
         TypeRef::String | TypeRef::Bytes => format!("{expr}.into()"),
         // Path: PathBuf→String needs to_string_lossy, &Path→String too
         TypeRef::Path => format!("{expr}.to_string_lossy().to_string()"),
+        // Duration: core returns std::time::Duration, binding uses u64 (secs)
+        TypeRef::Duration => format!("{expr}.as_secs()"),
         _ => expr.to_string(),
     }
 }
@@ -102,6 +104,7 @@ fn wrap_return(
 /// - `has_error`: whether the core call returns a `Result`
 /// - `return_wrap`: expression to produce the binding return value from `result`,
 ///   e.g. `"result"` or `"TypeName::from(result)"`
+///
 /// Generate a compilable body for functions that can't be auto-delegated.
 /// Returns a default value or error instead of `todo!()` which would panic.
 fn gen_unimplemented_body(return_type: &TypeRef, fn_name: &str, has_error: bool, cfg: &RustBindingConfig) -> String {
@@ -133,6 +136,7 @@ fn gen_unimplemented_body(return_type: &TypeRef, fn_name: &str, has_error: bool,
             TypeRef::Optional(_) => "None".to_string(),
             TypeRef::Vec(_) => "Vec::new()".to_string(),
             TypeRef::Map(_, _) => "Default::default()".to_string(),
+            TypeRef::Duration => "0".to_string(),
             TypeRef::Named(_) | TypeRef::Json => {
                 // Named return without error type: can't return Err. Use Default if available.
                 "Default::default()".to_string()
@@ -261,6 +265,8 @@ fn gen_call_args(params: &[ParamDef], opaque_types: &AHashSet<String>) -> String
             // Path → PathBuf for core function calls (core expects PathBuf, binding has String)
             TypeRef::Path => format!("std::path::PathBuf::from({})", p.name),
             TypeRef::Bytes => format!("&{}", p.name),
+            // Duration: binding uses u64 (secs), core uses std::time::Duration
+            TypeRef::Duration => format!("std::time::Duration::from_secs({})", p.name),
             _ => p.name.clone(),
         })
         .collect::<Vec<_>>()
@@ -290,6 +296,7 @@ fn gen_call_args_with_let_bindings(params: &[ParamDef], opaque_types: &AHashSet<
             TypeRef::String => format!("&{}", p.name),
             TypeRef::Path => format!("std::path::PathBuf::from({})", p.name),
             TypeRef::Bytes => format!("&{}", p.name),
+            TypeRef::Duration => format!("std::time::Duration::from_secs({})", p.name),
             _ => p.name.clone(),
         })
         .collect::<Vec<_>>()
@@ -371,7 +378,12 @@ fn has_named_params(params: &[ParamDef], opaque_types: &AHashSet<String>) -> boo
 /// Vec and Map params can cause type mismatches (e.g. Vec<String> vs &[&str]).
 fn is_simple_non_opaque_param(ty: &TypeRef) -> bool {
     match ty {
-        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
+        TypeRef::Primitive(_)
+        | TypeRef::String
+        | TypeRef::Bytes
+        | TypeRef::Path
+        | TypeRef::Unit
+        | TypeRef::Duration => true,
         TypeRef::Optional(inner) => is_simple_non_opaque_param(inner),
         _ => false,
     }
@@ -390,13 +402,14 @@ fn gen_lossy_binding_to_core_fields(typ: &TypeDef, core_import: &str) -> String 
         } else {
             let expr = match &field.ty {
                 TypeRef::Primitive(_) => format!("self.{name}"),
-                TypeRef::String | TypeRef::Bytes => {
+                TypeRef::Duration => {
                     if field.optional {
-                        format!("self.{name}.clone()")
+                        format!("self.{name}.map(std::time::Duration::from_secs)")
                     } else {
-                        format!("self.{name}.clone()")
+                        format!("std::time::Duration::from_secs(self.{name})")
                     }
                 }
+                TypeRef::String | TypeRef::Bytes => format!("self.{name}.clone()"),
                 TypeRef::Path => {
                     if field.optional {
                         format!("self.{name}.clone().map(Into::into)")
@@ -1274,4 +1287,25 @@ pub fn gen_impl_block(
     let mut result = trimmed.to_string();
     result.push_str("\n}");
     result
+}
+
+/// Collect all unique trait import paths from opaque types' methods.
+///
+/// Returns a deduplicated, sorted list of trait paths (e.g. `["liter_llm::LlmClient"]`)
+/// that need to be imported in generated binding code so that trait methods can be called.
+pub fn collect_trait_imports(api: &ApiSurface) -> Vec<String> {
+    let mut traits: AHashSet<String> = AHashSet::new();
+    for typ in &api.types {
+        if !typ.is_opaque {
+            continue;
+        }
+        for method in &typ.methods {
+            if let Some(ref trait_path) = method.trait_source {
+                traits.insert(trait_path.clone());
+            }
+        }
+    }
+    let mut sorted: Vec<String> = traits.into_iter().collect();
+    sorted.sort();
+    sorted
 }

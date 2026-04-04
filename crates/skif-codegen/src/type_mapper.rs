@@ -48,6 +48,11 @@ pub trait TypeMapper {
         Cow::Borrowed("()")
     }
 
+    /// Map a duration type. Default: "u64" (seconds)
+    fn duration(&self) -> Cow<'static, str> {
+        Cow::Borrowed("u64")
+    }
+
     /// Map an optional type. Default: "Option<T>"
     fn optional(&self, inner: &str) -> String {
         format!("Option<{inner}>")
@@ -81,6 +86,7 @@ pub trait TypeMapper {
             TypeRef::Vec(inner) => self.vec(&self.map_type(inner)),
             TypeRef::Map(k, v) => self.map(&self.map_type(k), &self.map_type(v)),
             TypeRef::Named(name) => self.named(name).into_owned(),
+            TypeRef::Duration => self.duration().into_owned(),
         }
     }
 

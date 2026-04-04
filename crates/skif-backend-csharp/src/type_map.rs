@@ -29,5 +29,6 @@ pub fn csharp_type(ty: &TypeRef) -> Cow<'static, str> {
         TypeRef::Path => Cow::Borrowed("string"),
         TypeRef::Json => Cow::Borrowed("string"),
         TypeRef::Unit => Cow::Borrowed("void"),
+        TypeRef::Duration => Cow::Borrowed("ulong"),
     }
 }

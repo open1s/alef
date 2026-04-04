@@ -1,6 +1,7 @@
 use crate::type_map::{c_param_type, c_return_type, is_void_return};
 use heck::ToSnakeCase;
 use skif_codegen::builder::RustFileBuilder;
+use skif_codegen::generators;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
 use skif_core::config::{Language, SkifConfig, resolve_output_dir};
 use skif_core::ir::{ApiSurface, EnumDef, FieldDef, FunctionDef, MethodDef, ParamDef, ReceiverKind, TypeDef, TypeRef};
@@ -82,6 +83,11 @@ fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &SkifConfig) -> String {
     builder.add_import("std::cell::RefCell");
     builder.add_import("serde_json");
     let core_import = config.core_import();
+
+    // Import traits needed for trait method dispatch
+    for trait_path in generators::collect_trait_imports(api) {
+        builder.add_import(&trait_path);
+    }
 
     // Collect opaque type names for skipping serde/clone operations
     let opaque_types: HashSet<String> = api
@@ -475,6 +481,9 @@ fn gen_value_to_c(expr: &str, ty: &TypeRef, indent: &str) -> String {
             // Return pointer; caller must also get length
             writeln!(out, "{indent}{expr}.as_ptr()").unwrap();
         }
+        TypeRef::Duration => {
+            writeln!(out, "{indent}{expr}.as_secs()").unwrap();
+        }
         TypeRef::Unit => {
             // nothing to return
         }
@@ -524,6 +533,7 @@ fn null_return_value(ty: &TypeRef) -> &'static str {
         TypeRef::Bytes => "std::ptr::null_mut()",
         TypeRef::Named(_) => "std::ptr::null_mut()",
         TypeRef::Vec(_) | TypeRef::Map(_, _) => "std::ptr::null_mut()",
+        TypeRef::Duration => "0",
         TypeRef::Optional(inner) => match inner.as_ref() {
             TypeRef::Primitive(p) => match p {
                 PrimitiveType::F32 | PrimitiveType::F64 => "0.0",
@@ -1090,6 +1100,10 @@ fn gen_param_conversion(param: &ParamDef, has_error: bool, return_type: &TypeRef
                 // Should not happen for non-optional param, but handle gracefully
                 writeln!(out, "    let {rs_name} = {name};").unwrap();
             }
+            TypeRef::Duration => {
+                // Duration passed as u64 seconds
+                writeln!(out, "    let {rs_name} = std::time::Duration::from_secs({name});").unwrap();
+            }
             TypeRef::Unit => {
                 // No parameter to convert
             }
@@ -1183,6 +1197,9 @@ fn gen_owned_value_to_c(expr: &str, ty: &TypeRef, indent: &str) -> String {
             )
             .unwrap();
             writeln!(out, "{indent}}}").unwrap();
+        }
+        TypeRef::Duration => {
+            writeln!(out, "{indent}{expr}.as_secs()").unwrap();
         }
         TypeRef::Unit => {}
     }

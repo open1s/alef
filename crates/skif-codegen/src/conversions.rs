@@ -129,7 +129,12 @@ pub fn can_generate_conversion(typ: &TypeDef, convertible: &AHashSet<String>) ->
 
 fn is_field_convertible(ty: &TypeRef, convertible_enums: &AHashSet<&str>, known_types: &AHashSet<&str>) -> bool {
     match ty {
-        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
+        TypeRef::Primitive(_)
+        | TypeRef::String
+        | TypeRef::Bytes
+        | TypeRef::Path
+        | TypeRef::Unit
+        | TypeRef::Duration => true,
         TypeRef::Json => false,
         TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_field_convertible(inner, convertible_enums, known_types),
         TypeRef::Map(k, v) => {
@@ -155,7 +160,12 @@ pub fn can_generate_enum_conversion(enum_def: &EnumDef) -> bool {
 /// to consult the convertible_enums/known_types sets.
 fn is_simple_type(ty: &TypeRef) -> bool {
     match ty {
-        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
+        TypeRef::Primitive(_)
+        | TypeRef::String
+        | TypeRef::Bytes
+        | TypeRef::Path
+        | TypeRef::Unit
+        | TypeRef::Duration => true,
         TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_simple_type(inner),
         TypeRef::Map(k, v) => is_simple_type(k) && is_simple_type(v),
         TypeRef::Named(_) | TypeRef::Json => false,
@@ -317,6 +327,14 @@ pub fn field_conversion_to_core(name: &str, ty: &TypeRef, optional: bool) -> Str
         TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Unit | TypeRef::Json => {
             format!("{name}: val.{name}")
         }
+        // Duration: binding uses u64 (secs), core uses std::time::Duration
+        TypeRef::Duration => {
+            if optional {
+                format!("{name}: val.{name}.map(std::time::Duration::from_secs)")
+            } else {
+                format!("{name}: std::time::Duration::from_secs(val.{name})")
+            }
+        }
         // Path needs .into() — binding uses String, core uses PathBuf
         TypeRef::Path => {
             if optional {
@@ -401,6 +419,13 @@ pub fn field_conversion_from_core(
         return format!("{name}: format!(\"{{:?}}\", val.{name})");
     }
     match ty {
+        // Duration: core uses std::time::Duration, binding uses u64 (secs)
+        TypeRef::Duration => {
+            if optional {
+                return format!("{name}: val.{name}.map(|d| d.as_secs())");
+            }
+            format!("{name}: val.{name}.as_secs()")
+        }
         // Path: core uses PathBuf, binding uses String — PathBuf→String needs special handling
         TypeRef::Path => {
             if optional {

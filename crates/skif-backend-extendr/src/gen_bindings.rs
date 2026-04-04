@@ -88,6 +88,11 @@ impl Backend for ExtendrBackend {
         let mut builder = RustFileBuilder::new().with_generated_header();
         builder.add_import("extendr_api::prelude::*");
 
+        // Import traits needed for trait method dispatch
+        for trait_path in generators::collect_trait_imports(api) {
+            builder.add_import(&trait_path);
+        }
+
         // Clippy allows for generated code
         builder.add_inner_attribute("allow(unused_imports)");
         builder.add_inner_attribute("allow(clippy::too_many_arguments)");

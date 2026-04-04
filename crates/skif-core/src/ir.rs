@@ -58,6 +58,10 @@ pub struct MethodDef {
     /// Methods with sanitized signatures cannot be auto-delegated.
     #[serde(default)]
     pub sanitized: bool,
+    /// Fully qualified trait path if this method comes from a trait impl
+    /// (e.g. "liter_llm::LlmClient"). None for inherent methods.
+    #[serde(default)]
+    pub trait_source: Option<String>,
 }
 
 /// How `self` is received.
@@ -146,6 +150,7 @@ pub enum TypeRef {
     Path,
     Unit,
     Json,
+    Duration,
 }
 
 /// Rust primitive types.

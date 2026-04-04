@@ -1,6 +1,7 @@
 use crate::type_map::WasmMapper;
 use ahash::AHashSet;
 use skif_codegen::builder::{ImplBuilder, RustFileBuilder};
+use skif_codegen::generators;
 use skif_codegen::naming::to_node_name;
 use skif_codegen::shared::constructor_parts;
 use skif_codegen::type_mapper::TypeMapper;
@@ -14,6 +15,7 @@ use std::path::PathBuf;
 fn is_copy_type(ty: &TypeRef) -> bool {
     match ty {
         TypeRef::Primitive(_) => true, // All primitives are Copy
+        TypeRef::Duration => true,     // Duration maps to u64 (secs), which is Copy
         TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Json => false,
         TypeRef::Optional(_) | TypeRef::Vec(_) | TypeRef::Map(_, _) => false,
         TypeRef::Named(_) => false, // Custom types are not Copy
@@ -56,6 +58,11 @@ impl Backend for WasmBackend {
 
         let mut builder = RustFileBuilder::new().with_generated_header();
         builder.add_import("wasm_bindgen::prelude::*");
+
+        // Import traits needed for trait method dispatch
+        for trait_path in generators::collect_trait_imports(api) {
+            builder.add_import(&trait_path);
+        }
 
         // Only import HashMap when Map-typed fields or returns are present
         let has_maps = api
@@ -518,6 +525,7 @@ fn gen_wasm_unimplemented_body(return_type: &TypeRef, fn_name: &str, has_error: 
             TypeRef::Optional(_) => "None".to_string(),
             TypeRef::Vec(_) => "Vec::new()".to_string(),
             TypeRef::Map(_, _) => "Default::default()".to_string(),
+            TypeRef::Duration => "0u64".to_string(),
             TypeRef::Named(_) | TypeRef::Json => {
                 format!("todo!(\"Not auto-delegatable: {fn_name} -- return type requires custom implementation\")")
             }

@@ -26,7 +26,12 @@ pub fn can_auto_delegate(method: &MethodDef, opaque_types: &AHashSet<String>) ->
 /// A param type is delegatable if it's simple, or an opaque Named (unwrapped via Arc).
 pub fn is_delegatable_param(ty: &TypeRef, opaque_types: &AHashSet<String>) -> bool {
     match ty {
-        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
+        TypeRef::Primitive(_)
+        | TypeRef::String
+        | TypeRef::Bytes
+        | TypeRef::Path
+        | TypeRef::Unit
+        | TypeRef::Duration => true,
         TypeRef::Named(name) => opaque_types.contains(name.as_str()), // Opaque: &*param.inner
         TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_delegatable_param(inner, opaque_types),
         TypeRef::Map(k, v) => is_delegatable_param(k, opaque_types) && is_delegatable_param(v, opaque_types),
@@ -37,7 +42,12 @@ pub fn is_delegatable_param(ty: &TypeRef, opaque_types: &AHashSet<String>) -> bo
 /// Return types are more permissive — Named types work via .into() (core→binding From exists).
 pub fn is_delegatable_return(ty: &TypeRef) -> bool {
     match ty {
-        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
+        TypeRef::Primitive(_)
+        | TypeRef::String
+        | TypeRef::Bytes
+        | TypeRef::Path
+        | TypeRef::Unit
+        | TypeRef::Duration => true,
         TypeRef::Named(_) => true, // core→binding From impl generated for all convertible types
         TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_delegatable_return(inner),
         TypeRef::Map(k, v) => is_delegatable_return(k) && is_delegatable_return(v),
@@ -50,7 +60,12 @@ pub fn is_delegatable_return(ty: &TypeRef) -> bool {
 /// For opaque methods, Named types are handled separately via Arc wrap/unwrap.
 pub fn is_delegatable_type(ty: &TypeRef) -> bool {
     match ty {
-        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
+        TypeRef::Primitive(_)
+        | TypeRef::String
+        | TypeRef::Bytes
+        | TypeRef::Path
+        | TypeRef::Unit
+        | TypeRef::Duration => true,
         TypeRef::Named(_) => false, // Requires From impl which may not exist
         TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_delegatable_type(inner),
         TypeRef::Map(k, v) => is_delegatable_type(k) && is_delegatable_type(v),
@@ -62,7 +77,12 @@ pub fn is_delegatable_type(ty: &TypeRef) -> bool {
 /// Opaque methods can handle Named params via Arc unwrap and Named returns via Arc wrap.
 pub fn is_opaque_delegatable_type(ty: &TypeRef) -> bool {
     match ty {
-        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
+        TypeRef::Primitive(_)
+        | TypeRef::String
+        | TypeRef::Bytes
+        | TypeRef::Path
+        | TypeRef::Unit
+        | TypeRef::Duration => true,
         TypeRef::Named(_) => true, // Opaque: Arc unwrap/wrap. Non-opaque: .into()
         TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_opaque_delegatable_type(inner),
         TypeRef::Map(k, v) => is_opaque_delegatable_type(k) && is_opaque_delegatable_type(v),
@@ -73,7 +93,12 @@ pub fn is_opaque_delegatable_type(ty: &TypeRef) -> bool {
 /// Check if a type is "simple" — can be passed without any conversion.
 pub fn is_simple_type(ty: &TypeRef) -> bool {
     match ty {
-        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Unit => true,
+        TypeRef::Primitive(_)
+        | TypeRef::String
+        | TypeRef::Bytes
+        | TypeRef::Path
+        | TypeRef::Unit
+        | TypeRef::Duration => true,
         TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_simple_type(inner),
         TypeRef::Map(k, v) => is_simple_type(k) && is_simple_type(v),
         TypeRef::Named(_) | TypeRef::Json => false,

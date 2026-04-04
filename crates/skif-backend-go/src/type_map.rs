@@ -16,6 +16,7 @@ pub fn go_type(ty: &TypeRef) -> Cow<'static, str> {
         TypeRef::Path => Cow::Borrowed("string"),
         TypeRef::Json => Cow::Borrowed("map[string]interface{}"),
         TypeRef::Unit => Cow::Borrowed(""), // void
+        TypeRef::Duration => Cow::Borrowed("uint64"),
     }
 }
 

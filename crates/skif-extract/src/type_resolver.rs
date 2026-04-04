@@ -135,7 +135,7 @@ fn resolve_path_type(type_path: &syn::TypePath) -> TypeRef {
         "Box" | "Arc" | "Rc" => extract_single_generic_arg(segment).unwrap_or(TypeRef::Named("unknown".into())),
 
         // Well-known std/common types
-        "Duration" => TypeRef::Primitive(PrimitiveType::U64), // duration as millis/secs
+        "Duration" => TypeRef::Duration,
         "SecretString" => TypeRef::String,
         "Cow" => {
             // Cow<str> → String, Cow<[u8]> → Bytes, etc.
@@ -382,10 +382,7 @@ mod tests {
 
     #[test]
     fn test_duration() {
-        assert_eq!(
-            resolve_type(&parse_type("Duration")),
-            TypeRef::Primitive(PrimitiveType::U64)
-        );
+        assert_eq!(resolve_type(&parse_type("Duration")), TypeRef::Duration);
     }
 
     #[test]

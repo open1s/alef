@@ -133,6 +133,8 @@ fn pinvoke_return_type(ty: &TypeRef) -> &'static str {
         TypeRef::Primitive(PrimitiveType::F64) => "double",
         TypeRef::Primitive(PrimitiveType::Usize) => "nuint",
         TypeRef::Primitive(PrimitiveType::Isize) => "nint",
+        // Duration as u64
+        TypeRef::Duration => "ulong",
         // Everything else is a pointer that needs manual marshalling.
         TypeRef::String
         | TypeRef::Bytes

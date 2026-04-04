@@ -26,6 +26,7 @@ pub fn c_param_type(ty: &TypeRef, core_import: &str) -> Cow<'static, str> {
         TypeRef::Path => Cow::Borrowed("*const std::ffi::c_char"),
         TypeRef::Unit => Cow::Borrowed(""),
         TypeRef::Json => Cow::Borrowed("*const std::ffi::c_char"),
+        TypeRef::Duration => Cow::Borrowed("u64"),
     }
 }
 
@@ -51,6 +52,7 @@ pub fn c_return_type(ty: &TypeRef, core_import: &str) -> Cow<'static, str> {
         TypeRef::Path => Cow::Borrowed("*mut std::ffi::c_char"),
         TypeRef::Unit => Cow::Borrowed("()"),
         TypeRef::Json => Cow::Borrowed("*mut std::ffi::c_char"),
+        TypeRef::Duration => Cow::Borrowed("u64"),
     }
 }
 

@@ -422,24 +422,6 @@ fn gen_exception_class(package: &str, class_name: &str) -> String {
 // Record types (Java records)
 // ---------------------------------------------------------------------------
 
-/// Check if a field type (or wrapped in Optional) uses Vec or Map.
-fn field_uses_type(ty: &skif_core::ir::TypeRef, optional: bool, kind: &str) -> bool {
-    use skif_core::ir::TypeRef;
-    match kind {
-        "Vec" => match ty {
-            TypeRef::Vec(_) => true,
-            TypeRef::Optional(inner) => matches!(inner.as_ref(), TypeRef::Vec(_)),
-            _ => false,
-        },
-        "Map" => match ty {
-            TypeRef::Map(_, _) => true,
-            TypeRef::Optional(inner) => matches!(inner.as_ref(), TypeRef::Map(_, _)),
-            _ => optional && matches!(ty, TypeRef::Map(_, _)),
-        },
-        _ => false,
-    }
-}
-
 fn gen_record_type(package: &str, typ: &TypeDef) -> String {
     let mut out = String::with_capacity(1024);
 
@@ -514,6 +496,7 @@ fn gen_ffi_layout(ty: &TypeRef) -> String {
         TypeRef::Map(_, _) => "ValueLayout.ADDRESS".to_string(),
         TypeRef::Named(_) => "ValueLayout.ADDRESS".to_string(),
         TypeRef::Unit => "".to_string(),
+        TypeRef::Duration => "ValueLayout.JAVA_LONG".to_string(),
     }
 }
 

@@ -43,5 +43,6 @@ pub fn python_type(ty: &TypeRef) -> String {
         TypeRef::Path => "str".to_string(),
         TypeRef::Json => "dict[str, Any]".to_string(),
         TypeRef::Unit => "None".to_string(),
+        TypeRef::Duration => "int".to_string(),
     }
 }
