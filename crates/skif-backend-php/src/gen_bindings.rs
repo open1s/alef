@@ -555,6 +555,13 @@ fn php_field_conversion_from_core(
         }
         return format!("{name}: format!(\"{{:?}}\", val.{name})");
     }
+    // Duration: PHP uses i64 (secs), core uses std::time::Duration
+    if matches!(ty, TypeRef::Duration) {
+        if optional {
+            return format!("{name}: val.{name}.map(|d| d.as_secs() as i64)");
+        }
+        return format!("{name}: val.{name}.as_secs() as i64");
+    }
     // PHP maps U64/Usize to i64 — need `as i64` cast for core→binding
     match ty {
         TypeRef::Primitive(PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize) => {
@@ -617,6 +624,20 @@ fn php_field_conversion(name: &str, ty: &skif_core::ir::TypeRef, optional: bool,
                 "i64"
             };
             format!("{name}: {val}.{name} as {cast_to}")
+        }
+        // Duration: PHP uses i64 (secs), core uses std::time::Duration
+        TypeRef::Duration => {
+            if to_core {
+                if optional {
+                    format!("{name}: {val}.{name}.map(|v| std::time::Duration::from_secs(v as u64))")
+                } else {
+                    format!("{name}: std::time::Duration::from_secs({val}.{name} as u64)")
+                }
+            } else if optional {
+                format!("{name}: {val}.{name}.map(|d| d.as_secs() as i64)")
+            } else {
+                format!("{name}: {val}.{name}.as_secs() as i64")
+            }
         }
         TypeRef::Named(_) => {
             if optional {

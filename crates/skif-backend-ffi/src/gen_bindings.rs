@@ -890,12 +890,18 @@ fn gen_param_conversion(param: &ParamDef, has_error: bool, return_type: &TypeRef
     } else if is_void_return(return_type) {
         "return;"
     } else {
-        match return_type {
-            TypeRef::Primitive(p) => match p {
-                skif_core::ir::PrimitiveType::F32 | skif_core::ir::PrimitiveType::F64 => "return 0.0;",
-                _ => "return 0;",
-            },
-            _ => "return std::ptr::null_mut();",
+        // Use null_return_value to get the correct default for the return type
+        // (handles primitives, floats, Optional, Duration, pointers)
+        match null_return_value(return_type) {
+            "()" => "return;",
+            v => {
+                // Leak: we need a 'static str but null_return_value returns &'static str
+                // The values are all string literals so this is fine
+                let ret = format!("return {};", v);
+                // Use a leaked string since fail_ret needs 'static lifetime
+                // This is called once per function generation, not in a hot loop
+                Box::leak(ret.into_boxed_str()) as &str
+            }
         }
     };
 

@@ -389,6 +389,20 @@ fn napi_field_conversion(name: &str, ty: &skif_core::ir::TypeRef, optional: bool
             let cast_to = if to_core { core_prim_str(p) } else { "i64" };
             format!("{name}: {val}.{name} as {cast_to}")
         }
+        // Duration: NAPI uses i64 (secs), core uses std::time::Duration
+        TypeRef::Duration => {
+            if to_core {
+                if optional {
+                    format!("{name}: {val}.{name}.map(|v| std::time::Duration::from_secs(v as u64))")
+                } else {
+                    format!("{name}: std::time::Duration::from_secs({val}.{name} as u64)")
+                }
+            } else if optional {
+                format!("{name}: {val}.{name}.map(|d| d.as_secs() as i64)")
+            } else {
+                format!("{name}: {val}.{name}.as_secs() as i64")
+            }
+        }
         TypeRef::Named(_) => {
             if optional {
                 format!("{name}: {val}.{name}.map(Into::into)")

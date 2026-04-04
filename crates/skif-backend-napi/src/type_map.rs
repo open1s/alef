@@ -30,6 +30,11 @@ impl TypeMapper for NapiMapper {
         Cow::Owned(format!("Js{name}"))
     }
 
+    /// NAPI uses i64 for Duration (JS numbers are 53-bit safe).
+    fn duration(&self) -> Cow<'static, str> {
+        Cow::Borrowed("i64")
+    }
+
     fn error_wrapper(&self) -> &str {
         "Result"
     }
