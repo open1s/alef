@@ -582,13 +582,44 @@ fn extract_trait_impl_methods(
     };
 
     // Extract the trait path from `impl TraitPath for Type`
-    let trait_source = item.trait_.as_ref().map(|(_, path, _)| {
+    // Standard library traits that should NOT be imported (always in scope or from std)
+    const STD_TRAITS: &[&str] = &[
+        "Default",
+        "Clone",
+        "Copy",
+        "Debug",
+        "Display",
+        "Drop",
+        "PartialEq",
+        "Eq",
+        "PartialOrd",
+        "Ord",
+        "Hash",
+        "From",
+        "Into",
+        "TryFrom",
+        "TryInto",
+        "Iterator",
+        "IntoIterator",
+        "Send",
+        "Sync",
+        "Sized",
+        "Unpin",
+        "Serialize",
+        "Deserialize", // serde — re-exported, not crate-local
+    ];
+    let trait_source = item.trait_.as_ref().and_then(|(_, path, _)| {
         let segments: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+        let trait_name = segments.last().map(|s| s.as_str()).unwrap_or("");
+        // Skip standard library traits — they don't need explicit imports
+        if STD_TRAITS.contains(&trait_name) {
+            return None;
+        }
         // Prefix with crate_name if the trait path is a single segment (local trait)
         if segments.len() == 1 {
-            format!("{crate_name}::{}", segments[0])
+            Some(format!("{crate_name}::{}", segments[0]))
         } else {
-            segments.join("::")
+            Some(segments.join("::"))
         }
     });
 
