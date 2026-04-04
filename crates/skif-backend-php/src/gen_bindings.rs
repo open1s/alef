@@ -489,11 +489,37 @@ fn php_field_conversion(name: &str, ty: &skif_core::ir::TypeRef, optional: bool,
                 if to_core {
                     format!("{name}: {val}.{name}.map(Into::into)")
                 } else {
-                    format!("{name}: {val}.{name}.map(|p| p.to_string_lossy().to_string())")
+                    format!("{name}: {val}.{name}.map(Into::into)")
+                }
+            }
+            TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Named(_)) => {
+                format!("{name}: {val}.{name}.map(|v| v.into_iter().map(Into::into).collect())")
+            }
+            _ => format!("{name}: {val}.{name}"),
+        },
+        // Vec of named types — map each element with Into
+        TypeRef::Vec(inner) => match inner.as_ref() {
+            TypeRef::Named(_) => {
+                if optional {
+                    format!("{name}: {val}.{name}.map(|v| v.into_iter().map(Into::into).collect())")
+                } else {
+                    format!("{name}: {val}.{name}.into_iter().map(Into::into).collect()")
                 }
             }
             _ => format!("{name}: {val}.{name}"),
         },
+        // Map — convert Named keys/values via Into
+        TypeRef::Map(k, v) => {
+            let has_named_key = matches!(k.as_ref(), TypeRef::Named(_));
+            let has_named_val = matches!(v.as_ref(), TypeRef::Named(_));
+            if has_named_key || has_named_val {
+                let key_conv = if has_named_key { "k.into()" } else { "k" };
+                let val_conv = if has_named_val { "v.into()" } else { "v" };
+                format!("{name}: {val}.{name}.into_iter().map(|(k, v)| ({key_conv}, {val_conv})).collect()")
+            } else {
+                format!("{name}: {val}.{name}")
+            }
+        }
         _ => format!("{name}: {val}.{name}"),
     }
 }

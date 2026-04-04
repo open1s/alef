@@ -29,6 +29,11 @@ impl TypeMapper for WasmMapper {
         Cow::Borrowed("JsValue")
     }
 
+    /// WASM can't handle HashMap across the boundary — use JsValue instead.
+    fn map(&self, _key: &str, _value: &str) -> String {
+        "JsValue".to_string()
+    }
+
     fn error_wrapper(&self) -> &str {
         "Result"
     }

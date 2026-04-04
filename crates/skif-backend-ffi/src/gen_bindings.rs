@@ -511,14 +511,21 @@ fn gen_ffi_unimplemented_body(return_type: &TypeRef, fn_name: &str, has_error: b
 
 /// Return the null/zero value for a given type in return position.
 fn null_return_value(ty: &TypeRef) -> &'static str {
+    use skif_core::ir::PrimitiveType;
     match ty {
-        TypeRef::Primitive(_p) => "0",
+        TypeRef::Primitive(p) => match p {
+            PrimitiveType::F32 | PrimitiveType::F64 => "0.0",
+            _ => "0",
+        },
         TypeRef::String | TypeRef::Path | TypeRef::Json => "std::ptr::null_mut()",
         TypeRef::Bytes => "std::ptr::null_mut()",
         TypeRef::Named(_) => "std::ptr::null_mut()",
         TypeRef::Vec(_) | TypeRef::Map(_, _) => "std::ptr::null_mut()",
         TypeRef::Optional(inner) => match inner.as_ref() {
-            TypeRef::Primitive(_) => "0",
+            TypeRef::Primitive(p) => match p {
+                PrimitiveType::F32 | PrimitiveType::F64 => "0.0",
+                _ => "0",
+            },
             _ => "std::ptr::null_mut()",
         },
         TypeRef::Unit => "()",
@@ -871,7 +878,10 @@ fn gen_param_conversion(param: &ParamDef, has_error: bool, return_type: &TypeRef
         "return;"
     } else {
         match return_type {
-            TypeRef::Primitive(_) => "return 0;",
+            TypeRef::Primitive(p) => match p {
+                skif_core::ir::PrimitiveType::F32 | skif_core::ir::PrimitiveType::F64 => "return 0.0;",
+                _ => "return 0;",
+            },
             _ => "return std::ptr::null_mut();",
         }
     };
