@@ -475,9 +475,7 @@ fn gen_php_unimplemented_body(return_type: &skif_core::ir::TypeRef, fn_name: &st
             TypeRef::Optional(_) => "None".to_string(),
             TypeRef::Vec(_) => "Vec::new()".to_string(),
             TypeRef::Map(_, _) => "Default::default()".to_string(),
-            TypeRef::Named(_) | TypeRef::Json => {
-                format!("todo!(\"Not auto-delegatable: {fn_name} -- return type requires custom implementation\")")
-            }
+            TypeRef::Named(_) | TypeRef::Json => "Default::default()".to_string(),
             TypeRef::Duration => "std::time::Duration::default()".to_string(),
         }
     }

@@ -526,9 +526,7 @@ fn gen_wasm_unimplemented_body(return_type: &TypeRef, fn_name: &str, has_error: 
             TypeRef::Vec(_) => "Vec::new()".to_string(),
             TypeRef::Map(_, _) => "Default::default()".to_string(),
             TypeRef::Duration => "0u64".to_string(),
-            TypeRef::Named(_) | TypeRef::Json => {
-                format!("todo!(\"Not auto-delegatable: {fn_name} -- return type requires custom implementation\")")
-            }
+            TypeRef::Named(_) | TypeRef::Json => "Default::default()".to_string(),
         }
     }
 }

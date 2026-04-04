@@ -405,9 +405,7 @@ fn gen_rustler_unimplemented_body(return_type: &skif_core::ir::TypeRef, fn_name:
             TypeRef::Vec(_) => "Vec::new()".to_string(),
             TypeRef::Map(_, _) => "Default::default()".to_string(),
             TypeRef::Duration => "0u64".to_string(),
-            TypeRef::Named(_) | TypeRef::Json => {
-                format!("todo!(\"Not auto-delegatable: {fn_name} -- return type requires custom implementation\")")
-            }
+            TypeRef::Named(_) | TypeRef::Json => "Default::default()".to_string(),
         }
     }
 }
