@@ -523,7 +523,7 @@ fn gen_magnus_unimplemented_body(return_type: &skif_core::ir::TypeRef, fn_name: 
             TypeRef::Vec(_) => "Vec::new()".to_string(),
             TypeRef::Map(_, _) => "Default::default()".to_string(),
             TypeRef::Duration => "0u64".to_string(),
-            TypeRef::Named(_) | TypeRef::Json => "Default::default()".to_string(),
+            TypeRef::Named(_) | TypeRef::Json => format!("panic!(\"skif: {fn_name} not auto-delegatable\")"),
         }
     }
 }

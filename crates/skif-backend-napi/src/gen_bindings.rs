@@ -546,7 +546,7 @@ fn gen_napi_unimplemented_body(return_type: &skif_core::ir::TypeRef, fn_name: &s
             TypeRef::Vec(_) => "Vec::new()".to_string(),
             TypeRef::Map(_, _) => "Default::default()".to_string(),
             TypeRef::Duration => "0".to_string(),
-            TypeRef::Named(_) | TypeRef::Json => "Default::default()".to_string(),
+            TypeRef::Named(_) | TypeRef::Json => format!("panic!(\"skif: {fn_name} not auto-delegatable\")"),
         }
     }
 }

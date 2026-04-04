@@ -481,8 +481,7 @@ pub fn gen_struct(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfi
 pub fn gen_opaque_struct(typ: &TypeDef, cfg: &RustBindingConfig) -> String {
     let mut out = String::with_capacity(512);
     if !cfg.struct_derives.is_empty() {
-        // Default allows graceful stub generation for non-delegatable methods
-        writeln!(out, "#[derive(Clone, Default)]").ok();
+        writeln!(out, "#[derive(Clone)]").ok();
     }
     for attr in cfg.struct_attrs {
         writeln!(out, "#[{attr}]").ok();
