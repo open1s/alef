@@ -238,11 +238,11 @@ fn gen_opaque_struct_methods(typ: &TypeDef, mapper: &PhpMapper, _opaque_types: &
     impl_builder.build()
 }
 
-/// Generate a PHP struct, adding `serde::Deserialize` when the struct has Named-type
-/// params and serde is available (needed for `from_json` constructor).
+/// Generate a PHP struct, adding `serde::Deserialize` when serde is available.
+/// All structs need Deserialize (not just those with Named params) because
+/// structs with from_json may reference other structs that also need Deserialize.
 fn gen_php_struct(typ: &TypeDef, mapper: &PhpMapper, cfg: &RustBindingConfig<'_>) -> String {
-    let has_named_params = typ.fields.iter().any(|f| type_ref_has_named(&f.ty));
-    if has_named_params && cfg.has_serde {
+    if cfg.has_serde {
         // Build a modified config that also derives Deserialize so from_json can work.
         let mut extra_derives: Vec<&str> = cfg.struct_derives.to_vec();
         extra_derives.push("serde::Deserialize");
