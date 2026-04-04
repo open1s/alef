@@ -7,7 +7,7 @@ use skif_codegen::shared::{can_auto_delegate, function_params, partition_methods
 use skif_codegen::type_mapper::TypeMapper;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
 use skif_core::config::{Language, SkifConfig, resolve_output_dir};
-use skif_core::ir::{ApiSurface, EnumDef, FunctionDef, MethodDef, TypeDef, TypeRef};
+use skif_core::ir::{ApiSurface, EnumDef, FunctionDef, MethodDef, ParamDef, TypeDef, TypeRef};
 use std::fmt::Write;
 use std::path::PathBuf;
 
@@ -256,7 +256,7 @@ fn gen_opaque_instance_method(
 
     let type_name = &typ.name;
     let is_owned_receiver = matches!(method.receiver.as_ref(), Some(skif_core::ir::ReceiverKind::Owned));
-    let call_args = generators::gen_call_args(&method.params, opaque_types);
+    let call_args = napi_gen_call_args(&method.params, opaque_types);
 
     // Use the shared can_auto_delegate check for opaque instance methods.
     let opaque_can_delegate = !method.sanitized
@@ -360,7 +360,7 @@ fn gen_static_method(
 
     let type_name = &typ.name;
     let core_type_path = typ.rust_path.replace('-', "_");
-    let call_args = generators::gen_call_args(&method.params, opaque_types);
+    let call_args = napi_gen_call_args(&method.params, opaque_types);
     let can_delegate_static = can_auto_delegate(method, opaque_types);
 
     let async_kw = if method.is_async { "async " } else { "" };
@@ -447,7 +447,7 @@ fn gen_function(
     let call_args = if use_let_bindings {
         generators::gen_call_args_with_let_bindings(&func.params, opaque_types)
     } else {
-        generators::gen_call_args(&func.params, opaque_types)
+        napi_gen_call_args(&func.params, opaque_types)
     };
 
     let can_delegate_fn = skif_codegen::shared::can_auto_delegate_function(func, opaque_types);
@@ -502,6 +502,41 @@ fn gen_function(
          {body}\n}}",
         func.name
     )
+}
+
+/// NAPI-specific call args that casts i64 params to u64/usize where the core expects it.
+fn napi_gen_call_args(params: &[ParamDef], opaque_types: &AHashSet<String>) -> String {
+    params
+        .iter()
+        .map(|p| match &p.ty {
+            TypeRef::Primitive(prim) if needs_napi_cast(prim) => {
+                let core_ty = core_prim_str(prim);
+                if p.optional {
+                    format!("{}.map(|v| v as {})", p.name, core_ty)
+                } else {
+                    format!("{} as {}", p.name, core_ty)
+                }
+            }
+            TypeRef::Duration => {
+                if p.optional {
+                    format!("{}.map(|v| std::time::Duration::from_secs(v as u64))", p.name)
+                } else {
+                    format!("std::time::Duration::from_secs({} as u64)", p.name)
+                }
+            }
+            TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
+                if p.optional {
+                    format!("{}.as_ref().map(|v| &v.inner)", p.name)
+                } else {
+                    format!("&{}.inner", p.name)
+                }
+            }
+            TypeRef::String => format!("&{}", p.name),
+            TypeRef::Bytes => format!("&{}", p.name),
+            _ => p.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// NAPI-specific return wrapping for opaque instance methods.
