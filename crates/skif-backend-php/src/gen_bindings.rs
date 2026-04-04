@@ -131,8 +131,8 @@ impl Backend for PhpBackend {
                 builder.add_item(&generators::gen_opaque_struct(typ, &cfg));
                 builder.add_item(&gen_opaque_struct_methods(typ, &mapper, &opaque_types));
             } else {
-                builder.add_item(&generators::gen_struct(typ, &mapper, &cfg));
-                builder.add_item(&gen_struct_methods(typ, &mapper));
+                builder.add_item(&gen_php_struct(typ, &mapper, &cfg));
+                builder.add_item(&gen_struct_methods(typ, &mapper, has_serde, &core_import));
             }
         }
 
@@ -238,6 +238,37 @@ fn gen_opaque_struct_methods(typ: &TypeDef, mapper: &PhpMapper, _opaque_types: &
     impl_builder.build()
 }
 
+/// Generate a PHP struct, adding `serde::Deserialize` when the struct has Named-type
+/// params and serde is available (needed for `from_json` constructor).
+fn gen_php_struct(typ: &TypeDef, mapper: &PhpMapper, cfg: &RustBindingConfig<'_>) -> String {
+    let has_named_params = typ.fields.iter().any(|f| type_ref_has_named(&f.ty));
+    if has_named_params && cfg.has_serde {
+        // Build a modified config that also derives Deserialize so from_json can work.
+        let mut extra_derives: Vec<&str> = cfg.struct_derives.to_vec();
+        extra_derives.push("serde::Deserialize");
+        let modified_cfg = RustBindingConfig {
+            struct_attrs: cfg.struct_attrs,
+            field_attrs: cfg.field_attrs,
+            struct_derives: &extra_derives,
+            method_block_attr: cfg.method_block_attr,
+            constructor_attr: cfg.constructor_attr,
+            static_attr: cfg.static_attr,
+            function_attr: cfg.function_attr,
+            enum_attrs: cfg.enum_attrs,
+            enum_derives: cfg.enum_derives,
+            needs_signature: cfg.needs_signature,
+            signature_prefix: cfg.signature_prefix,
+            signature_suffix: cfg.signature_suffix,
+            core_import: cfg.core_import,
+            async_pattern: cfg.async_pattern,
+            has_serde: cfg.has_serde,
+        };
+        generators::gen_struct(typ, mapper, &modified_cfg)
+    } else {
+        generators::gen_struct(typ, mapper, cfg)
+    }
+}
+
 /// Return true if a TypeRef contains a Named type (another struct/class that
 /// ext-php-rs cannot deserialize from a PHP value as an owned parameter).
 fn type_ref_has_named(ty: &skif_core::ir::TypeRef) -> bool {
@@ -251,23 +282,36 @@ fn type_ref_has_named(ty: &skif_core::ir::TypeRef) -> bool {
 }
 
 /// Generate ext-php-rs methods for a struct.
-fn gen_struct_methods(typ: &TypeDef, mapper: &PhpMapper) -> String {
+fn gen_struct_methods(typ: &TypeDef, mapper: &PhpMapper, has_serde: bool, core_import: &str) -> String {
     let mut impl_builder = ImplBuilder::new(&typ.name);
     impl_builder.add_attr("php_impl");
 
     if !typ.fields.is_empty() {
         let has_named_params = typ.fields.iter().any(|f| type_ref_has_named(&f.ty));
         if has_named_params {
-            // ext-php-rs cannot convert PHP values into #[php_class] structs as owned
-            // constructor parameters (FromZvalMut not satisfied). Generate a todo!()
-            // constructor to keep the class visible in PHP but defer implementation.
-            let constructor = format!(
-                "pub fn __construct() -> PhpResult<Self> {{\n    \
-                 Err(PhpException::default(\"Not implemented: constructor for {} requires complex params\".to_string()).into())\n\
-                 }}",
-                typ.name
-            );
-            impl_builder.add_method(&constructor);
+            if has_serde {
+                // ext-php-rs cannot pass custom struct types as owned constructor params
+                // (FromZvalMut not satisfied). When serde is available, generate a from_json
+                // static method that deserializes from a JSON string, bypassing the limitation.
+                let core_type = format!("{core_import}::{}", typ.name);
+                let constructor = format!(
+                    "pub fn from_json(json: String) -> PhpResult<Self> {{\n    \
+                     let core: {core_type} = serde_json::from_str(&json)\n        \
+                     .map_err(|e| PhpException::default(e.to_string()))?;\n    \
+                     Ok(core.into())\n\
+                     }}"
+                );
+                impl_builder.add_method(&constructor);
+            } else {
+                // No serde available — generate a stub constructor.
+                let constructor = format!(
+                    "pub fn __construct() -> PhpResult<Self> {{\n    \
+                     Err(PhpException::default(\"Not implemented: constructor for {} requires complex params\".to_string()).into())\n\
+                     }}",
+                    typ.name
+                );
+                impl_builder.add_method(&constructor);
+            }
         } else {
             let map_fn = |ty: &skif_core::ir::TypeRef| mapper.map_type(ty);
             let (param_list, _, assignments) = constructor_parts(&typ.fields, &map_fn);
