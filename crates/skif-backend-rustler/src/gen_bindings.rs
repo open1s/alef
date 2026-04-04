@@ -2,10 +2,11 @@ use crate::type_map::RustlerMapper;
 use ahash::AHashSet;
 use skif_codegen::builder::RustFileBuilder;
 use skif_codegen::generators;
+use skif_codegen::shared;
 use skif_codegen::type_mapper::TypeMapper;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
 use skif_core::config::{Language, SkifConfig, resolve_output_dir};
-use skif_core::ir::{ApiSurface, EnumDef, FunctionDef, MethodDef, TypeDef, TypeRef};
+use skif_core::ir::{ApiSurface, EnumDef, FunctionDef, MethodDef, ParamDef, TypeDef, TypeRef};
 use std::path::PathBuf;
 
 pub struct RustlerBackend;
@@ -96,9 +97,9 @@ impl Backend for RustlerBackend {
 
         for func in &api.functions {
             if func.is_async {
-                builder.add_item(&gen_nif_async_function(func, &mapper, &opaque_types));
+                builder.add_item(&gen_nif_async_function(func, &mapper, &opaque_types, &core_import));
             } else {
-                builder.add_item(&gen_nif_function(func, &mapper, &opaque_types));
+                builder.add_item(&gen_nif_function(func, &mapper, &opaque_types, &core_import));
             }
         }
 
@@ -111,6 +112,7 @@ impl Backend for RustlerBackend {
                         &mapper,
                         typ.is_opaque,
                         &opaque_types,
+                        &core_import,
                     ));
                 } else {
                     builder.add_item(&gen_nif_method(
@@ -119,6 +121,7 @@ impl Backend for RustlerBackend {
                         &mapper,
                         typ.is_opaque,
                         &opaque_types,
+                        &core_import,
                     ));
                 }
             }
@@ -228,11 +231,82 @@ fn gen_enum(enum_def: &EnumDef) -> String {
     lines.join("\n")
 }
 
-/// Generate a Rustler NIF free function using the shared TypeMapper.
-fn gen_nif_function(func: &FunctionDef, mapper: &RustlerMapper, opaque_types: &AHashSet<String>) -> String {
-    use skif_core::ir::TypeRef;
+/// Build call argument expressions for Rustler (opaque Named types access .inner via ResourceArc).
+fn gen_rustler_call_args(params: &[ParamDef], opaque_types: &AHashSet<String>) -> String {
+    params
+        .iter()
+        .map(|p| match &p.ty {
+            TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
+                format!("&{}.inner", p.name)
+            }
+            TypeRef::Named(_) => {
+                if p.optional {
+                    format!("{}.map(Into::into)", p.name)
+                } else {
+                    format!("{}.into()", p.name)
+                }
+            }
+            TypeRef::String => format!("&{}", p.name),
+            TypeRef::Path => format!("std::path::PathBuf::from({})", p.name),
+            TypeRef::Bytes => format!("&{}", p.name),
+            TypeRef::Duration => format!("std::time::Duration::from_secs({})", p.name),
+            _ => p.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
-    // If any param is an opaque Named type, use ResourceArc wrapping
+/// Wrap a return expression for Rustler (opaque types get ResourceArc wrapping).
+fn gen_rustler_wrap_return(
+    expr: &str,
+    return_type: &TypeRef,
+    _type_name: &str,
+    opaque_types: &AHashSet<String>,
+) -> String {
+    match return_type {
+        TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
+            format!("ResourceArc::new({n} {{ inner: Arc::new({expr}) }})")
+        }
+        TypeRef::Named(_) => format!("{expr}.into()"),
+        TypeRef::String | TypeRef::Bytes => format!("{expr}.into()"),
+        TypeRef::Path => format!("{expr}.to_string_lossy().to_string()"),
+        TypeRef::Duration => format!("{expr}.as_secs()"),
+        _ => expr.to_string(),
+    }
+}
+
+/// Build call argument expressions for Rustler opaque method (receiver is `resource`).
+fn gen_rustler_method_call_args(params: &[ParamDef], opaque_types: &AHashSet<String>) -> String {
+    params
+        .iter()
+        .map(|p| match &p.ty {
+            TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
+                format!("&{}.inner", p.name)
+            }
+            TypeRef::Named(_) => {
+                if p.optional {
+                    format!("{}.map(Into::into)", p.name)
+                } else {
+                    format!("{}.into()", p.name)
+                }
+            }
+            TypeRef::String => format!("&{}", p.name),
+            TypeRef::Path => format!("std::path::PathBuf::from({})", p.name),
+            TypeRef::Bytes => format!("&{}", p.name),
+            TypeRef::Duration => format!("std::time::Duration::from_secs({})", p.name),
+            _ => p.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Generate a Rustler NIF free function using the shared TypeMapper.
+fn gen_nif_function(
+    func: &FunctionDef,
+    mapper: &RustlerMapper,
+    opaque_types: &AHashSet<String>,
+    core_import: &str,
+) -> String {
     let params_str = func
         .params
         .iter()
@@ -250,7 +324,20 @@ fn gen_nif_function(func: &FunctionDef, mapper: &RustlerMapper, opaque_types: &A
     let return_type = map_return_type(&func.return_type, mapper, opaque_types);
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
 
-    let body = gen_rustler_unimplemented_body(&func.return_type, &func.name, func.error_type.is_some());
+    let can_delegate = shared::can_auto_delegate_function(func, opaque_types);
+
+    let body = if can_delegate {
+        let call_args = gen_rustler_call_args(&func.params, opaque_types);
+        let core_call = format!("{core_import}::{}({call_args})", func.name);
+        if func.error_type.is_some() {
+            let wrap = gen_rustler_wrap_return("result", &func.return_type, "", opaque_types);
+            format!("let result = {core_call}.map_err(|e| e.to_string())?;\n    Ok({wrap})")
+        } else {
+            gen_rustler_wrap_return(&core_call, &func.return_type, "", opaque_types)
+        }
+    } else {
+        gen_rustler_unimplemented_body(&func.return_type, &func.name, func.error_type.is_some())
+    };
     format!(
         "#[rustler::nif]\npub fn {}({params_str}) -> {return_annotation} {{\n    \
          {body}\n}}",
@@ -259,9 +346,12 @@ fn gen_nif_function(func: &FunctionDef, mapper: &RustlerMapper, opaque_types: &A
 }
 
 /// Generate a Rustler NIF async free function (sync wrapper scheduled on DirtyCpu).
-fn gen_nif_async_function(func: &FunctionDef, mapper: &RustlerMapper, opaque_types: &AHashSet<String>) -> String {
-    use skif_core::ir::TypeRef;
-
+fn gen_nif_async_function(
+    func: &FunctionDef,
+    mapper: &RustlerMapper,
+    opaque_types: &AHashSet<String>,
+    core_import: &str,
+) -> String {
     let params_str = func
         .params
         .iter()
@@ -279,12 +369,32 @@ fn gen_nif_async_function(func: &FunctionDef, mapper: &RustlerMapper, opaque_typ
     let return_type = map_return_type(&func.return_type, mapper, opaque_types);
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
 
-    let body = gen_rustler_unimplemented_body(
-        &func.return_type,
-        &format!("{}_async", func.name),
-        func.error_type.is_some(),
-    );
-    // Append "_async" to function name for Rustler
+    let can_delegate = shared::can_auto_delegate_function(func, opaque_types);
+
+    let body = if can_delegate {
+        let call_args = gen_rustler_call_args(&func.params, opaque_types);
+        let core_call = format!("{core_import}::{}({call_args})", func.name);
+        let result_wrap = gen_rustler_wrap_return("result", &func.return_type, "", opaque_types);
+        if func.error_type.is_some() {
+            format!(
+                "let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;\n    \
+                 let result = rt.block_on(async {{ {core_call}.await }}).map_err(|e| e.to_string())?;\n    \
+                 Ok({result_wrap})"
+            )
+        } else {
+            format!(
+                "let rt = tokio::runtime::Runtime::new().unwrap();\n    \
+                 let result = rt.block_on(async {{ {core_call}.await }});\n    \
+                 {result_wrap}"
+            )
+        }
+    } else {
+        gen_rustler_unimplemented_body(
+            &func.return_type,
+            &format!("{}_async", func.name),
+            func.error_type.is_some(),
+        )
+    };
     format!(
         "#[rustler::nif(schedule = \"DirtyCpu\")]\npub fn {}_async({params_str}) -> {return_annotation} {{\n    \
          {body}\n\
@@ -300,9 +410,8 @@ fn gen_nif_method(
     mapper: &RustlerMapper,
     is_opaque: bool,
     opaque_types: &AHashSet<String>,
+    core_import: &str,
 ) -> String {
-    use skif_core::ir::TypeRef;
-
     let method_fn_name = format!("{}_{}", struct_name.to_lowercase(), method.name);
 
     let mut params = if method.receiver.is_some() {
@@ -329,7 +438,28 @@ fn gen_nif_method(
     let return_type = map_return_type(&method.return_type, mapper, opaque_types);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
-    let body = gen_rustler_unimplemented_body(&method.return_type, &method_fn_name, method.error_type.is_some());
+    let can_delegate = shared::can_auto_delegate(method, opaque_types);
+
+    let body = if can_delegate {
+        let call_args = gen_rustler_method_call_args(&method.params, opaque_types);
+        let core_call = if is_opaque {
+            format!("resource.inner.{}({})", method.name, call_args)
+        } else {
+            // Non-opaque: convert binding struct to core type, then call
+            format!(
+                "{core_import}::{}::from(obj).{}({})",
+                struct_name, method.name, call_args
+            )
+        };
+        if method.error_type.is_some() {
+            let wrap = gen_rustler_wrap_return("result", &method.return_type, struct_name, opaque_types);
+            format!("let result = {core_call}.map_err(|e| e.to_string())?;\n    Ok({wrap})")
+        } else {
+            gen_rustler_wrap_return(&core_call, &method.return_type, struct_name, opaque_types)
+        }
+    } else {
+        gen_rustler_unimplemented_body(&method.return_type, &method_fn_name, method.error_type.is_some())
+    };
     format!(
         "#[rustler::nif]\npub fn {}({}) -> {} {{\n    \
          {body}\n}}",
@@ -346,9 +476,8 @@ fn gen_nif_async_method(
     mapper: &RustlerMapper,
     is_opaque: bool,
     opaque_types: &AHashSet<String>,
+    core_import: &str,
 ) -> String {
-    use skif_core::ir::TypeRef;
-
     let method_fn_name = format!("{}_{}_async", struct_name.to_lowercase(), method.name);
 
     let mut params = if method.receiver.is_some() {
@@ -375,7 +504,35 @@ fn gen_nif_async_method(
     let return_type = map_return_type(&method.return_type, mapper, opaque_types);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
-    let body = gen_rustler_unimplemented_body(&method.return_type, &method_fn_name, method.error_type.is_some());
+    let can_delegate = shared::can_auto_delegate(method, opaque_types);
+
+    let body = if can_delegate {
+        let call_args = gen_rustler_method_call_args(&method.params, opaque_types);
+        let core_call = if is_opaque {
+            format!("resource.inner.{}({})", method.name, call_args)
+        } else {
+            format!(
+                "{core_import}::{}::from(obj).{}({})",
+                struct_name, method.name, call_args
+            )
+        };
+        let result_wrap = gen_rustler_wrap_return("result", &method.return_type, struct_name, opaque_types);
+        if method.error_type.is_some() {
+            format!(
+                "let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;\n    \
+                 let result = rt.block_on(async {{ {core_call}.await }}).map_err(|e| e.to_string())?;\n    \
+                 Ok({result_wrap})"
+            )
+        } else {
+            format!(
+                "let rt = tokio::runtime::Runtime::new().unwrap();\n    \
+                 let result = rt.block_on(async {{ {core_call}.await }});\n    \
+                 {result_wrap}"
+            )
+        }
+    } else {
+        gen_rustler_unimplemented_body(&method.return_type, &method_fn_name, method.error_type.is_some())
+    };
     format!(
         "#[rustler::nif(schedule = \"DirtyCpu\")]\npub fn {}({}) -> {} {{\n    \
          {body}\n\

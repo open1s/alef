@@ -517,6 +517,14 @@ fn napi_wrap_return(
             format!("{expr} as i64")
         }
         TypeRef::Duration => format!("{expr}.as_secs() as i64"),
+        // Opaque Named returns need Js prefix
+        TypeRef::Named(n) if n == type_name && self_is_opaque => {
+            format!("Self {{ inner: Arc::new({expr}) }}")
+        }
+        TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
+            format!("Js{n} {{ inner: Arc::new({expr}) }}")
+        }
+        TypeRef::Named(_) => format!("{expr}.into()"),
         _ => generators::wrap_return(expr, return_type, type_name, opaque_types, self_is_opaque),
     }
 }

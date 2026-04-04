@@ -481,20 +481,14 @@ fn gen_instance_method_non_opaque(
 }
 
 /// Generate a static method binding.
-fn gen_static_method(method: &MethodDef, mapper: &PhpMapper, opaque_types: &AHashSet<String>) -> String {
+fn gen_static_method(method: &MethodDef, mapper: &PhpMapper, _opaque_types: &AHashSet<String>) -> String {
     let params = function_params(&method.params, &|ty| mapper.map_type(ty));
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
-    let can_delegate = shared::can_auto_delegate(method, opaque_types);
-
-    let body = if can_delegate {
-        let _call_args = generators::gen_call_args(&method.params, opaque_types);
-        // Static methods don't have a type context here, use unimplemented for now
-        gen_php_unimplemented_body(&method.return_type, &method.name, method.error_type.is_some())
-    } else {
-        gen_php_unimplemented_body(&method.return_type, &method.name, method.error_type.is_some())
-    };
+    // Static methods don't have a type/core_import context here to build the full core call path.
+    // Fall back to unimplemented for now — static method delegation requires the parent type name.
+    let body = gen_php_unimplemented_body(&method.return_type, &method.name, method.error_type.is_some());
 
     if params.is_empty() {
         format!(
