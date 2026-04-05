@@ -56,6 +56,16 @@ pub fn extract(
     // with the inner type, then remove the newtype TypeDefs from the surface.
     resolve_newtypes(&mut surface);
 
+    // After newtype resolution, any remaining types with `_0` fields are tuple structs
+    // that weren't resolved (because they have methods or complex inner types).
+    // Make these opaque since their inner field is private and can't be accessed.
+    for typ in &mut surface.types {
+        if typ.fields.len() == 1 && typ.fields[0].name == "_0" {
+            typ.fields.clear();
+            typ.is_opaque = true;
+        }
+    }
+
     Ok(surface)
 }
 
