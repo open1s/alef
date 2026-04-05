@@ -23,17 +23,30 @@ pub struct ConversionConfig<'a> {
     pub optionalize_defaults: bool,
 }
 
-/// Returns true if a primitive type needs i64 casting in NAPI/PHP.
+/// Returns true if a primitive type needs casting in NAPI/PHP (i64 for ints, f64 for f32).
 fn needs_i64_cast(p: &PrimitiveType) -> bool {
-    matches!(p, PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize)
+    matches!(
+        p,
+        PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize | PrimitiveType::F32
+    )
 }
 
-/// Returns the core primitive type string for i64-cast primitives.
+/// Returns the core primitive type string for cast primitives.
 fn core_prim_str(p: &PrimitiveType) -> &'static str {
     match p {
         PrimitiveType::U64 => "u64",
         PrimitiveType::Usize => "usize",
         PrimitiveType::Isize => "isize",
+        PrimitiveType::F32 => "f32",
+        _ => unreachable!(),
+    }
+}
+
+/// Returns the binding primitive type string for cast primitives (core→binding direction).
+fn binding_prim_str(p: &PrimitiveType) -> &'static str {
+    match p {
+        PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize => "i64",
+        PrimitiveType::F32 => "f64",
         _ => unreachable!(),
     }
 }
@@ -672,12 +685,13 @@ pub fn field_conversion_from_core_cfg(
     let is_enum_string = |n: &str| -> bool { config.enum_string_names.as_ref().is_some_and(|names| names.contains(n)) };
 
     match ty {
-        // i64 casting for large int primitives
+        // Primitive casting (i64 for large ints, f64 for f32)
         TypeRef::Primitive(p) if config.cast_large_ints_to_i64 && needs_i64_cast(p) => {
+            let cast_to = binding_prim_str(p);
             if optional {
-                format!("{name}: val.{name}.map(|v| v as i64)")
+                format!("{name}: val.{name}.map(|v| v as {cast_to})")
             } else {
-                format!("{name}: val.{name} as i64")
+                format!("{name}: val.{name} as {cast_to}")
             }
         }
         // Duration with i64 casting
@@ -710,8 +724,9 @@ pub fn field_conversion_from_core_cfg(
             if config.cast_large_ints_to_i64
                 && matches!(inner.as_ref(), TypeRef::Primitive(p) if needs_i64_cast(p)) =>
         {
-            if let TypeRef::Primitive(_p) = inner.as_ref() {
-                format!("{name}: val.{name}.map(|v| v as i64)")
+            if let TypeRef::Primitive(p) = inner.as_ref() {
+                let cast_to = binding_prim_str(p);
+                format!("{name}: val.{name}.map(|v| v as {cast_to})")
             } else {
                 field_conversion_from_core(name, ty, optional, sanitized, opaque_types)
             }

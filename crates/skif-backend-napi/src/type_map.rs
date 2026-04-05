@@ -19,7 +19,7 @@ impl TypeMapper for NapiMapper {
             PrimitiveType::I16 => "i16",
             PrimitiveType::I32 => "i32",
             PrimitiveType::I64 => "i64",
-            PrimitiveType::F32 => "f32",
+            PrimitiveType::F32 => "f64", // NAPI-RS doesn't impl FromNapiValue for f32
             PrimitiveType::F64 => "f64",
             PrimitiveType::Usize => "i64",
             PrimitiveType::Isize => "i64",
