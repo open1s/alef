@@ -1406,6 +1406,7 @@ mod tests {
                 doc: "Extract content from a file.".to_string(),
                 cfg: None,
                 sanitized: false,
+                returns_ref: false,
             }],
             enums: vec![EnumDef {
                 name: "OutputFormat".to_string(),

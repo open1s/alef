@@ -66,6 +66,10 @@ pub struct MethodDef {
     /// (e.g. "liter_llm::LlmClient"). None for inherent methods.
     #[serde(default)]
     pub trait_source: Option<String>,
+    /// True if the core function returns a reference (`&T`, `Option<&T>`, etc.).
+    /// Used by code generators to insert `.clone()` before type conversion.
+    #[serde(default)]
+    pub returns_ref: bool,
 }
 
 /// How `self` is received.
@@ -91,6 +95,10 @@ pub struct FunctionDef {
     /// True if any param or return type was sanitized during unknown type resolution.
     #[serde(default)]
     pub sanitized: bool,
+    /// True if the core function returns a reference (`&T`, `Option<&T>`, etc.).
+    /// Used by code generators to insert `.clone()` before type conversion.
+    #[serde(default)]
+    pub returns_ref: bool,
 }
 
 /// A function/method parameter.

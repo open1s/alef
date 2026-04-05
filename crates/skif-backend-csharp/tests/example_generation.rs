@@ -64,6 +64,7 @@ fn test_generated_code_example() {
             doc: "Extract text from a file synchronously".to_string(),
             cfg: None,
             sanitized: false,
+            returns_ref: false,
         }],
         enums: vec![EnumDef {
             name: "OcrBackend".to_string(),

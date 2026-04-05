@@ -129,7 +129,8 @@ fn extract_items(
                                 let method_name = method.sig.ident.to_string();
                                 let method_doc = extract_doc_comments(&method.attrs);
                                 let mut is_async = method.sig.asyncness.is_some();
-                                let (mut return_type, error_type) = resolve_return_type(&method.sig.output);
+                                let (mut return_type, error_type, returns_ref) =
+                                    resolve_return_type(&method.sig.output);
 
                                 // Check for BoxFuture async pattern
                                 if !is_async {
@@ -158,6 +159,7 @@ fn extract_items(
                                     receiver,
                                     sanitized: false,
                                     trait_source: None,
+                                    returns_ref,
                                 })
                             } else {
                                 None
@@ -462,7 +464,7 @@ fn extract_function(item: &syn::ItemFn, crate_name: &str, module_path: &str) -> 
     let doc = extract_doc_comments(&item.attrs);
     let mut is_async = item.sig.asyncness.is_some();
 
-    let (mut return_type, error_type) = resolve_return_type(&item.sig.output);
+    let (mut return_type, error_type, returns_ref) = resolve_return_type(&item.sig.output);
 
     // Detect future-returning functions as async
     if !is_async {
@@ -485,6 +487,7 @@ fn extract_function(item: &syn::ItemFn, crate_name: &str, module_path: &str) -> 
         doc,
         cfg,
         sanitized: false,
+        returns_ref,
     })
 }
 
@@ -673,7 +676,7 @@ fn extract_method(
     let doc = extract_doc_comments(&method.attrs);
     let mut is_async = method.sig.asyncness.is_some();
 
-    let (mut return_type, error_type) = resolve_return_type(&method.sig.output);
+    let (mut return_type, error_type, returns_ref) = resolve_return_type(&method.sig.output);
 
     // Detect future-returning functions as async:
     // BoxFuture<'_, T>, Pin<Box<dyn Future<Output = T>>>, etc.
@@ -704,6 +707,7 @@ fn extract_method(
         receiver,
         sanitized: false,
         trait_source,
+        returns_ref,
     }
 }
 
@@ -856,19 +860,71 @@ fn extract_params(inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::token::C
         .collect()
 }
 
-/// Resolve the return type and extract error type if it's a `Result<T, E>`.
-fn resolve_return_type(output: &syn::ReturnType) -> (TypeRef, Option<String>) {
+/// Resolve the return type, extract error type, and detect reference returns.
+///
+/// Returns `(resolved_type, error_type, returns_ref)`.
+/// `returns_ref` is true when the core return type (after Result unwrapping) is a
+/// reference — e.g. `&T`, `Option<&str>`, `&[u8]`. Code generators use this flag
+/// to insert `.clone()` before type conversion in delegation code.
+fn resolve_return_type(output: &syn::ReturnType) -> (TypeRef, Option<String>, bool) {
     match output {
-        syn::ReturnType::Default => (TypeRef::Unit, None),
+        syn::ReturnType::Default => (TypeRef::Unit, None, false),
         syn::ReturnType::Type(_, ty) => {
             let error_type = type_resolver::extract_result_error_type(ty);
-            let resolved = if let Some(inner) = type_resolver::unwrap_result_type(ty) {
-                type_resolver::resolve_type(inner)
+            let inner_ty = if let Some(inner) = type_resolver::unwrap_result_type(ty) {
+                inner
             } else {
-                type_resolver::resolve_type(ty)
+                ty.as_ref()
             };
-            (resolved, error_type)
+            // Unwrap Box/Arc/Rc wrappers to check the actual inner type
+            let unwrapped = unwrap_smart_pointer(inner_ty);
+            let returns_ref = syn_type_contains_ref(unwrapped);
+            let resolved = type_resolver::resolve_type(inner_ty);
+            (resolved, error_type, returns_ref)
         }
+    }
+}
+
+/// Unwrap Box<T>, Arc<T>, Rc<T> wrappers to get the inner syn::Type.
+fn unwrap_smart_pointer(ty: &syn::Type) -> &syn::Type {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            let ident = segment.ident.to_string();
+            if matches!(ident.as_str(), "Box" | "Arc" | "Rc") {
+                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                    for arg in &args.args {
+                        if let syn::GenericArgument::Type(inner) = arg {
+                            return inner;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ty
+}
+
+/// Check if a syn::Type is or contains a reference.
+///
+/// Detects: `&T`, `Option<&T>`, `Vec<&T>`, etc.
+fn syn_type_contains_ref(ty: &syn::Type) -> bool {
+    match ty {
+        syn::Type::Reference(_) => true,
+        syn::Type::Path(type_path) => {
+            if let Some(segment) = type_path.path.segments.last() {
+                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                    return args.args.iter().any(|arg| {
+                        if let syn::GenericArgument::Type(inner) = arg {
+                            syn_type_contains_ref(inner)
+                        } else {
+                            false
+                        }
+                    });
+                }
+            }
+            false
+        }
+        _ => false,
     }
 }
 
@@ -1895,5 +1951,73 @@ pub struct Beta { pub name: String }
         assert!(names.contains(&"Beta"));
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_returns_ref_detection() {
+        let source = r#"
+            pub struct MyType {
+                inner: String,
+            }
+
+            impl MyType {
+                pub fn name(&self) -> &str {
+                    &self.inner
+                }
+
+                pub fn owned_name(&self) -> String {
+                    self.inner.clone()
+                }
+
+                pub fn opt_name(&self) -> Option<&str> {
+                    Some(&self.inner)
+                }
+
+                pub fn opt_owned(&self) -> Option<String> {
+                    Some(self.inner.clone())
+                }
+
+                pub fn result_ref(&self) -> Result<&str, String> {
+                    Ok(&self.inner)
+                }
+
+                pub fn result_owned(&self) -> Result<String, String> {
+                    Ok(self.inner.clone())
+                }
+            }
+        "#;
+
+        let surface = extract_from_source(source);
+        let my_type = &surface.types[0];
+
+        let find_method = |name: &str| my_type.methods.iter().find(|m| m.name == name).unwrap();
+
+        // &str return → returns_ref = true
+        assert!(find_method("name").returns_ref, "name() should have returns_ref=true");
+        // String return → returns_ref = false
+        assert!(
+            !find_method("owned_name").returns_ref,
+            "owned_name() should have returns_ref=false"
+        );
+        // Option<&str> → returns_ref = true
+        assert!(
+            find_method("opt_name").returns_ref,
+            "opt_name() should have returns_ref=true"
+        );
+        // Option<String> → returns_ref = false
+        assert!(
+            !find_method("opt_owned").returns_ref,
+            "opt_owned() should have returns_ref=false"
+        );
+        // Result<&str, _> → returns_ref = true (after Result unwrapping)
+        assert!(
+            find_method("result_ref").returns_ref,
+            "result_ref() should have returns_ref=true"
+        );
+        // Result<String, _> → returns_ref = false
+        assert!(
+            !find_method("result_owned").returns_ref,
+            "result_owned() should have returns_ref=false"
+        );
     }
 }

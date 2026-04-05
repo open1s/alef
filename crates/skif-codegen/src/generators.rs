@@ -76,41 +76,80 @@ pub fn wrap_return(
     type_name: &str,
     opaque_types: &AHashSet<String>,
     self_is_opaque: bool,
+    returns_ref: bool,
 ) -> String {
     match return_type {
         TypeRef::Named(n) if n == type_name && self_is_opaque => {
-            format!("Self {{ inner: Arc::new({expr}) }}")
+            if returns_ref {
+                format!("Self {{ inner: Arc::new({expr}.clone()) }}")
+            } else {
+                format!("Self {{ inner: Arc::new({expr}) }}")
+            }
         }
         TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
-            format!("{n} {{ inner: Arc::new({expr}) }}")
+            if returns_ref {
+                format!("{n} {{ inner: Arc::new({expr}.clone()) }}")
+            } else {
+                format!("{n} {{ inner: Arc::new({expr}) }}")
+            }
         }
         TypeRef::Named(_) => {
-            // Non-opaque Named return type — use .into() for core→binding From conversion
-            format!("{expr}.into()")
+            // Non-opaque Named return type — use .into() for core→binding From conversion.
+            // When the core returns a reference, clone first since From<&T> typically doesn't exist.
+            if returns_ref {
+                format!("{expr}.clone().into()")
+            } else {
+                format!("{expr}.into()")
+            }
         }
-        // String/Bytes: .into() handles &str→String, &[u8]→Vec<u8>
+        // String/Bytes: .into() handles both owned and borrowed (&str→String, &[u8]→Vec<u8>)
         TypeRef::String | TypeRef::Bytes => format!("{expr}.into()"),
         // Path: PathBuf→String needs to_string_lossy, &Path→String too
         TypeRef::Path => format!("{expr}.to_string_lossy().to_string()"),
         // Duration: core returns std::time::Duration, binding uses u64 (secs)
         TypeRef::Duration => format!("{expr}.as_secs()"),
+        // Json: serde_json::Value needs serialization to string
+        TypeRef::Json => format!("{expr}.to_string()"),
         // Optional: wrap inner conversion in .map(...)
         TypeRef::Optional(inner) => match inner.as_ref() {
             TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
-                format!("{expr}.map(|v| {n} {{ inner: Arc::new(v) }})")
+                if returns_ref {
+                    format!("{expr}.map(|v| {n} {{ inner: Arc::new(v.clone()) }})")
+                } else {
+                    format!("{expr}.map(|v| {n} {{ inner: Arc::new(v) }})")
+                }
             }
-            TypeRef::Named(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
+            TypeRef::Named(_) => {
+                if returns_ref {
+                    format!("{expr}.map(|v| v.clone().into())")
+                } else {
+                    format!("{expr}.map(Into::into)")
+                }
+            }
+            TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
                 format!("{expr}.map(Into::into)")
             }
             TypeRef::Duration => format!("{expr}.map(|d| d.as_secs())"),
+            TypeRef::Json => format!("{expr}.map(|v| v.to_string())"),
             _ => expr.to_string(),
         },
         // Vec: map each element through the appropriate conversion
         TypeRef::Vec(inner) => match inner.as_ref() {
             TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
-                format!("{expr}.into_iter().map(|v| {n} {{ inner: Arc::new(v) }}).collect()")
+                if returns_ref {
+                    format!("{expr}.into_iter().map(|v| {n} {{ inner: Arc::new(v.clone()) }}).collect()")
+                } else {
+                    format!("{expr}.into_iter().map(|v| {n} {{ inner: Arc::new(v) }}).collect()")
+                }
             }
-            TypeRef::Named(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
+            TypeRef::Named(_) => {
+                if returns_ref {
+                    format!("{expr}.into_iter().map(|v| v.clone().into()).collect()")
+                } else {
+                    format!("{expr}.into_iter().map(Into::into).collect()")
+                }
+            }
+            TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
                 format!("{expr}.into_iter().map(Into::into).collect()")
             }
             _ => expr.to_string(),
@@ -677,7 +716,14 @@ pub fn gen_method(
     //   - Named(other) → OtherType::from(result)
     //   - primitives/String/Vec/Unit → pass through
     let async_result_wrap = if is_opaque {
-        wrap_return("result", &method.return_type, type_name, opaque_types, is_opaque)
+        wrap_return(
+            "result",
+            &method.return_type,
+            type_name,
+            opaque_types,
+            is_opaque,
+            method.returns_ref,
+        )
     } else {
         // For non-opaque types, only use From conversion if the return type is simple
         // enough. Named return types may not have a From impl.
@@ -717,7 +763,14 @@ pub fn gen_method(
             if matches!(method.return_type, TypeRef::Unit) {
                 format!("{serde_bindings}{core_call}{err_conv}?;\n        Ok(())")
             } else {
-                let wrap = wrap_return("result", &method.return_type, type_name, opaque_types, is_opaque);
+                let wrap = wrap_return(
+                    "result",
+                    &method.return_type,
+                    type_name,
+                    opaque_types,
+                    is_opaque,
+                    method.returns_ref,
+                );
                 format!("{serde_bindings}let result = {core_call}{err_conv}?;\n        Ok({wrap})")
             }
         } else if !is_opaque
@@ -795,14 +848,28 @@ pub fn gen_method(
                     // Unit return: avoid let_unit_value by not binding the result
                     format!("{core_call}{err_conv}?;\n        Ok(())")
                 } else {
-                    let wrap = wrap_return("result", &method.return_type, type_name, opaque_types, is_opaque);
+                    let wrap = wrap_return(
+                        "result",
+                        &method.return_type,
+                        type_name,
+                        opaque_types,
+                        is_opaque,
+                        method.returns_ref,
+                    );
                     format!("let result = {core_call}{err_conv}?;\n        Ok({wrap})")
                 }
             } else {
                 format!("{core_call}{err_conv}")
             }
         } else if is_opaque {
-            wrap_return(&core_call, &method.return_type, type_name, opaque_types, is_opaque)
+            wrap_return(
+                &core_call,
+                &method.return_type,
+                type_name,
+                opaque_types,
+                is_opaque,
+                method.returns_ref,
+            )
         } else {
             core_call
         }
@@ -925,7 +992,14 @@ pub fn gen_static_method(
                 _ => ".map_err(|e| e.to_string())",
             };
             // Wrap the Ok value if the return type needs conversion (e.g. PathBuf→String)
-            let wrapped = wrap_return("val", &method.return_type, type_name, opaque_types, typ.is_opaque);
+            let wrapped = wrap_return(
+                "val",
+                &method.return_type,
+                type_name,
+                opaque_types,
+                typ.is_opaque,
+                method.returns_ref,
+            );
             if wrapped == "val" {
                 format!("{core_call}{err_conv}")
             } else {
@@ -933,7 +1007,14 @@ pub fn gen_static_method(
             }
         } else {
             // Wrap return value for non-error case too (e.g. PathBuf→String)
-            wrap_return(&core_call, &method.return_type, type_name, opaque_types, typ.is_opaque)
+            wrap_return(
+                &core_call,
+                &method.return_type,
+                type_name,
+                opaque_types,
+                typ.is_opaque,
+                method.returns_ref,
+            )
         }
     };
 
@@ -1090,14 +1171,26 @@ pub fn gen_function(
             let core_call = format!("{core_fn_path}({call_args})");
 
             // Determine return wrapping strategy (same as delegatable case)
+            let returns_ref = func.returns_ref;
             let wrap_return = |expr: &str| -> String {
                 match &func.return_type {
                     TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
-                        format!("{name} {{ inner: Arc::new({expr}) }}")
+                        if returns_ref {
+                            format!("{name} {{ inner: Arc::new({expr}.clone()) }}")
+                        } else {
+                            format!("{name} {{ inner: Arc::new({expr}) }}")
+                        }
                     }
-                    TypeRef::Named(_name) => format!("{expr}.into()"),
+                    TypeRef::Named(_name) => {
+                        if returns_ref {
+                            format!("{expr}.clone().into()")
+                        } else {
+                            format!("{expr}.into()")
+                        }
+                    }
                     TypeRef::String | TypeRef::Bytes => format!("{expr}.into()"),
                     TypeRef::Path => format!("{expr}.to_string_lossy().to_string()"),
+                    TypeRef::Json => format!("{expr}.to_string()"),
                     _ => expr.to_string(),
                 }
             };
@@ -1126,28 +1219,48 @@ pub fn gen_function(
         let core_call = format!("{core_fn_path}({call_args})");
 
         // Determine return wrapping strategy
+        let returns_ref = func.returns_ref;
         let wrap_return = |expr: &str| -> String {
             match &func.return_type {
                 // Opaque type return: wrap in Arc
                 TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
-                    format!("{name} {{ inner: Arc::new({expr}) }}")
+                    if returns_ref {
+                        format!("{name} {{ inner: Arc::new({expr}.clone()) }}")
+                    } else {
+                        format!("{name} {{ inner: Arc::new({expr}) }}")
+                    }
                 }
                 // Non-opaque Named: use .into() if From impl exists
                 TypeRef::Named(_name) => {
-                    // Check if this type has a From impl (is convertible)
-                    // For now, attempt .into() — compilation will catch missing impls
-                    format!("{expr}.into()")
+                    if returns_ref {
+                        format!("{expr}.clone().into()")
+                    } else {
+                        format!("{expr}.into()")
+                    }
                 }
                 // String/Bytes: .into() handles &str→String etc.
                 TypeRef::String | TypeRef::Bytes => format!("{expr}.into()"),
                 // Path: PathBuf→String needs to_string_lossy
                 TypeRef::Path => format!("{expr}.to_string_lossy().to_string()"),
+                // Json: serde_json::Value to string
+                TypeRef::Json => format!("{expr}.to_string()"),
                 // Optional with opaque inner
                 TypeRef::Optional(inner) => match inner.as_ref() {
                     TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
-                        format!("{expr}.map(|v| {name} {{ inner: Arc::new(v) }})")
+                        if returns_ref {
+                            format!("{expr}.map(|v| {name} {{ inner: Arc::new(v.clone()) }})")
+                        } else {
+                            format!("{expr}.map(|v| {name} {{ inner: Arc::new(v) }})")
+                        }
                     }
-                    TypeRef::Named(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
+                    TypeRef::Named(_) => {
+                        if returns_ref {
+                            format!("{expr}.map(|v| v.clone().into())")
+                        } else {
+                            format!("{expr}.map(Into::into)")
+                        }
+                    }
+                    TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
                         format!("{expr}.map(Into::into)")
                     }
                     _ => expr.to_string(),
@@ -1155,9 +1268,20 @@ pub fn gen_function(
                 // Vec<Named>: map each element through Into
                 TypeRef::Vec(inner) => match inner.as_ref() {
                     TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
-                        format!("{expr}.into_iter().map(|v| {name} {{ inner: Arc::new(v) }}).collect()")
+                        if returns_ref {
+                            format!("{expr}.into_iter().map(|v| {name} {{ inner: Arc::new(v.clone()) }}).collect()")
+                        } else {
+                            format!("{expr}.into_iter().map(|v| {name} {{ inner: Arc::new(v) }}).collect()")
+                        }
                     }
-                    TypeRef::Named(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
+                    TypeRef::Named(_) => {
+                        if returns_ref {
+                            format!("{expr}.into_iter().map(|v| v.clone().into()).collect()")
+                        } else {
+                            format!("{expr}.into_iter().map(Into::into).collect()")
+                        }
+                    }
+                    TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
                         format!("{expr}.into_iter().map(Into::into).collect()")
                     }
                     _ => expr.to_string(),

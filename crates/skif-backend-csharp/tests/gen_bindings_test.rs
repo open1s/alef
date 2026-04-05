@@ -67,6 +67,7 @@ fn test_basic_generation() {
             doc: "Extract text from file".to_string(),
             cfg: None,
             sanitized: false,
+            returns_ref: false,
         }],
         enums: vec![EnumDef {
             name: "OcrBackend".to_string(),

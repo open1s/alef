@@ -102,6 +102,7 @@ fn print_generated_java_code() {
                 doc: "Extract text from a file synchronously".to_string(),
                 cfg: None,
                 sanitized: false,
+                returns_ref: false,
             },
             FunctionDef {
                 name: "extractFileAsync".to_string(),
@@ -128,6 +129,7 @@ fn print_generated_java_code() {
                 doc: "Extract text from a file asynchronously".to_string(),
                 cfg: None,
                 sanitized: false,
+                returns_ref: false,
             },
         ],
         enums: vec![EnumDef {

@@ -268,15 +268,27 @@ fn gen_rustler_wrap_return(
     return_type: &TypeRef,
     _type_name: &str,
     opaque_types: &AHashSet<String>,
+    returns_ref: bool,
 ) -> String {
     match return_type {
         TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
-            format!("ResourceArc::new({n} {{ inner: Arc::new({expr}) }})")
+            if returns_ref {
+                format!("ResourceArc::new({n} {{ inner: Arc::new({expr}.clone()) }})")
+            } else {
+                format!("ResourceArc::new({n} {{ inner: Arc::new({expr}) }})")
+            }
         }
-        TypeRef::Named(_) => format!("{expr}.into()"),
+        TypeRef::Named(_) => {
+            if returns_ref {
+                format!("{expr}.clone().into()")
+            } else {
+                format!("{expr}.into()")
+            }
+        }
         TypeRef::String | TypeRef::Bytes => format!("{expr}.into()"),
         TypeRef::Path => format!("{expr}.to_string_lossy().to_string()"),
         TypeRef::Duration => format!("{expr}.as_secs()"),
+        TypeRef::Json => format!("{expr}.to_string()"),
         _ => expr.to_string(),
     }
 }
@@ -336,10 +348,10 @@ fn gen_nif_function(
         let call_args = gen_rustler_call_args(&func.params, opaque_types);
         let core_call = format!("{core_import}::{}({call_args})", func.name);
         if func.error_type.is_some() {
-            let wrap = gen_rustler_wrap_return("result", &func.return_type, "", opaque_types);
+            let wrap = gen_rustler_wrap_return("result", &func.return_type, "", opaque_types, func.returns_ref);
             format!("let result = {core_call}.map_err(|e| e.to_string())?;\n    Ok({wrap})")
         } else {
-            gen_rustler_wrap_return(&core_call, &func.return_type, "", opaque_types)
+            gen_rustler_wrap_return(&core_call, &func.return_type, "", opaque_types, func.returns_ref)
         }
     } else {
         gen_rustler_unimplemented_body(&func.return_type, &func.name, func.error_type.is_some())
@@ -380,7 +392,7 @@ fn gen_nif_async_function(
     let body = if can_delegate {
         let call_args = gen_rustler_call_args(&func.params, opaque_types);
         let core_call = format!("{core_import}::{}({call_args})", func.name);
-        let result_wrap = gen_rustler_wrap_return("result", &func.return_type, "", opaque_types);
+        let result_wrap = gen_rustler_wrap_return("result", &func.return_type, "", opaque_types, func.returns_ref);
         if func.error_type.is_some() {
             format!(
                 "let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;\n    \
@@ -458,10 +470,22 @@ fn gen_nif_method(
             )
         };
         if method.error_type.is_some() {
-            let wrap = gen_rustler_wrap_return("result", &method.return_type, struct_name, opaque_types);
+            let wrap = gen_rustler_wrap_return(
+                "result",
+                &method.return_type,
+                struct_name,
+                opaque_types,
+                method.returns_ref,
+            );
             format!("let result = {core_call}.map_err(|e| e.to_string())?;\n    Ok({wrap})")
         } else {
-            gen_rustler_wrap_return(&core_call, &method.return_type, struct_name, opaque_types)
+            gen_rustler_wrap_return(
+                &core_call,
+                &method.return_type,
+                struct_name,
+                opaque_types,
+                method.returns_ref,
+            )
         }
     } else {
         gen_rustler_unimplemented_body(&method.return_type, &method_fn_name, method.error_type.is_some())
@@ -522,7 +546,13 @@ fn gen_nif_async_method(
                 struct_name, method.name, call_args
             )
         };
-        let result_wrap = gen_rustler_wrap_return("result", &method.return_type, struct_name, opaque_types);
+        let result_wrap = gen_rustler_wrap_return(
+            "result",
+            &method.return_type,
+            struct_name,
+            opaque_types,
+            method.returns_ref,
+        );
         if method.error_type.is_some() {
             format!(
                 "let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;\n    \

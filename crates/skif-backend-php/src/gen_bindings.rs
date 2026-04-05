@@ -441,13 +441,27 @@ fn gen_instance_method(
                     "{core_call}.map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))?;\n    Ok(())"
                 )
             } else {
-                let wrap = generators::wrap_return("result", &method.return_type, type_name, opaque_types, true);
+                let wrap = generators::wrap_return(
+                    "result",
+                    &method.return_type,
+                    type_name,
+                    opaque_types,
+                    true,
+                    method.returns_ref,
+                );
                 format!(
                     "let result = {core_call}.map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))?;\n    Ok({wrap})"
                 )
             }
         } else {
-            generators::wrap_return(&core_call, &method.return_type, type_name, opaque_types, true)
+            generators::wrap_return(
+                &core_call,
+                &method.return_type,
+                type_name,
+                opaque_types,
+                true,
+                method.returns_ref,
+            )
         }
     } else {
         gen_php_unimplemented_body(&method.return_type, &method.name, method.error_type.is_some())
@@ -573,7 +587,14 @@ fn gen_static_method(
                     "{core_call}.map(|val| format!(\"{{:?}}\", val)).map_err(|e| PhpException::default(e.to_string()))"
                 )
             } else {
-                let wrap = generators::wrap_return("val", &method.return_type, &typ.name, opaque_types, typ.is_opaque);
+                let wrap = generators::wrap_return(
+                    "val",
+                    &method.return_type,
+                    &typ.name,
+                    opaque_types,
+                    typ.is_opaque,
+                    method.returns_ref,
+                );
                 if wrap == "val" {
                     format!("{core_call}.map_err(|e| PhpException::default(e.to_string()))")
                 } else {
@@ -583,7 +604,14 @@ fn gen_static_method(
         } else if is_enum_return {
             format!("format!(\"{{:?}}\", {core_call})")
         } else {
-            generators::wrap_return(&core_call, &method.return_type, &typ.name, opaque_types, typ.is_opaque)
+            generators::wrap_return(
+                &core_call,
+                &method.return_type,
+                &typ.name,
+                opaque_types,
+                typ.is_opaque,
+                method.returns_ref,
+            )
         }
     } else {
         gen_php_unimplemented_body(&method.return_type, &method.name, method.error_type.is_some())
@@ -630,12 +658,12 @@ fn gen_function(func: &FunctionDef, mapper: &PhpMapper, opaque_types: &AHashSet<
         let call_args = gen_php_call_args(&func.params, opaque_types);
         let core_call = format!("{core_import}::{}({call_args})", func.name);
         if func.error_type.is_some() {
-            let wrap = generators::wrap_return("result", &func.return_type, "", opaque_types, false);
+            let wrap = generators::wrap_return("result", &func.return_type, "", opaque_types, false, func.returns_ref);
             format!(
                 "let result = {core_call}.map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))?;\n    Ok({wrap})"
             )
         } else {
-            generators::wrap_return(&core_call, &func.return_type, "", opaque_types, false)
+            generators::wrap_return(&core_call, &func.return_type, "", opaque_types, false, func.returns_ref)
         }
     } else {
         gen_php_unimplemented_body(&func.return_type, &func.name, func.error_type.is_some())
@@ -674,7 +702,8 @@ fn gen_async_function(
     let body = if can_delegate {
         let call_args = gen_php_call_args(&func.params, opaque_types);
         let core_call = format!("{core_import}::{}({call_args})", func.name);
-        let result_wrap = generators::wrap_return("result", &func.return_type, "", opaque_types, false);
+        let result_wrap =
+            generators::wrap_return("result", &func.return_type, "", opaque_types, false, func.returns_ref);
         if func.error_type.is_some() {
             format!(
                 "WORKER_RUNTIME.block_on(async {{\n        \
@@ -727,7 +756,14 @@ fn gen_async_instance_method(
         let call_args = gen_php_call_args(&method.params, opaque_types);
         let inner_clone = "let inner = self.inner.clone();\n    ";
         let core_call = format!("inner.{}({})", method.name, call_args);
-        let result_wrap = generators::wrap_return("result", &method.return_type, type_name, opaque_types, true);
+        let result_wrap = generators::wrap_return(
+            "result",
+            &method.return_type,
+            type_name,
+            opaque_types,
+            true,
+            method.returns_ref,
+        );
         if method.error_type.is_some() {
             format!(
                 "{inner_clone}WORKER_RUNTIME.block_on(async {{\n        \

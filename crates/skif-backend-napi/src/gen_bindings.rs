@@ -306,7 +306,14 @@ fn gen_opaque_instance_method(
 
     let make_async_core_call = |method_name: &str| -> String { format!("inner.{method_name}({call_args})") };
 
-    let async_result_wrap = napi_wrap_return("result", &method.return_type, type_name, opaque_types, true);
+    let async_result_wrap = napi_wrap_return(
+        "result",
+        &method.return_type,
+        type_name,
+        opaque_types,
+        true,
+        method.returns_ref,
+    );
 
     let body = if !opaque_can_delegate {
         // Try serde-based param conversion for methods with non-opaque Named params
@@ -324,7 +331,14 @@ fn gen_opaque_instance_method(
             if matches!(method.return_type, TypeRef::Unit) {
                 format!("{serde_bindings}{core_call}{err_conv}?;\n    Ok(())")
             } else {
-                let wrap = napi_wrap_return("result", &method.return_type, type_name, opaque_types, true);
+                let wrap = napi_wrap_return(
+                    "result",
+                    &method.return_type,
+                    type_name,
+                    opaque_types,
+                    true,
+                    method.returns_ref,
+                );
                 format!("{serde_bindings}let result = {core_call}{err_conv}?;\n    Ok({wrap})")
             }
         } else {
@@ -353,11 +367,25 @@ fn gen_opaque_instance_method(
             if matches!(method.return_type, TypeRef::Unit) {
                 format!("{core_call}{err_conv}?;\n    Ok(())")
             } else {
-                let wrap = napi_wrap_return("result", &method.return_type, type_name, opaque_types, true);
+                let wrap = napi_wrap_return(
+                    "result",
+                    &method.return_type,
+                    type_name,
+                    opaque_types,
+                    true,
+                    method.returns_ref,
+                );
                 format!("let result = {core_call}{err_conv}?;\n    Ok({wrap})")
             }
         } else {
-            napi_wrap_return(&core_call, &method.return_type, type_name, opaque_types, true)
+            napi_wrap_return(
+                &core_call,
+                &method.return_type,
+                type_name,
+                opaque_types,
+                true,
+                method.returns_ref,
+            )
         }
     };
 
@@ -403,20 +431,41 @@ fn gen_static_method(
         )
     } else if method.is_async {
         let core_call = format!("{core_type_path}::{}({call_args})", method.name);
-        let return_wrap = napi_wrap_return("result", &method.return_type, type_name, opaque_types, typ.is_opaque);
+        let return_wrap = napi_wrap_return(
+            "result",
+            &method.return_type,
+            type_name,
+            opaque_types,
+            typ.is_opaque,
+            method.returns_ref,
+        );
         generators::gen_async_body(&core_call, cfg, method.error_type.is_some(), &return_wrap, false, "")
     } else {
         let core_call = format!("{core_type_path}::{}({call_args})", method.name);
         if method.error_type.is_some() {
             let err_conv = ".map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))";
-            let wrapped = napi_wrap_return("val", &method.return_type, type_name, opaque_types, typ.is_opaque);
+            let wrapped = napi_wrap_return(
+                "val",
+                &method.return_type,
+                type_name,
+                opaque_types,
+                typ.is_opaque,
+                method.returns_ref,
+            );
             if wrapped == "val" {
                 format!("{core_call}{err_conv}")
             } else {
                 format!("{core_call}.map(|val| {wrapped}){err_conv}")
             }
         } else {
-            napi_wrap_return(&core_call, &method.return_type, type_name, opaque_types, typ.is_opaque)
+            napi_wrap_return(
+                &core_call,
+                &method.return_type,
+                type_name,
+                opaque_types,
+                typ.is_opaque,
+                method.returns_ref,
+            )
         }
     };
 
@@ -495,7 +544,7 @@ fn gen_function(
             if matches!(func.return_type, TypeRef::Unit) {
                 format!("{serde_bindings}{core_call}{err_conv}?;\n    Ok(())")
             } else {
-                let wrapped = napi_wrap_return_fn("val", &func.return_type, opaque_types);
+                let wrapped = napi_wrap_return_fn("val", &func.return_type, opaque_types, func.returns_ref);
                 if wrapped == "val" {
                     format!("{serde_bindings}{core_call}{err_conv}")
                 } else {
@@ -507,7 +556,7 @@ fn gen_function(
         }
     } else if func.is_async {
         let core_call = format!("{core_fn_path}({call_args})");
-        let return_wrap = napi_wrap_return_fn("result", &func.return_type, opaque_types);
+        let return_wrap = napi_wrap_return_fn("result", &func.return_type, opaque_types, func.returns_ref);
         generators::gen_async_body(&core_call, cfg, func.error_type.is_some(), &return_wrap, false, "")
     } else {
         let core_call = format!("{core_fn_path}({call_args})");
@@ -519,7 +568,7 @@ fn gen_function(
         };
 
         if func.error_type.is_some() {
-            let wrapped = napi_wrap_return_fn("val", &func.return_type, opaque_types);
+            let wrapped = napi_wrap_return_fn("val", &func.return_type, opaque_types, func.returns_ref);
             if wrapped == "val" {
                 format!("{let_bindings}{core_call}{err_conv}")
             } else {
@@ -528,7 +577,7 @@ fn gen_function(
         } else {
             format!(
                 "{let_bindings}{}",
-                napi_wrap_return_fn(&core_call, &func.return_type, opaque_types)
+                napi_wrap_return_fn(&core_call, &func.return_type, opaque_types, func.returns_ref)
             )
         }
     };
@@ -591,6 +640,7 @@ fn napi_wrap_return(
     type_name: &str,
     opaque_types: &AHashSet<String>,
     self_is_opaque: bool,
+    returns_ref: bool,
 ) -> String {
     match return_type {
         TypeRef::Primitive(p) if needs_napi_cast(p) => {
@@ -599,43 +649,95 @@ fn napi_wrap_return(
         TypeRef::Duration => format!("{expr}.as_secs() as i64"),
         // Opaque Named returns need Js prefix
         TypeRef::Named(n) if n == type_name && self_is_opaque => {
-            format!("Self {{ inner: Arc::new({expr}) }}")
+            if returns_ref {
+                format!("Self {{ inner: Arc::new({expr}.clone()) }}")
+            } else {
+                format!("Self {{ inner: Arc::new({expr}) }}")
+            }
         }
         TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
-            format!("Js{n} {{ inner: Arc::new({expr}) }}")
+            if returns_ref {
+                format!("Js{n} {{ inner: Arc::new({expr}.clone()) }}")
+            } else {
+                format!("Js{n} {{ inner: Arc::new({expr}) }}")
+            }
         }
-        TypeRef::Named(_) => format!("{expr}.into()"),
-        _ => generators::wrap_return(expr, return_type, type_name, opaque_types, self_is_opaque),
+        TypeRef::Named(_) => {
+            if returns_ref {
+                format!("{expr}.clone().into()")
+            } else {
+                format!("{expr}.into()")
+            }
+        }
+        _ => generators::wrap_return(expr, return_type, type_name, opaque_types, self_is_opaque, returns_ref),
     }
 }
 
 /// NAPI-specific return wrapping for free functions (no type_name context).
-fn napi_wrap_return_fn(expr: &str, return_type: &TypeRef, opaque_types: &AHashSet<String>) -> String {
+fn napi_wrap_return_fn(
+    expr: &str,
+    return_type: &TypeRef,
+    opaque_types: &AHashSet<String>,
+    returns_ref: bool,
+) -> String {
     match return_type {
         TypeRef::Primitive(p) if needs_napi_cast(p) => {
             format!("{expr} as i64")
         }
         TypeRef::Duration => format!("{expr}.as_secs() as i64"),
         TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
-            format!("Js{n} {{ inner: Arc::new({expr}) }}")
+            if returns_ref {
+                format!("Js{n} {{ inner: Arc::new({expr}.clone()) }}")
+            } else {
+                format!("Js{n} {{ inner: Arc::new({expr}) }}")
+            }
         }
-        TypeRef::Named(_) => format!("{expr}.into()"),
+        TypeRef::Named(_) => {
+            if returns_ref {
+                format!("{expr}.clone().into()")
+            } else {
+                format!("{expr}.into()")
+            }
+        }
         TypeRef::String | TypeRef::Bytes => format!("{expr}.into()"),
         TypeRef::Path => format!("{expr}.to_string_lossy().to_string()"),
+        TypeRef::Json => format!("{expr}.to_string()"),
         TypeRef::Optional(inner) => match inner.as_ref() {
             TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
-                format!("{expr}.map(|v| Js{name} {{ inner: Arc::new(v) }})")
+                if returns_ref {
+                    format!("{expr}.map(|v| Js{name} {{ inner: Arc::new(v.clone()) }})")
+                } else {
+                    format!("{expr}.map(|v| Js{name} {{ inner: Arc::new(v) }})")
+                }
             }
-            TypeRef::Named(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
+            TypeRef::Named(_) => {
+                if returns_ref {
+                    format!("{expr}.map(|v| v.clone().into())")
+                } else {
+                    format!("{expr}.map(Into::into)")
+                }
+            }
+            TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
                 format!("{expr}.map(Into::into)")
             }
             _ => expr.to_string(),
         },
         TypeRef::Vec(inner) => match inner.as_ref() {
             TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
-                format!("{expr}.into_iter().map(|v| Js{name} {{ inner: Arc::new(v) }}).collect()")
+                if returns_ref {
+                    format!("{expr}.into_iter().map(|v| Js{name} {{ inner: Arc::new(v.clone()) }}).collect()")
+                } else {
+                    format!("{expr}.into_iter().map(|v| Js{name} {{ inner: Arc::new(v) }}).collect()")
+                }
             }
-            TypeRef::Named(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
+            TypeRef::Named(_) => {
+                if returns_ref {
+                    format!("{expr}.into_iter().map(|v| v.clone().into()).collect()")
+                } else {
+                    format!("{expr}.into_iter().map(Into::into).collect()")
+                }
+            }
+            TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
                 format!("{expr}.into_iter().map(Into::into).collect()")
             }
             _ => expr.to_string(),
