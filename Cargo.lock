@@ -184,6 +184,217 @@ dependencies = [
 ]
 
 [[package]]
+name = "eisberg-adapters"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "eisberg-core",
+]
+
+[[package]]
+name = "eisberg-backend-csharp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "eisberg-adapters",
+ "eisberg-codegen",
+ "eisberg-core",
+ "heck",
+]
+
+[[package]]
+name = "eisberg-backend-extendr"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "eisberg-adapters",
+ "eisberg-codegen",
+ "eisberg-core",
+]
+
+[[package]]
+name = "eisberg-backend-ffi"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "eisberg-adapters",
+ "eisberg-codegen",
+ "eisberg-core",
+ "heck",
+ "toml",
+]
+
+[[package]]
+name = "eisberg-backend-go"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "eisberg-adapters",
+ "eisberg-codegen",
+ "eisberg-core",
+ "heck",
+]
+
+[[package]]
+name = "eisberg-backend-java"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "eisberg-adapters",
+ "eisberg-codegen",
+ "eisberg-core",
+]
+
+[[package]]
+name = "eisberg-backend-magnus"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "eisberg-adapters",
+ "eisberg-codegen",
+ "eisberg-core",
+]
+
+[[package]]
+name = "eisberg-backend-napi"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "eisberg-adapters",
+ "eisberg-codegen",
+ "eisberg-core",
+]
+
+[[package]]
+name = "eisberg-backend-php"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "eisberg-adapters",
+ "eisberg-codegen",
+ "eisberg-core",
+]
+
+[[package]]
+name = "eisberg-backend-pyo3"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "eisberg-adapters",
+ "eisberg-codegen",
+ "eisberg-core",
+]
+
+[[package]]
+name = "eisberg-backend-rustler"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "eisberg-adapters",
+ "eisberg-codegen",
+ "eisberg-core",
+ "heck",
+]
+
+[[package]]
+name = "eisberg-backend-wasm"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "eisberg-adapters",
+ "eisberg-codegen",
+ "eisberg-core",
+]
+
+[[package]]
+name = "eisberg-cli"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "blake3",
+ "clap",
+ "eisberg-backend-csharp",
+ "eisberg-backend-extendr",
+ "eisberg-backend-ffi",
+ "eisberg-backend-go",
+ "eisberg-backend-java",
+ "eisberg-backend-magnus",
+ "eisberg-backend-napi",
+ "eisberg-backend-php",
+ "eisberg-backend-pyo3",
+ "eisberg-backend-rustler",
+ "eisberg-backend-wasm",
+ "eisberg-core",
+ "eisberg-extract",
+ "eisberg-readme",
+ "eisberg-scaffold",
+ "regex",
+ "serde_json",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "eisberg-codegen"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "eisberg-core",
+ "heck",
+ "minijinja",
+]
+
+[[package]]
+name = "eisberg-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "heck",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
+name = "eisberg-extract"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "eisberg-core",
+ "quote",
+ "syn",
+ "toml",
+]
+
+[[package]]
+name = "eisberg-readme"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "eisberg-core",
+]
+
+[[package]]
+name = "eisberg-scaffold"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "eisberg-core",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -427,217 +638,6 @@ name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
-
-[[package]]
-name = "skif-adapters"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "anyhow",
- "skif-core",
-]
-
-[[package]]
-name = "skif-backend-csharp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "heck",
- "skif-adapters",
- "skif-codegen",
- "skif-core",
-]
-
-[[package]]
-name = "skif-backend-extendr"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "anyhow",
- "skif-adapters",
- "skif-codegen",
- "skif-core",
-]
-
-[[package]]
-name = "skif-backend-ffi"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "heck",
- "skif-adapters",
- "skif-codegen",
- "skif-core",
- "toml",
-]
-
-[[package]]
-name = "skif-backend-go"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "heck",
- "skif-adapters",
- "skif-codegen",
- "skif-core",
-]
-
-[[package]]
-name = "skif-backend-java"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "skif-adapters",
- "skif-codegen",
- "skif-core",
-]
-
-[[package]]
-name = "skif-backend-magnus"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "anyhow",
- "skif-adapters",
- "skif-codegen",
- "skif-core",
-]
-
-[[package]]
-name = "skif-backend-napi"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "anyhow",
- "skif-adapters",
- "skif-codegen",
- "skif-core",
-]
-
-[[package]]
-name = "skif-backend-php"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "anyhow",
- "skif-adapters",
- "skif-codegen",
- "skif-core",
-]
-
-[[package]]
-name = "skif-backend-pyo3"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "anyhow",
- "skif-adapters",
- "skif-codegen",
- "skif-core",
-]
-
-[[package]]
-name = "skif-backend-rustler"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "anyhow",
- "heck",
- "skif-adapters",
- "skif-codegen",
- "skif-core",
-]
-
-[[package]]
-name = "skif-backend-wasm"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "anyhow",
- "skif-adapters",
- "skif-codegen",
- "skif-core",
-]
-
-[[package]]
-name = "skif-cli"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "anyhow",
- "blake3",
- "clap",
- "regex",
- "serde_json",
- "skif-backend-csharp",
- "skif-backend-extendr",
- "skif-backend-ffi",
- "skif-backend-go",
- "skif-backend-java",
- "skif-backend-magnus",
- "skif-backend-napi",
- "skif-backend-php",
- "skif-backend-pyo3",
- "skif-backend-rustler",
- "skif-backend-wasm",
- "skif-core",
- "skif-extract",
- "skif-readme",
- "skif-scaffold",
- "toml",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "skif-codegen"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "heck",
- "minijinja",
- "skif-core",
-]
-
-[[package]]
-name = "skif-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "heck",
- "serde",
- "serde_json",
- "thiserror",
- "toml",
-]
-
-[[package]]
-name = "skif-extract"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "anyhow",
- "quote",
- "skif-core",
- "syn",
- "toml",
-]
-
-[[package]]
-name = "skif-readme"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "skif-core",
-]
-
-[[package]]
-name = "skif-scaffold"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "skif-core",
-]
 
 [[package]]
 name = "smallvec"

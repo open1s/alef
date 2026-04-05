@@ -1,7 +1,7 @@
 default_install_hook_types:
   - pre-commit
   - commit-msg
-exclude: ^target/|\.skif/
+exclude: ^target/|\.eisberg/
 
 repos:
   # Commit message linting

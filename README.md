@@ -1,10 +1,10 @@
-# skif
+# eisberg
 
 Opinionated polyglot binding generator for Rust.
 
 ## What it does
 
-skif reads a Rust crate's public API surface and generates binding code for up to 10 languages:
+eisberg reads a Rust crate's public API surface and generates binding code for up to 10 languages:
 
 - **Python** (PyO3) — binding crate + `.pyi` type stubs
 - **Node.js** (NAPI-RS) — binding crate + `.d.ts` (auto)
@@ -23,18 +23,18 @@ and version sync across all language packages.
 ## Install
 
 ```bash
-cargo install skif-cli
+cargo install eisberg-cli
 ```
 
 or via Homebrew:
 
 ```bash
-brew install kreuzberg-dev/tap/skif
+brew install kreuzberg-dev/tap/eisberg
 ```
 
 ## Quick Start
 
-1. Create a `skif.toml` in your Rust workspace root:
+1. Create a `eisberg.toml` in your Rust workspace root:
 
 ```toml
 [crate]
@@ -57,48 +57,48 @@ module = "github.com/my-org/my-lib-go"
 2. Generate bindings:
 
 ```bash
-skif generate
+eisberg generate
 ```
 
 3. Verify bindings are up to date (CI):
 
 ```bash
-skif verify --exit-code
+eisberg verify --exit-code
 ```
 
 ## Commands
 
-Show the full list with `skif --help`. Key commands:
+Show the full list with `eisberg --help`. Key commands:
 
 | Command | Description |
 |---------|-------------|
-| `skif generate` | Generate binding code for all/selected languages |
-| `skif generate --lang python,node` | Generate specific languages only |
-| `skif generate --clean` | Regenerate ignoring cache |
-| `skif stubs` | Generate type stubs (.pyi, .rbs) |
-| `skif scaffold` | Generate package metadata (pyproject.toml, etc.) |
-| `skif readme` | Generate per-language README files |
-| `skif sync-versions` | Sync Cargo.toml version to all manifests |
-| `skif verify --exit-code` | CI gate: fail if any binding is stale |
-| `skif diff` | Show what would change without writing |
-| `skif lint` | Run configured linters on generated output |
-| `skif all` | Run everything |
-| `skif init` | Create a skif.toml interactively |
-| `skif cache clear` | Clear the build cache |
+| `eisberg generate` | Generate binding code for all/selected languages |
+| `eisberg generate --lang python,node` | Generate specific languages only |
+| `eisberg generate --clean` | Regenerate ignoring cache |
+| `eisberg stubs` | Generate type stubs (.pyi, .rbs) |
+| `eisberg scaffold` | Generate package metadata (pyproject.toml, etc.) |
+| `eisberg readme` | Generate per-language README files |
+| `eisberg sync-versions` | Sync Cargo.toml version to all manifests |
+| `eisberg verify --exit-code` | CI gate: fail if any binding is stale |
+| `eisberg diff` | Show what would change without writing |
+| `eisberg lint` | Run configured linters on generated output |
+| `eisberg all` | Run everything |
+| `eisberg init` | Create a eisberg.toml interactively |
+| `eisberg cache clear` | Clear the build cache |
 
 ## How It Works
 
 ```text
-skif.toml + Rust pub API
+eisberg.toml + Rust pub API
         |
         v
-   skif extract          (syn parses pub types/fns/enums)
+   eisberg extract          (syn parses pub types/fns/enums)
         |
         v
-   IR (ApiSurface)       (serializable JSON, cached in .skif/)
+   IR (ApiSurface)       (serializable JSON, cached in .eisberg/)
         |
         v
-   skif generate         (per-language backends emit code)
+   eisberg generate         (per-language backends emit code)
         |
         +-> crates/{name}-py/src/     (PyO3 binding crate)
         +-> crates/{name}-node/src/   (NAPI-RS binding crate)
@@ -109,13 +109,13 @@ skif.toml + Rust pub API
 
 ## Caching
 
-skif caches the extracted IR and per-language output hashes
-in `.skif/` (gitignored). Only backends whose inputs changed
+eisberg caches the extracted IR and per-language output hashes
+in `.eisberg/` (gitignored). Only backends whose inputs changed
 are regenerated. Use `--clean` to bypass.
 
 ## Verification
 
-`skif verify` checks:
+`eisberg verify` checks:
 
 1. **Staleness** — are generated files up to date with Rust source?
 2. **API parity** — does every language expose the same types/functions?
@@ -124,14 +124,14 @@ are regenerated. Use `--clean` to bypass.
 Use in CI:
 
 ```yaml
-- run: skif verify --exit-code
+- run: eisberg verify --exit-code
 ```
 
 Or as a pre-commit hook via prek.
 
 ## Configuration Reference
 
-See `skif.reference.toml` for the full documented config schema.
+See `eisberg.reference.toml` for the full documented config schema.
 
 ## License
 
