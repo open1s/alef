@@ -149,6 +149,8 @@ impl Backend for MagnusBackend {
                     e,
                     &core_import,
                 ));
+            }
+            if skif_codegen::conversions::can_generate_enum_conversion_from_core(e) {
                 builder.add_item(&skif_codegen::conversions::gen_enum_from_core_to_binding(
                     e,
                     &core_import,
@@ -222,7 +224,8 @@ fn gen_opaque_struct(typ: &TypeDef, core_import: &str) -> String {
     writeln!(out, "#[derive(Clone)]").ok();
     writeln!(out, r#"#[magnus::wrap(class = "{}")]"#, class_path).ok();
     writeln!(out, "pub struct {} {{", typ.name).ok();
-    writeln!(out, "    inner: Arc<{}::{}>,", core_import, typ.name).ok();
+    let core_path = skif_codegen::conversions::core_type_path(typ, core_import);
+    writeln!(out, "    inner: Arc<{}>,", core_path).ok();
     writeln!(out, "}}").ok();
     let name = &typ.name;
     writeln!(out).ok();

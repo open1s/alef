@@ -123,8 +123,10 @@ fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &SkifConfig) -> String {
     // Struct opaque-handle functions (from_json + free + field accessors + methods)
     for typ in &api.types {
         // Opaque types don't implement serde Deserialize, so skip from_json.
-        // They are constructed through factory methods or returned from other functions.
-        if !typ.is_opaque {
+        // Types with sanitized fields may not implement Deserialize either
+        // (the core type has non-serializable field types).
+        let has_sanitized = typ.fields.iter().any(|f| f.sanitized);
+        if !typ.is_opaque && !has_sanitized {
             builder.add_item(&gen_type_from_json(typ, prefix, &core_import));
         }
         builder.add_item(&gen_type_free(typ, prefix, &core_import));

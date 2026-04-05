@@ -8,7 +8,6 @@ use skif_codegen::type_mapper::TypeMapper;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
 use skif_core::config::{Language, SkifConfig, resolve_output_dir};
 use skif_core::ir::{ApiSurface, EnumDef, FunctionDef, MethodDef, ParamDef, TypeDef, TypeRef};
-use std::fmt::Write;
 use std::path::PathBuf;
 
 pub struct NapiBackend;
@@ -151,18 +150,45 @@ impl Backend for NapiBackend {
             }
         }
 
-        let convertible = skif_codegen::conversions::convertible_types(api);
-        // From/Into conversions (NAPI uses Js prefix, so we need custom generation)
+        let binding_to_core = skif_codegen::conversions::convertible_types(api);
+        let core_to_binding = skif_codegen::conversions::core_to_binding_convertible_types(api);
+        let napi_conv_config = skif_codegen::conversions::ConversionConfig {
+            type_name_prefix: "Js",
+            cast_large_ints_to_i64: true,
+            ..Default::default()
+        };
+        // From/Into conversions using shared parameterized generators
         for typ in &api.types {
-            if skif_codegen::conversions::can_generate_conversion(typ, &convertible) {
-                builder.add_item(&gen_from_js_binding_to_core(typ, &core_import));
-                builder.add_item(&gen_from_core_to_js_binding(typ, &core_import));
+            if skif_codegen::conversions::can_generate_conversion(typ, &binding_to_core) {
+                builder.add_item(&skif_codegen::conversions::gen_from_binding_to_core_cfg(
+                    typ,
+                    &core_import,
+                    &napi_conv_config,
+                ));
+            }
+            if skif_codegen::conversions::can_generate_conversion(typ, &core_to_binding) {
+                builder.add_item(&skif_codegen::conversions::gen_from_core_to_binding_cfg(
+                    typ,
+                    &core_import,
+                    &opaque_types,
+                    &napi_conv_config,
+                ));
             }
         }
         for e in &api.enums {
             if skif_codegen::conversions::can_generate_enum_conversion(e) {
-                builder.add_item(&gen_enum_from_js_binding_to_core(e, &core_import));
-                builder.add_item(&gen_enum_from_core_to_js_binding(e, &core_import));
+                builder.add_item(&skif_codegen::conversions::gen_enum_from_binding_to_core_cfg(
+                    e,
+                    &core_import,
+                    &napi_conv_config,
+                ));
+            }
+            if skif_codegen::conversions::can_generate_enum_conversion_from_core(e) {
+                builder.add_item(&skif_codegen::conversions::gen_enum_from_core_to_binding_cfg(
+                    e,
+                    &core_import,
+                    &napi_conv_config,
+                ));
             }
         }
 
@@ -482,18 +508,25 @@ fn gen_function(
         generators::gen_async_body(&core_call, cfg, func.error_type.is_some(), &return_wrap, false, "")
     } else {
         let core_call = format!("{core_fn_path}({call_args})");
+        // Generate let bindings for Named params if needed
+        let let_bindings = if use_let_bindings {
+            generators::gen_named_let_bindings_pub(&func.params, opaque_types)
+        } else {
+            String::new()
+        };
 
-        // When can_delegate_fn is true, params are simple enough that gen_call_args
-        // handles conversion directly (no extra let bindings needed).
         if func.error_type.is_some() {
             let wrapped = napi_wrap_return_fn("val", &func.return_type, opaque_types);
             if wrapped == "val" {
-                format!("{core_call}{err_conv}")
+                format!("{let_bindings}{core_call}{err_conv}")
             } else {
-                format!("{core_call}.map(|val| {wrapped}){err_conv}")
+                format!("{let_bindings}{core_call}.map(|val| {wrapped}){err_conv}")
             }
         } else {
-            napi_wrap_return_fn(&core_call, &func.return_type, opaque_types)
+            format!(
+                "{let_bindings}{}",
+                napi_wrap_return_fn(&core_call, &func.return_type, opaque_types)
+            )
         }
     };
 
@@ -531,7 +564,15 @@ fn napi_gen_call_args(params: &[ParamDef], opaque_types: &AHashSet<String>) -> S
                     format!("&{}.inner", p.name)
                 }
             }
+            TypeRef::Named(_) => {
+                if p.optional {
+                    format!("{}.map(Into::into)", p.name)
+                } else {
+                    format!("{}.into()", p.name)
+                }
+            }
             TypeRef::String => format!("&{}", p.name),
+            TypeRef::Path => format!("std::path::PathBuf::from({})", p.name),
             TypeRef::Bytes => format!("&{}", p.name),
             _ => p.name.clone(),
         })
@@ -600,132 +641,6 @@ fn napi_wrap_return_fn(expr: &str, return_type: &TypeRef, opaque_types: &AHashSe
     }
 }
 
-/// Generate `impl From<JsType> for core::Type` (NAPI binding -> core).
-fn gen_from_js_binding_to_core(typ: &TypeDef, core_import: &str) -> String {
-    let mut out = String::with_capacity(256);
-    let js_name = format!("Js{}", typ.name);
-    writeln!(out, "impl From<{}> for {core_import}::{} {{", js_name, typ.name).ok();
-    writeln!(out, "    fn from(val: {}) -> Self {{", js_name).ok();
-    writeln!(out, "        Self {{").ok();
-    for field in &typ.fields {
-        let conversion = napi_field_conversion(&field.name, &field.ty, field.optional, "val", true);
-        writeln!(out, "            {conversion},").ok();
-    }
-    writeln!(out, "        }}").ok();
-    writeln!(out, "    }}").ok();
-    write!(out, "}}").ok();
-    out
-}
-
-/// Generate `impl From<core::Type> for JsType` (core -> NAPI binding).
-fn gen_from_core_to_js_binding(typ: &TypeDef, core_import: &str) -> String {
-    let mut out = String::with_capacity(256);
-    let js_name = format!("Js{}", typ.name);
-    writeln!(out, "impl From<{core_import}::{}> for {} {{", typ.name, js_name).ok();
-    writeln!(out, "    fn from(val: {core_import}::{}) -> Self {{", typ.name).ok();
-    writeln!(out, "        Self {{").ok();
-    for field in &typ.fields {
-        let conversion = napi_field_conversion(&field.name, &field.ty, field.optional, "val", false);
-        writeln!(out, "            {conversion},").ok();
-    }
-    writeln!(out, "        }}").ok();
-    writeln!(out, "    }}").ok();
-    write!(out, "}}").ok();
-    out
-}
-
-/// NAPI-specific field conversion that handles U64/Usize→i64 type casts.
-/// `to_core=true`: NAPI binding → core (i64 → u64/usize via `as`)
-/// `to_core=false`: core → NAPI binding (u64/usize → i64 via `as`)
-fn napi_field_conversion(name: &str, ty: &skif_core::ir::TypeRef, optional: bool, val: &str, to_core: bool) -> String {
-    use skif_core::ir::TypeRef;
-    match ty {
-        TypeRef::Primitive(p) if needs_napi_cast(p) => {
-            let cast_to = if to_core { core_prim_str(p) } else { "i64" };
-            format!("{name}: {val}.{name} as {cast_to}")
-        }
-        // Duration: NAPI uses i64 (secs), core uses std::time::Duration
-        TypeRef::Duration => {
-            if to_core {
-                if optional {
-                    format!("{name}: {val}.{name}.map(|v| std::time::Duration::from_secs(v as u64))")
-                } else {
-                    format!("{name}: std::time::Duration::from_secs({val}.{name} as u64)")
-                }
-            } else if optional {
-                format!("{name}: {val}.{name}.map(|d| d.as_secs() as i64)")
-            } else {
-                format!("{name}: {val}.{name}.as_secs() as i64")
-            }
-        }
-        TypeRef::Named(_) => {
-            if optional {
-                format!("{name}: {val}.{name}.map(Into::into)")
-            } else {
-                format!("{name}: {val}.{name}.into()")
-            }
-        }
-        // Path: binding uses String, core uses PathBuf
-        TypeRef::Path => {
-            if to_core {
-                if optional {
-                    format!("{name}: {val}.{name}.map(Into::into)")
-                } else {
-                    format!("{name}: {val}.{name}.into()")
-                }
-            } else if optional {
-                format!("{name}: {val}.{name}.map(|p| p.to_string_lossy().to_string())")
-            } else {
-                format!("{name}: {val}.{name}.to_string_lossy().to_string()")
-            }
-        }
-        TypeRef::Optional(inner) => match inner.as_ref() {
-            TypeRef::Primitive(p) if needs_napi_cast(p) => {
-                let cast_to = if to_core { core_prim_str(p) } else { "i64" };
-                format!("{name}: {val}.{name}.map(|v| v as {cast_to})")
-            }
-            TypeRef::Named(_) => {
-                format!("{name}: {val}.{name}.map(Into::into)")
-            }
-            TypeRef::Path => {
-                if to_core {
-                    format!("{name}: {val}.{name}.map(Into::into)")
-                } else {
-                    format!("{name}: {val}.{name}.map(|p| p.to_string_lossy().to_string())")
-                }
-            }
-            TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Named(_)) => {
-                format!("{name}: {val}.{name}.map(|v| v.into_iter().map(Into::into).collect())")
-            }
-            _ => format!("{name}: {val}.{name}"),
-        },
-        // Vec of named types — map each element with Into
-        TypeRef::Vec(inner) => match inner.as_ref() {
-            TypeRef::Named(_) => {
-                if optional {
-                    format!("{name}: {val}.{name}.map(|v| v.into_iter().map(Into::into).collect())")
-                } else {
-                    format!("{name}: {val}.{name}.into_iter().map(Into::into).collect()")
-                }
-            }
-            _ => format!("{name}: {val}.{name}"),
-        },
-        // Map — convert Named keys/values via Into
-        TypeRef::Map(k, v) => {
-            let has_named_key = matches!(k.as_ref(), TypeRef::Named(_));
-            let has_named_val = matches!(v.as_ref(), TypeRef::Named(_));
-            if has_named_key || has_named_val {
-                let k_expr = if has_named_key { "k.into()" } else { "k" };
-                let v_expr = if has_named_val { "v.into()" } else { "v" };
-                format!("{name}: {val}.{name}.into_iter().map(|(k, v)| ({k_expr}, {v_expr})).collect()")
-            } else {
-                format!("{name}: {val}.{name}")
-            }
-        }
-        _ => format!("{name}: {val}.{name}"),
-    }
-}
-
 fn needs_napi_cast(p: &skif_core::ir::PrimitiveType) -> bool {
     matches!(
         p,
@@ -740,45 +655,6 @@ fn core_prim_str(p: &skif_core::ir::PrimitiveType) -> &'static str {
         skif_core::ir::PrimitiveType::Isize => "isize",
         _ => unreachable!(),
     }
-}
-
-/// Generate `impl From<JsEnum> for core::Enum` (NAPI binding -> core).
-/// Binding enums are always unit-variant-only. Core enums may have data variants,
-/// in which case Default::default() is used for fields.
-fn gen_enum_from_js_binding_to_core(enum_def: &EnumDef, core_import: &str) -> String {
-    let mut out = String::with_capacity(256);
-    let js_name = format!("Js{}", enum_def.name);
-    writeln!(out, "impl From<{}> for {core_import}::{} {{", js_name, enum_def.name).ok();
-    writeln!(out, "    fn from(val: {}) -> Self {{", js_name).ok();
-    writeln!(out, "        match val {{").ok();
-    for variant in &enum_def.variants {
-        let arm = skif_codegen::conversions::binding_to_core_match_arm(&js_name, &variant.name, &variant.fields);
-        writeln!(out, "            {arm}").ok();
-    }
-    writeln!(out, "        }}").ok();
-    writeln!(out, "    }}").ok();
-    write!(out, "}}").ok();
-    out
-}
-
-/// Generate `impl From<core::Enum> for JsEnum` (core -> NAPI binding).
-/// Core enums may have data variants; binding enums are always unit-variant-only,
-/// so data fields are discarded.
-fn gen_enum_from_core_to_js_binding(enum_def: &EnumDef, core_import: &str) -> String {
-    let mut out = String::with_capacity(256);
-    let js_name = format!("Js{}", enum_def.name);
-    let core_prefix = format!("{core_import}::{}", enum_def.name);
-    writeln!(out, "impl From<{core_import}::{}> for {} {{", enum_def.name, js_name).ok();
-    writeln!(out, "    fn from(val: {core_import}::{}) -> Self {{", enum_def.name).ok();
-    writeln!(out, "        match val {{").ok();
-    for variant in &enum_def.variants {
-        let arm = skif_codegen::conversions::core_to_binding_match_arm(&core_prefix, &variant.name, &variant.fields);
-        writeln!(out, "            {arm}").ok();
-    }
-    writeln!(out, "        }}").ok();
-    writeln!(out, "    }}").ok();
-    write!(out, "}}").ok();
-    out
 }
 
 /// Generate a global Tokio runtime for NAPI async support.

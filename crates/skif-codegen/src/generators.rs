@@ -317,9 +317,9 @@ pub fn gen_call_args_with_let_bindings(params: &[ParamDef], opaque_types: &AHash
             }
             TypeRef::Named(_) => {
                 if p.optional {
-                    format!("{}_core.as_ref()", p.name)
+                    format!("{}_core", p.name)
                 } else {
-                    format!("&{}_core", p.name)
+                    format!("{}_core", p.name)
                 }
             }
             TypeRef::String => format!("&{}", p.name),
@@ -333,6 +333,9 @@ pub fn gen_call_args_with_let_bindings(params: &[ParamDef], opaque_types: &AHash
 }
 
 /// Generate let bindings for non-opaque Named params, converting them to core types.
+pub fn gen_named_let_bindings_pub(params: &[ParamDef], opaque_types: &AHashSet<String>) -> String {
+    gen_named_let_bindings(params, opaque_types)
+}
 fn gen_named_let_bindings(params: &[ParamDef], opaque_types: &AHashSet<String>) -> String {
     let mut bindings = String::new();
     for p in params {
@@ -644,7 +647,7 @@ pub fn gen_method(
         && method
             .params
             .iter()
-            .all(|p| !p.sanitized && crate::shared::is_delegatable_param(&p.ty, opaque_types))
+            .all(|p| !p.sanitized && crate::shared::is_opaque_delegatable_type(&p.ty))
         && crate::shared::is_opaque_delegatable_type(&method.return_type);
 
     // Build the core call expression: opaque types delegate to self.inner directly,
@@ -1281,13 +1284,13 @@ pub fn gen_impl_block(
     mapper: &dyn TypeMapper,
     cfg: &RustBindingConfig,
     adapter_bodies: &AdapterBodies,
+    opaque_types: &AHashSet<String>,
 ) -> String {
     let (instance, statics) = partition_methods(&typ.methods);
     if instance.is_empty() && statics.is_empty() && typ.fields.is_empty() {
         return String::new();
     }
 
-    let empty_opaque = AHashSet::new();
     let prefixed_name = format!("{}{}", cfg.type_name_prefix, typ.name);
     let mut out = String::with_capacity(2048);
     if let Some(block_attr) = cfg.method_block_attr {
@@ -1303,13 +1306,13 @@ pub fn gen_impl_block(
 
     // Instance methods
     for m in &instance {
-        out.push_str(&gen_method(m, mapper, cfg, typ, false, &empty_opaque, adapter_bodies));
+        out.push_str(&gen_method(m, mapper, cfg, typ, false, opaque_types, adapter_bodies));
         out.push_str("\n\n");
     }
 
     // Static methods
     for m in &statics {
-        out.push_str(&gen_static_method(m, mapper, cfg, typ, adapter_bodies, &empty_opaque));
+        out.push_str(&gen_static_method(m, mapper, cfg, typ, adapter_bodies, opaque_types));
         out.push_str("\n\n");
     }
 

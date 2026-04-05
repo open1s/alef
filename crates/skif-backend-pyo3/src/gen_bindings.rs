@@ -181,7 +181,7 @@ impl Backend for Pyo3Backend {
                 }
             } else {
                 builder.add_item(&generators::gen_struct(typ, &mapper, &cfg));
-                let impl_block = generators::gen_impl_block(typ, &mapper, &cfg, &adapter_bodies);
+                let impl_block = generators::gen_impl_block(typ, &mapper, &cfg, &adapter_bodies, &opaque_types);
                 if !impl_block.is_empty() {
                     builder.add_item(&impl_block);
                 }
@@ -218,11 +218,15 @@ impl Backend for Pyo3Backend {
             }
         }
         for e in &api.enums {
+            // Binding→core: only for enums with simple fields (Default::default() must work)
             if skif_codegen::conversions::can_generate_enum_conversion(e) {
                 builder.add_item(&skif_codegen::conversions::gen_enum_from_binding_to_core(
                     e,
                     &core_import,
                 ));
+            }
+            // Core→binding: always possible (data variants discarded with `..`)
+            if skif_codegen::conversions::can_generate_enum_conversion_from_core(e) {
                 builder.add_item(&skif_codegen::conversions::gen_enum_from_core_to_binding(
                     e,
                     &core_import,

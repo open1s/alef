@@ -127,11 +127,14 @@ impl Backend for RustlerBackend {
             }
         }
 
-        let convertible = skif_codegen::conversions::convertible_types(api);
+        let binding_to_core = skif_codegen::conversions::convertible_types(api);
+        let core_to_binding = skif_codegen::conversions::core_to_binding_convertible_types(api);
         // From/Into conversions
         for typ in &api.types {
-            if skif_codegen::conversions::can_generate_conversion(typ, &convertible) {
+            if skif_codegen::conversions::can_generate_conversion(typ, &binding_to_core) {
                 builder.add_item(&skif_codegen::conversions::gen_from_binding_to_core(typ, &core_import));
+            }
+            if skif_codegen::conversions::can_generate_conversion(typ, &core_to_binding) {
                 builder.add_item(&skif_codegen::conversions::gen_from_core_to_binding(
                     typ,
                     &core_import,
@@ -145,6 +148,8 @@ impl Backend for RustlerBackend {
                     e,
                     &core_import,
                 ));
+            }
+            if skif_codegen::conversions::can_generate_enum_conversion_from_core(e) {
                 builder.add_item(&skif_codegen::conversions::gen_enum_from_core_to_binding(
                     e,
                     &core_import,
@@ -188,7 +193,8 @@ fn gen_opaque_resource(typ: &TypeDef, core_import: &str, _opaque_types: &AHashSe
     let mut out = String::with_capacity(256);
     out.push_str("#[derive(Clone)]\n");
     out.push_str(&format!("pub struct {} {{\n", typ.name));
-    out.push_str(&format!("    inner: Arc<{}::{}>,\n", core_import, typ.name));
+    let core_path = skif_codegen::conversions::core_type_path(typ, core_import);
+    out.push_str(&format!("    inner: Arc<{}>,\n", core_path));
     out.push_str("}\n\n");
     out.push_str(&format!("impl rustler::Resource for {} {{}}", typ.name));
     out

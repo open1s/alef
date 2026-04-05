@@ -828,8 +828,8 @@ fn extract_params(inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::token::C
                     syn::Pat::Ident(ident) => ident.ident.to_string(),
                     _ => "_".to_string(),
                 };
-                let optional = type_resolver::is_option_type(&pat_type.ty).is_some();
-                let ty = type_resolver::resolve_type(&pat_type.ty);
+                let resolved = type_resolver::resolve_type(&pat_type.ty);
+                let (ty, optional) = unwrap_optional(resolved);
                 Some(ParamDef {
                     name,
                     ty,

@@ -23,8 +23,8 @@ pub fn can_auto_delegate(method: &MethodDef, opaque_types: &AHashSet<String>) ->
         && is_delegatable_return(&method.return_type)
 }
 
-/// A param type is delegatable if it's simple, or an opaque Named (unwrapped via Arc).
-pub fn is_delegatable_param(ty: &TypeRef, opaque_types: &AHashSet<String>) -> bool {
+/// A param type is delegatable if it's simple, or a Named type (opaque → Arc unwrap, non-opaque → .into()).
+pub fn is_delegatable_param(ty: &TypeRef, _opaque_types: &AHashSet<String>) -> bool {
     match ty {
         TypeRef::Primitive(_)
         | TypeRef::String
@@ -32,9 +32,9 @@ pub fn is_delegatable_param(ty: &TypeRef, opaque_types: &AHashSet<String>) -> bo
         | TypeRef::Path
         | TypeRef::Unit
         | TypeRef::Duration => true,
-        TypeRef::Named(name) => opaque_types.contains(name.as_str()), // Opaque: &*param.inner
-        TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_delegatable_param(inner, opaque_types),
-        TypeRef::Map(k, v) => is_delegatable_param(k, opaque_types) && is_delegatable_param(v, opaque_types),
+        TypeRef::Named(_) => true, // Opaque: &*param.inner; non-opaque: .into()
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_delegatable_param(inner, _opaque_types),
+        TypeRef::Map(k, v) => is_delegatable_param(k, _opaque_types) && is_delegatable_param(v, _opaque_types),
         TypeRef::Json => false,
     }
 }

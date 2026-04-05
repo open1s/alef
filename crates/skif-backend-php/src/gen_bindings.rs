@@ -1,12 +1,14 @@
 use crate::type_map::PhpMapper;
 use ahash::AHashSet;
 use skif_codegen::builder::{ImplBuilder, RustFileBuilder};
+use skif_codegen::conversions::ConversionConfig;
 use skif_codegen::generators::{self, AsyncPattern, RustBindingConfig};
-use skif_codegen::shared::{self, constructor_parts, function_params, partition_methods};
+use skif_codegen::shared::{self, constructor_parts, partition_methods};
 use skif_codegen::type_mapper::TypeMapper;
 use skif_core::backend::{Backend, Capabilities, GeneratedFile};
 use skif_core::config::{Language, SkifConfig, detect_serde_available, resolve_output_dir};
-use skif_core::ir::{ApiSurface, EnumDef, FunctionDef, MethodDef, TypeDef, TypeRef};
+use skif_core::ir::{ApiSurface, EnumDef, FunctionDef, MethodDef, PrimitiveType, TypeDef, TypeRef};
+use std::fmt::Write;
 use std::path::PathBuf;
 
 pub struct PhpBackend;
@@ -162,6 +164,11 @@ impl Backend for PhpBackend {
         // have binding→core From impls because PHP maps enums to String and there's no
         // From<String> for the core enum type. Core→binding is always safe.
         let enum_names_ref = &mapper.enum_names;
+        let php_conv_config = ConversionConfig {
+            cast_large_ints_to_i64: true,
+            enum_string_names: Some(enum_names_ref),
+            ..Default::default()
+        };
         // Build transitive set of types that can't have binding→core From
         let mut enum_tainted: AHashSet<String> = AHashSet::new();
         for typ in &api.types {
@@ -182,20 +189,43 @@ impl Backend for PhpBackend {
                 }
             }
         }
+        // Compute which enum-tainted types can have binding→core From generated
+        // (excludes types referencing enums with data variants).
+        let convertible_tainted = gen_convertible_enum_tainted(&api.types, &enum_tainted, enum_names_ref, &api.enums);
         for typ in &api.types {
             // binding→core: only when not enum-tainted
             if !enum_tainted.contains(&typ.name)
                 && skif_codegen::conversions::can_generate_conversion(typ, &convertible)
             {
-                builder.add_item(&gen_php_from_binding_to_core(typ, &core_import));
+                builder.add_item(&skif_codegen::conversions::gen_from_binding_to_core_cfg(
+                    typ,
+                    &core_import,
+                    &php_conv_config,
+                ));
             } else if enum_tainted.contains(&typ.name) && has_serde {
                 // Enum-tainted types can't use field-by-field From (no From<String> for core enum),
                 // but when serde is available we bridge via JSON serialization round-trip.
                 builder.add_item(&gen_serde_bridge_from(typ, &core_import));
+            } else if convertible_tainted.contains(&typ.name) {
+                // Enum-tainted types with only unit-variant enums: generate From with
+                // string→enum parsing for enum-Named fields, using first variant as fallback.
+                builder.add_item(&gen_enum_tainted_from_binding_to_core(
+                    typ,
+                    &core_import,
+                    enum_names_ref,
+                    &enum_tainted,
+                    &php_conv_config,
+                    &api.enums,
+                ));
             }
             // core→binding: always (enum→String via format, sanitized fields via format)
             if skif_codegen::conversions::can_generate_conversion(typ, &core_to_binding) {
-                builder.add_item(&gen_php_from_core_to_binding(typ, &core_import, enum_names_ref));
+                builder.add_item(&skif_codegen::conversions::gen_from_core_to_binding_cfg(
+                    typ,
+                    &core_import,
+                    &opaque_types,
+                    &php_conv_config,
+                ));
             }
         }
 
@@ -382,7 +412,7 @@ fn gen_instance_method(
     type_name: &str,
     opaque_types: &AHashSet<String>,
 ) -> String {
-    let params = function_params(&method.params, &|ty| mapper.map_type(ty));
+    let params = gen_php_function_params(&method.params, mapper, opaque_types);
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
@@ -390,9 +420,21 @@ fn gen_instance_method(
 
     let params_str = if params.is_empty() { String::new() } else { params };
 
-    let body = if can_delegate && is_opaque {
-        let call_args = generators::gen_call_args(&method.params, opaque_types);
-        let core_call = format!("self.inner.{}({})", method.name, call_args);
+    // Exclude methods with non-opaque Named params: ext-php-rs can't pass #[php_class]
+    // types by value (no FromZvalMut impl for owned php_class types).
+    let has_non_opaque_named_params = method
+        .params
+        .iter()
+        .any(|p| matches!(&p.ty, TypeRef::Named(n) if !opaque_types.contains(n.as_str())));
+
+    let body = if can_delegate && is_opaque && !has_non_opaque_named_params {
+        let call_args = gen_php_call_args(&method.params, opaque_types);
+        let is_owned_receiver = matches!(method.receiver.as_ref(), Some(skif_core::ir::ReceiverKind::Owned));
+        let core_call = if is_owned_receiver {
+            format!("(*self.inner).clone().{}({})", method.name, call_args)
+        } else {
+            format!("self.inner.{}({})", method.name, call_args)
+        };
         if method.error_type.is_some() {
             if matches!(method.return_type, TypeRef::Unit) {
                 format!(
@@ -436,7 +478,7 @@ fn gen_instance_method_non_opaque(
     core_import: &str,
     opaque_types: &AHashSet<String>,
 ) -> String {
-    let params = function_params(&method.params, &|ty| mapper.map_type(ty));
+    let params = gen_php_function_params(&method.params, mapper, opaque_types);
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
@@ -450,17 +492,32 @@ fn gen_instance_method_non_opaque(
     let params_str = if params.is_empty() { String::new() } else { params };
 
     let body = if can_delegate {
-        let call_args = generators::gen_call_args(&method.params, opaque_types);
-        let field_conversions = generators::gen_lossy_binding_to_core_fields(typ, core_import);
+        let call_args = gen_php_call_args(&method.params, opaque_types);
+        let field_conversions = gen_php_lossy_binding_to_core_fields(typ, core_import);
         let core_call = format!("core_self.{}({})", method.name, call_args);
         let result_wrap = match &method.return_type {
+            TypeRef::Named(n) if mapper.enum_names.contains(n.as_str()) => {
+                // Enum return type: PHP maps enums to String via format!("{:?}")
+                String::new()
+            }
             TypeRef::Named(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path => ".into()".to_string(),
             _ => String::new(),
         };
+        // For enum return types, wrap with format!("{:?}", ...)
+        let format_enum_return =
+            matches!(&method.return_type, TypeRef::Named(n) if mapper.enum_names.contains(n.as_str()));
         if method.error_type.is_some() {
-            format!(
-                "{field_conversions}let result = {core_call}.map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))?;\n    Ok(result{result_wrap})"
-            )
+            if format_enum_return {
+                format!(
+                    "{field_conversions}let result = {core_call}.map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))?;\n    Ok(format!(\"{{:?}}\", result))"
+                )
+            } else {
+                format!(
+                    "{field_conversions}let result = {core_call}.map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))?;\n    Ok(result{result_wrap})"
+                )
+            }
+        } else if format_enum_return {
+            format!("{field_conversions}format!(\"{{:?}}\", {core_call})")
         } else {
             format!("{field_conversions}{core_call}{result_wrap}")
         }
@@ -493,23 +550,38 @@ fn gen_static_method(
     typ: &TypeDef,
     _core_import: &str,
 ) -> String {
-    let params = function_params(&method.params, &|ty| mapper.map_type(ty));
+    let params = gen_php_function_params(&method.params, mapper, opaque_types);
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
     let can_delegate = shared::can_auto_delegate(method, opaque_types);
     let core_type_path = typ.rust_path.replace('-', "_");
-    let call_args = generators::gen_call_args(&method.params, opaque_types);
+    let call_args = gen_php_call_args(&method.params, opaque_types);
 
-    let body = if can_delegate {
+    // Exclude methods with non-opaque Named params (FromZvalMut issue with php_class)
+    let has_non_opaque_named_params = method
+        .params
+        .iter()
+        .any(|p| matches!(&p.ty, TypeRef::Named(n) if !opaque_types.contains(n.as_str())));
+
+    let body = if can_delegate && !has_non_opaque_named_params {
         let core_call = format!("{core_type_path}::{}({call_args})", method.name);
+        let is_enum_return = matches!(&method.return_type, TypeRef::Named(n) if mapper.enum_names.contains(n.as_str()));
         if method.error_type.is_some() {
-            let wrap = generators::wrap_return("val", &method.return_type, &typ.name, opaque_types, typ.is_opaque);
-            if wrap == "val" {
-                format!("{core_call}.map_err(|e| PhpException::default(e.to_string()))")
+            if is_enum_return {
+                format!(
+                    "{core_call}.map(|val| format!(\"{{:?}}\", val)).map_err(|e| PhpException::default(e.to_string()))"
+                )
             } else {
-                format!("{core_call}.map(|val| {wrap}).map_err(|e| PhpException::default(e.to_string()))")
+                let wrap = generators::wrap_return("val", &method.return_type, &typ.name, opaque_types, typ.is_opaque);
+                if wrap == "val" {
+                    format!("{core_call}.map_err(|e| PhpException::default(e.to_string()))")
+                } else {
+                    format!("{core_call}.map(|val| {wrap}).map_err(|e| PhpException::default(e.to_string()))")
+                }
             }
+        } else if is_enum_return {
+            format!("format!(\"{{:?}}\", {core_call})")
         } else {
             generators::wrap_return(&core_call, &method.return_type, &typ.name, opaque_types, typ.is_opaque)
         }
@@ -548,14 +620,14 @@ fn gen_enum_constants(enum_def: &EnumDef) -> String {
 
 /// Generate a free function binding.
 fn gen_function(func: &FunctionDef, mapper: &PhpMapper, opaque_types: &AHashSet<String>, core_import: &str) -> String {
-    let params = function_params(&func.params, &|ty| mapper.map_type(ty));
+    let params = gen_php_function_params(&func.params, mapper, opaque_types);
     let return_type = mapper.map_type(&func.return_type);
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
 
     let can_delegate = shared::can_auto_delegate_function(func, opaque_types);
 
     let body = if can_delegate {
-        let call_args = generators::gen_call_args(&func.params, opaque_types);
+        let call_args = gen_php_call_args(&func.params, opaque_types);
         let core_call = format!("{core_import}::{}({call_args})", func.name);
         if func.error_type.is_some() {
             let wrap = generators::wrap_return("result", &func.return_type, "", opaque_types, false);
@@ -593,14 +665,14 @@ fn gen_async_function(
     opaque_types: &AHashSet<String>,
     core_import: &str,
 ) -> String {
-    let params = function_params(&func.params, &|ty| mapper.map_type(ty));
+    let params = gen_php_function_params(&func.params, mapper, opaque_types);
     let return_type = mapper.map_type(&func.return_type);
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
 
     let can_delegate = shared::can_auto_delegate_function(func, opaque_types);
 
     let body = if can_delegate {
-        let call_args = generators::gen_call_args(&func.params, opaque_types);
+        let call_args = gen_php_call_args(&func.params, opaque_types);
         let core_call = format!("{core_import}::{}({call_args})", func.name);
         let result_wrap = generators::wrap_return("result", &func.return_type, "", opaque_types, false);
         if func.error_type.is_some() {
@@ -645,14 +717,14 @@ fn gen_async_instance_method(
     type_name: &str,
     opaque_types: &AHashSet<String>,
 ) -> String {
-    let params = function_params(&method.params, &|ty| mapper.map_type(ty));
+    let params = gen_php_function_params(&method.params, mapper, opaque_types);
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
     let can_delegate = shared::can_auto_delegate(method, opaque_types);
 
     let body = if can_delegate && is_opaque {
-        let call_args = generators::gen_call_args(&method.params, opaque_types);
+        let call_args = gen_php_call_args(&method.params, opaque_types);
         let inner_clone = "let inner = self.inner.clone();\n    ";
         let core_call = format!("inner.{}({})", method.name, call_args);
         let result_wrap = generators::wrap_return("result", &method.return_type, type_name, opaque_types, true);
@@ -693,8 +765,8 @@ fn gen_async_instance_method(
 }
 
 /// Generate an async static method binding for PHP (block on runtime).
-fn gen_async_static_method(method: &MethodDef, mapper: &PhpMapper, _opaque_types: &AHashSet<String>) -> String {
-    let params = function_params(&method.params, &|ty| mapper.map_type(ty));
+fn gen_async_static_method(method: &MethodDef, mapper: &PhpMapper, opaque_types: &AHashSet<String>) -> String {
+    let params = gen_php_function_params(&method.params, mapper, opaque_types);
     let return_type = mapper.map_type(&method.return_type);
     let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
 
@@ -745,23 +817,6 @@ fn gen_php_unimplemented_body(return_type: &skif_core::ir::TypeRef, fn_name: &st
     }
 }
 
-/// Generate `impl From<Type> for core::Type` with PHP-specific i64 casts.
-fn gen_php_from_binding_to_core(typ: &TypeDef, core_import: &str) -> String {
-    use std::fmt::Write;
-    let mut out = String::with_capacity(256);
-    writeln!(out, "impl From<{}> for {core_import}::{} {{", typ.name, typ.name).ok();
-    writeln!(out, "    fn from(val: {}) -> Self {{", typ.name).ok();
-    writeln!(out, "        Self {{").ok();
-    for field in &typ.fields {
-        let conversion = php_field_conversion(&field.name, &field.ty, field.optional, "val", true);
-        writeln!(out, "            {conversion},").ok();
-    }
-    writeln!(out, "        }}").ok();
-    writeln!(out, "    }}").ok();
-    write!(out, "}}").ok();
-    out
-}
-
 /// Generate a serde JSON bridge `impl From<BindingType> for core::Type`.
 /// Used for enum-tainted types where field-by-field From can't work (no From<String> for core enums),
 /// but serde can round-trip through JSON since the binding type derives Serialize and the core type
@@ -777,197 +832,6 @@ fn gen_serde_bridge_from(typ: &TypeDef, core_import: &str) -> String {
          }}",
         typ.name, core_path, typ.name
     )
-}
-
-/// Generate `impl From<core::Type> for Type` with PHP-specific i64 casts.
-fn gen_php_from_core_to_binding(typ: &TypeDef, core_import: &str, enum_names: &AHashSet<String>) -> String {
-    use std::fmt::Write;
-    let mut out = String::with_capacity(256);
-    writeln!(out, "impl From<{core_import}::{}> for {} {{", typ.name, typ.name).ok();
-    writeln!(out, "    fn from(val: {core_import}::{}) -> Self {{", typ.name).ok();
-    writeln!(out, "        Self {{").ok();
-    for field in &typ.fields {
-        let conversion =
-            php_field_conversion_from_core(&field.name, &field.ty, field.optional, field.sanitized, enum_names);
-        writeln!(out, "            {conversion},").ok();
-    }
-    writeln!(out, "        }}").ok();
-    writeln!(out, "    }}").ok();
-    write!(out, "}}").ok();
-    out
-}
-
-/// PHP-specific core→binding field conversion.
-/// Enum Named fields → format!("{:?}") since PHP maps enums to String.
-/// Sanitized fields → format!("{:?}").
-/// Everything else delegates to the shared conversion.
-fn php_field_conversion_from_core(
-    name: &str,
-    ty: &skif_core::ir::TypeRef,
-    optional: bool,
-    sanitized: bool,
-    enum_names: &AHashSet<String>,
-) -> String {
-    use skif_core::ir::{PrimitiveType, TypeRef};
-    // Sanitized fields: use format!("{:?}") to convert to String
-    if sanitized {
-        if optional {
-            return format!("{name}: val.{name}.as_ref().map(|v| format!(\"{{:?}}\", v))");
-        }
-        return format!("{name}: format!(\"{{:?}}\", val.{name})");
-    }
-    // Duration: PHP uses i64 (secs), core uses std::time::Duration
-    if matches!(ty, TypeRef::Duration) {
-        if optional {
-            return format!("{name}: val.{name}.map(|d| d.as_secs() as i64)");
-        }
-        return format!("{name}: val.{name}.as_secs() as i64");
-    }
-    // PHP maps U64/Usize to i64 — need `as i64` cast for core→binding
-    match ty {
-        TypeRef::Primitive(PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize) => {
-            if optional {
-                return format!("{name}: val.{name}.map(|v| v as i64)");
-            }
-            return format!("{name}: val.{name} as i64");
-        }
-        TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Primitive(p) if matches!(p, PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize)) =>
-        {
-            return format!("{name}: val.{name}.map(|v| v as i64)");
-        }
-        _ => {}
-    }
-    // Enum Named fields: PHP maps enums to String, use format!("{:?}")
-    match ty {
-        TypeRef::Named(n) if enum_names.contains(n.as_str()) => {
-            if optional {
-                format!("{name}: val.{name}.as_ref().map(|v| format!(\"{{:?}}\", v))")
-            } else {
-                format!("{name}: format!(\"{{:?}}\", val.{name})")
-            }
-        }
-        TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::Named(n) if enum_names.contains(n.as_str())) => {
-            if optional {
-                format!("{name}: val.{name}.as_ref().map(|v| v.iter().map(|i| format!(\"{{:?}}\", i)).collect())")
-            } else {
-                format!("{name}: val.{name}.iter().map(|v| format!(\"{{:?}}\", v)).collect()")
-            }
-        }
-        TypeRef::Optional(inner) => match inner.as_ref() {
-            TypeRef::Named(n) if enum_names.contains(n.as_str()) => {
-                format!("{name}: val.{name}.as_ref().map(|v| format!(\"{{:?}}\", v))")
-            }
-            _ => {
-                let opaque_types = AHashSet::new();
-                skif_codegen::conversions::field_conversion_from_core(name, ty, optional, false, &opaque_types)
-            }
-        },
-        _ => {
-            let opaque_types = AHashSet::new();
-            skif_codegen::conversions::field_conversion_from_core(name, ty, optional, false, &opaque_types)
-        }
-    }
-}
-
-/// PHP-specific field conversion that handles U64/Usize→i64 type casts.
-fn php_field_conversion(name: &str, ty: &skif_core::ir::TypeRef, optional: bool, val: &str, to_core: bool) -> String {
-    use skif_core::ir::{PrimitiveType, TypeRef};
-    match ty {
-        TypeRef::Primitive(p @ (PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize)) => {
-            let cast_to = if to_core {
-                match p {
-                    PrimitiveType::U64 => "u64",
-                    PrimitiveType::Usize => "usize",
-                    PrimitiveType::Isize => "isize",
-                    _ => unreachable!(),
-                }
-            } else {
-                "i64"
-            };
-            format!("{name}: {val}.{name} as {cast_to}")
-        }
-        // Duration: PHP uses i64 (secs), core uses std::time::Duration
-        TypeRef::Duration => {
-            if to_core {
-                if optional {
-                    format!("{name}: {val}.{name}.map(|v| std::time::Duration::from_secs(v as u64))")
-                } else {
-                    format!("{name}: std::time::Duration::from_secs({val}.{name} as u64)")
-                }
-            } else if optional {
-                format!("{name}: {val}.{name}.map(|d| d.as_secs() as i64)")
-            } else {
-                format!("{name}: {val}.{name}.as_secs() as i64")
-            }
-        }
-        TypeRef::Named(_) => {
-            if optional {
-                format!("{name}: {val}.{name}.map(Into::into)")
-            } else {
-                format!("{name}: {val}.{name}.into()")
-            }
-        }
-        // Path: binding uses String (i64 for PHP), core uses PathBuf
-        TypeRef::Path => {
-            if to_core {
-                if optional {
-                    format!("{name}: {val}.{name}.map(Into::into)")
-                } else {
-                    format!("{name}: {val}.{name}.into()")
-                }
-            } else if optional {
-                format!("{name}: {val}.{name}.map(|p| p.to_string_lossy().to_string())")
-            } else {
-                format!("{name}: {val}.{name}.to_string_lossy().to_string()")
-            }
-        }
-        TypeRef::Optional(inner) => match inner.as_ref() {
-            TypeRef::Primitive(p @ (PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize)) => {
-                let cast_to = if to_core {
-                    match p {
-                        PrimitiveType::U64 => "u64",
-                        PrimitiveType::Usize => "usize",
-                        PrimitiveType::Isize => "isize",
-                        _ => unreachable!(),
-                    }
-                } else {
-                    "i64"
-                };
-                format!("{name}: {val}.{name}.map(|v| v as {cast_to})")
-            }
-            TypeRef::Named(_) | TypeRef::Path => {
-                format!("{name}: {val}.{name}.map(Into::into)")
-            }
-            TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Named(_)) => {
-                format!("{name}: {val}.{name}.map(|v| v.into_iter().map(Into::into).collect())")
-            }
-            _ => format!("{name}: {val}.{name}"),
-        },
-        // Vec of named types — map each element with Into
-        TypeRef::Vec(inner) => match inner.as_ref() {
-            TypeRef::Named(_) => {
-                if optional {
-                    format!("{name}: {val}.{name}.map(|v| v.into_iter().map(Into::into).collect())")
-                } else {
-                    format!("{name}: {val}.{name}.into_iter().map(Into::into).collect()")
-                }
-            }
-            _ => format!("{name}: {val}.{name}"),
-        },
-        // Map — convert Named keys/values via Into
-        TypeRef::Map(k, v) => {
-            let has_named_key = matches!(k.as_ref(), TypeRef::Named(_));
-            let has_named_val = matches!(v.as_ref(), TypeRef::Named(_));
-            if has_named_key || has_named_val {
-                let key_conv = if has_named_key { "k.into()" } else { "k" };
-                let val_conv = if has_named_val { "v.into()" } else { "v" };
-                format!("{name}: {val}.{name}.into_iter().map(|(k, v)| ({key_conv}, {val_conv})).collect()")
-            } else {
-                format!("{name}: {val}.{name}")
-            }
-        }
-        _ => format!("{name}: {val}.{name}"),
-    }
 }
 
 /// Return true if any field of the type (recursively through Optional/Vec) is a Named type
@@ -995,6 +859,301 @@ fn has_enum_named_field(typ: &skif_core::ir::TypeDef, enum_names: &AHashSet<Stri
         }
     }
     typ.fields.iter().any(|f| type_ref_has_enum_named(&f.ty, enum_names))
+}
+
+/// Generate PHP-specific function parameter list.
+/// Non-opaque Named types use `&T` (ext-php-rs only provides `FromZvalMut` for `&mut T`/`&T`,
+/// not owned `T`, when `T` is a `#[php_class]`).
+fn gen_php_function_params(
+    params: &[skif_core::ir::ParamDef],
+    mapper: &PhpMapper,
+    opaque_types: &AHashSet<String>,
+) -> String {
+    params
+        .iter()
+        .map(|p| {
+            let base_ty = mapper.map_type(&p.ty);
+            let ty = match &p.ty {
+                TypeRef::Named(name) if !opaque_types.contains(name.as_str()) => {
+                    // Non-opaque php_class type: use &T for ext-php-rs compatibility
+                    if p.optional {
+                        format!("Option<&{base_ty}>")
+                    } else {
+                        format!("&{base_ty}")
+                    }
+                }
+                _ => {
+                    if p.optional {
+                        format!("Option<{base_ty}>")
+                    } else {
+                        base_ty
+                    }
+                }
+            };
+            format!("{}: {}", p.name, ty)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Generate PHP-specific call arguments.
+/// Non-opaque Named types are passed as `&T`, so we clone before `.into()`.
+fn gen_php_call_args(params: &[skif_core::ir::ParamDef], opaque_types: &AHashSet<String>) -> String {
+    params
+        .iter()
+        .map(|p| match &p.ty {
+            TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
+                if p.optional {
+                    format!("{}.as_ref().map(|v| &v.inner)", p.name)
+                } else {
+                    format!("&{}.inner", p.name)
+                }
+            }
+            TypeRef::Named(_) => {
+                // Non-opaque: param is &T, clone then convert
+                if p.optional {
+                    format!("{}.map(|v| v.clone().into())", p.name)
+                } else {
+                    format!("{}.clone().into()", p.name)
+                }
+            }
+            TypeRef::String => format!("&{}", p.name),
+            TypeRef::Path => format!("std::path::PathBuf::from({})", p.name),
+            TypeRef::Bytes => format!("&{}", p.name),
+            TypeRef::Duration => format!("std::time::Duration::from_secs({})", p.name),
+            _ => p.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Returns true if a primitive type needs i64→core casting in PHP.
+fn needs_i64_cast(p: &PrimitiveType) -> bool {
+    matches!(p, PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize)
+}
+
+/// Returns the core primitive type string for i64-cast primitives.
+fn core_prim_str(p: &PrimitiveType) -> &'static str {
+    match p {
+        PrimitiveType::U64 => "u64",
+        PrimitiveType::Usize => "usize",
+        PrimitiveType::Isize => "isize",
+        _ => unreachable!(),
+    }
+}
+
+/// PHP-specific lossy binding→core struct literal.
+/// Like `gen_lossy_binding_to_core_fields` but adds i64→usize casts for large-int primitives.
+fn gen_php_lossy_binding_to_core_fields(typ: &TypeDef, core_import: &str) -> String {
+    let core_path = skif_codegen::conversions::core_type_path(typ, core_import);
+    let mut out = format!("let core_self = {core_path} {{\n");
+    for field in &typ.fields {
+        let name = &field.name;
+        if field.sanitized {
+            writeln!(out, "            {name}: Default::default(),").ok();
+        } else {
+            let expr = match &field.ty {
+                TypeRef::Primitive(p) if needs_i64_cast(p) => {
+                    let core_ty = core_prim_str(p);
+                    format!("self.{name} as {core_ty}")
+                }
+                TypeRef::Primitive(_) => format!("self.{name}"),
+                TypeRef::Duration => {
+                    if field.optional {
+                        format!("self.{name}.map(|v| std::time::Duration::from_secs(v as u64))")
+                    } else {
+                        format!("std::time::Duration::from_secs(self.{name} as u64)")
+                    }
+                }
+                TypeRef::String | TypeRef::Bytes => format!("self.{name}.clone()"),
+                TypeRef::Path => {
+                    if field.optional {
+                        format!("self.{name}.clone().map(Into::into)")
+                    } else {
+                        format!("self.{name}.clone().into()")
+                    }
+                }
+                TypeRef::Named(_) => {
+                    if field.optional {
+                        format!("self.{name}.clone().map(Into::into)")
+                    } else {
+                        format!("self.{name}.clone().into()")
+                    }
+                }
+                TypeRef::Vec(inner) => match inner.as_ref() {
+                    TypeRef::Named(_) => {
+                        format!("self.{name}.clone().into_iter().map(Into::into).collect()")
+                    }
+                    _ => format!("self.{name}.clone()"),
+                },
+                TypeRef::Optional(inner) => match inner.as_ref() {
+                    TypeRef::Primitive(p) if needs_i64_cast(p) => {
+                        let core_ty = core_prim_str(p);
+                        format!("self.{name}.map(|v| v as {core_ty})")
+                    }
+                    TypeRef::Named(_) => {
+                        format!("self.{name}.clone().map(Into::into)")
+                    }
+                    TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Named(_)) => {
+                        format!("self.{name}.clone().map(|v| v.into_iter().map(Into::into).collect())")
+                    }
+                    _ => format!("self.{name}.clone()"),
+                },
+                TypeRef::Map(_, _) => format!("self.{name}.clone()"),
+                TypeRef::Unit | TypeRef::Json => format!("self.{name}.clone()"),
+            };
+            writeln!(out, "            {name}: {expr},").ok();
+        }
+    }
+    out.push_str("        };\n        ");
+    out
+}
+
+/// Compute the set of enum-tainted types for which binding→core From CAN be generated.
+/// A type is excluded if it references (directly or transitively) an enum with data variants,
+/// because data-variant fields may reference types that don't implement Default.
+fn gen_convertible_enum_tainted(
+    types: &[TypeDef],
+    enum_tainted: &AHashSet<String>,
+    enum_names: &AHashSet<String>,
+    enums: &[EnumDef],
+) -> AHashSet<String> {
+    // First, find which enum-tainted types directly reference data-variant enums
+    let mut unconvertible: AHashSet<String> = AHashSet::new();
+    for typ in types {
+        if !enum_tainted.contains(&typ.name) {
+            continue;
+        }
+        for field in &typ.fields {
+            if let Some(enum_name) = get_direct_enum_named(&field.ty, enum_names) {
+                if let Some(enum_def) = enums.iter().find(|e| e.name == enum_name) {
+                    if enum_def.variants.iter().any(|v| !v.fields.is_empty()) {
+                        unconvertible.insert(typ.name.clone());
+                    }
+                }
+            }
+        }
+    }
+    // Transitively exclude types that reference unconvertible types
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for typ in types {
+            if !enum_tainted.contains(&typ.name) || unconvertible.contains(&typ.name) {
+                continue;
+            }
+            if typ.fields.iter().any(|f| references_named_type(&f.ty, &unconvertible)) {
+                unconvertible.insert(typ.name.clone());
+                changed = true;
+            }
+        }
+    }
+    // Return the set of enum-tainted types that CAN be converted
+    enum_tainted
+        .iter()
+        .filter(|name| !unconvertible.contains(name.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Generate `impl From<BindingType> for core::Type` for enum-tainted types.
+/// Enum-Named fields use string→enum parsing (match on variant names, first variant as fallback).
+/// Fields referencing other enum-tainted struct types use `.into()` (their own From is also generated).
+/// Non-enum fields use the normal conversion with i64 casts.
+fn gen_enum_tainted_from_binding_to_core(
+    typ: &TypeDef,
+    core_import: &str,
+    enum_names: &AHashSet<String>,
+    _enum_tainted: &AHashSet<String>,
+    config: &ConversionConfig,
+    enums: &[EnumDef],
+) -> String {
+    let core_path = skif_codegen::conversions::core_type_path(typ, core_import);
+    let mut out = String::with_capacity(512);
+    writeln!(out, "impl From<{}> for {core_path} {{", typ.name).ok();
+    writeln!(out, "    fn from(val: {}) -> Self {{", typ.name).ok();
+    writeln!(out, "        Self {{").ok();
+    for field in &typ.fields {
+        let name = &field.name;
+        if field.sanitized {
+            writeln!(out, "            {name}: Default::default(),").ok();
+        } else if let Some(enum_name) = get_direct_enum_named(&field.ty, enum_names) {
+            // Direct enum-Named field: generate string→enum match
+            let conversion =
+                gen_string_to_enum_expr(&format!("val.{name}"), &enum_name, field.optional, enums, core_import);
+            writeln!(out, "            {name}: {conversion},").ok();
+        } else {
+            // Non-enum field (may reference other tainted types, which have their own From)
+            let conversion =
+                skif_codegen::conversions::field_conversion_to_core_cfg(name, &field.ty, field.optional, config);
+            writeln!(out, "            {conversion},").ok();
+        }
+    }
+    writeln!(out, "        }}").ok();
+    writeln!(out, "    }}").ok();
+    write!(out, "}}").ok();
+    out
+}
+
+/// If the TypeRef is a Named type referencing an enum, return the enum name.
+fn get_direct_enum_named(ty: &TypeRef, enum_names: &AHashSet<String>) -> Option<String> {
+    match ty {
+        TypeRef::Named(name) if enum_names.contains(name.as_str()) => Some(name.clone()),
+        TypeRef::Optional(inner) => get_direct_enum_named(inner, enum_names),
+        _ => None,
+    }
+}
+
+/// Generate an expression that converts a String to a core enum type via matching.
+/// Falls back to the first variant if no match found.
+/// Data variants (with fields) use `Default::default()` for each field.
+fn gen_string_to_enum_expr(
+    val_expr: &str,
+    enum_name: &str,
+    optional: bool,
+    enums: &[EnumDef],
+    core_import: &str,
+) -> String {
+    let enum_def = match enums.iter().find(|e| e.name == enum_name) {
+        Some(e) => e,
+        None => return "Default::default()".to_string(),
+    };
+    let core_enum_path = skif_codegen::conversions::core_enum_path(enum_def, core_import);
+
+    if enum_def.variants.is_empty() {
+        return "Default::default()".to_string();
+    }
+
+    /// Build the variant constructor expression, filling data variant fields with defaults.
+    fn variant_expr(core_path: &str, variant: &skif_core::ir::EnumVariant) -> String {
+        if variant.fields.is_empty() {
+            format!("{core_path}::{}", variant.name)
+        } else if skif_codegen::conversions::is_tuple_variant(&variant.fields) {
+            let defaults: Vec<&str> = variant.fields.iter().map(|_| "Default::default()").collect();
+            format!("{core_path}::{}({})", variant.name, defaults.join(", "))
+        } else {
+            let defaults: Vec<String> = variant
+                .fields
+                .iter()
+                .map(|f| format!("{}: Default::default()", f.name))
+                .collect();
+            format!("{core_path}::{} {{ {} }}", variant.name, defaults.join(", "))
+        }
+    }
+
+    let first_expr = variant_expr(&core_enum_path, &enum_def.variants[0]);
+    let mut match_arms = String::new();
+    for variant in &enum_def.variants {
+        let expr = variant_expr(&core_enum_path, variant);
+        write!(match_arms, "\"{}\" => {expr}, ", variant.name).ok();
+    }
+    write!(match_arms, "_ => {first_expr}").ok();
+
+    if optional {
+        format!("{val_expr}.as_deref().map(|s| match s {{ {match_arms} }})")
+    } else {
+        format!("match {val_expr}.as_str() {{ {match_arms} }}")
+    }
 }
 
 /// Generate a global Tokio runtime for PHP async support.

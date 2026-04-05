@@ -133,9 +133,14 @@ impl Backend for WasmBackend {
             }
         }
 
+        let wasm_conv_config = skif_codegen::conversions::ConversionConfig {
+            type_name_prefix: "Js",
+            map_uses_jsvalue: true,
+            ..Default::default()
+        };
         let convertible = skif_codegen::conversions::convertible_types(api);
         let core_to_binding_convertible = skif_codegen::conversions::core_to_binding_convertible_types(api);
-        // From/Into conversions (WASM uses Js prefix, so we need custom generation)
+        // From/Into conversions using shared parameterized generators
         for typ in &api.types {
             if exclude_types.contains(&typ.name) {
                 continue;
@@ -144,17 +149,43 @@ impl Backend for WasmBackend {
             let is_relaxed = skif_codegen::conversions::can_generate_conversion(typ, &core_to_binding_convertible);
             if is_strict {
                 // Both directions
-                builder.add_item(&gen_from_js_binding_to_core(typ, &core_import));
-                builder.add_item(&gen_from_core_to_js_binding(typ, &core_import, &opaque_types));
+                builder.add_item(&skif_codegen::conversions::gen_from_binding_to_core_cfg(
+                    typ,
+                    &core_import,
+                    &wasm_conv_config,
+                ));
+                builder.add_item(&skif_codegen::conversions::gen_from_core_to_binding_cfg(
+                    typ,
+                    &core_import,
+                    &opaque_types,
+                    &wasm_conv_config,
+                ));
             } else if is_relaxed {
                 // Only core→binding (sanitized fields prevent binding→core)
-                builder.add_item(&gen_from_core_to_js_binding(typ, &core_import, &opaque_types));
+                builder.add_item(&skif_codegen::conversions::gen_from_core_to_binding_cfg(
+                    typ,
+                    &core_import,
+                    &opaque_types,
+                    &wasm_conv_config,
+                ));
             }
         }
         for e in &api.enums {
-            if skif_codegen::conversions::can_generate_enum_conversion(e) && !exclude_types.contains(&e.name) {
-                builder.add_item(&gen_enum_from_js_binding_to_core(e, &core_import));
-                builder.add_item(&gen_enum_from_core_to_js_binding(e, &core_import));
+            if !exclude_types.contains(&e.name) {
+                if skif_codegen::conversions::can_generate_enum_conversion(e) {
+                    builder.add_item(&skif_codegen::conversions::gen_enum_from_binding_to_core_cfg(
+                        e,
+                        &core_import,
+                        &wasm_conv_config,
+                    ));
+                }
+                if skif_codegen::conversions::can_generate_enum_conversion_from_core(e) {
+                    builder.add_item(&skif_codegen::conversions::gen_enum_from_core_to_binding_cfg(
+                        e,
+                        &core_import,
+                        &wasm_conv_config,
+                    ));
+                }
             }
         }
 
@@ -186,7 +217,8 @@ fn gen_opaque_struct(typ: &TypeDef, core_import: &str) -> String {
     writeln!(out, "#[derive(Clone)]").ok();
     writeln!(out, "#[wasm_bindgen]").ok();
     writeln!(out, "pub struct {} {{", js_name).ok();
-    writeln!(out, "    inner: Arc<{core_import}::{}>,", typ.name).ok();
+    let core_path = skif_codegen::conversions::core_type_path(typ, core_import);
+    writeln!(out, "    inner: Arc<{}>,", core_path).ok();
     write!(out, "}}").ok();
     out
 }
@@ -229,7 +261,14 @@ fn gen_opaque_method(
     let params: Vec<String> = method
         .params
         .iter()
-        .map(|p| format!("{}: {}", p.name, mapper.map_type(&p.ty)))
+        .map(|p| {
+            let ty = mapper.map_type(&p.ty);
+            if p.optional {
+                format!("{}: Option<{}>", p.name, ty)
+            } else {
+                format!("{}: {}", p.name, ty)
+            }
+        })
         .collect();
 
     let return_type = mapper.map_type(&method.return_type);
@@ -246,9 +285,17 @@ fn gen_opaque_method(
 
     let async_kw = if method.is_async { "async " } else { "" };
 
+    // Check if the core method takes ownership (Owned receiver).
+    // If so, we must clone out of Arc since wasm_bindgen methods take &self.
+    let needs_clone = matches!(method.receiver, Some(skif_core::ir::ReceiverKind::Owned));
+
     let body = if can_delegate {
         let call_args = generators::gen_call_args(&method.params, opaque_types);
-        let core_call = format!("self.inner.{}({})", method.name, call_args);
+        let core_call = if needs_clone {
+            format!("(*self.inner).clone().{}({})", method.name, call_args)
+        } else {
+            format!("self.inner.{}({})", method.name, call_args)
+        };
         if method.is_async {
             // WASM async: native async fn becomes a Promise automatically
             let result_wrap = wasm_wrap_return("result", &method.return_type, type_name, opaque_types, true);
@@ -296,7 +343,14 @@ fn gen_opaque_static_method(
     let params: Vec<String> = method
         .params
         .iter()
-        .map(|p| format!("{}: {}", p.name, mapper.map_type(&p.ty)))
+        .map(|p| {
+            let ty = mapper.map_type(&p.ty);
+            if p.optional {
+                format!("{}: Option<{}>", p.name, ty)
+            } else {
+                format!("{}: {}", p.name, ty)
+            }
+        })
         .collect();
 
     let return_type = mapper.map_type(&method.return_type);
@@ -456,7 +510,14 @@ fn gen_method(
     let params: Vec<String> = method
         .params
         .iter()
-        .map(|p| format!("{}: {}", p.name, mapper.map_type(&p.ty)))
+        .map(|p| {
+            let ty = mapper.map_type(&p.ty);
+            if p.optional {
+                format!("{}: Option<{}>", p.name, ty)
+            } else {
+                format!("{}: {}", p.name, ty)
+            }
+        })
         .collect();
 
     let return_type = mapper.map_type(&method.return_type);
@@ -566,7 +627,14 @@ fn gen_function(func: &FunctionDef, mapper: &WasmMapper, core_import: &str, opaq
     let params: Vec<String> = func
         .params
         .iter()
-        .map(|p| format!("{}: {}", p.name, mapper.map_type(&p.ty)))
+        .map(|p| {
+            let ty = mapper.map_type(&p.ty);
+            if p.optional {
+                format!("{}: Option<{}>", p.name, ty)
+            } else {
+                format!("{}: {}", p.name, ty)
+            }
+        })
         .collect();
 
     let return_type = mapper.map_type(&func.return_type);
@@ -720,83 +788,4 @@ fn wasm_wrap_return_fn(expr: &str, return_type: &TypeRef, opaque_types: &AHashSe
         },
         _ => expr.to_string(),
     }
-}
-
-/// Generate `impl From<JsType> for core::Type` (WASM binding -> core).
-fn gen_from_js_binding_to_core(typ: &TypeDef, core_import: &str) -> String {
-    let mut out = String::with_capacity(256);
-    let js_name = format!("Js{}", typ.name);
-    writeln!(out, "impl From<{}> for {core_import}::{} {{", js_name, typ.name).unwrap();
-    writeln!(out, "    fn from(val: {}) -> Self {{", js_name).unwrap();
-    writeln!(out, "        Self {{").unwrap();
-    for field in &typ.fields {
-        let conversion = skif_codegen::conversions::field_conversion_to_core(&field.name, &field.ty, field.optional);
-        writeln!(out, "            {conversion},").unwrap();
-    }
-    writeln!(out, "        }}").unwrap();
-    writeln!(out, "    }}").unwrap();
-    write!(out, "}}").unwrap();
-    out
-}
-
-/// Generate `impl From<core::Type> for JsType` (core -> WASM binding).
-fn gen_from_core_to_js_binding(typ: &TypeDef, core_import: &str, opaque_types: &AHashSet<String>) -> String {
-    let mut out = String::with_capacity(256);
-    let js_name = format!("Js{}", typ.name);
-    writeln!(out, "impl From<{core_import}::{}> for {} {{", typ.name, js_name).unwrap();
-    writeln!(out, "    fn from(val: {core_import}::{}) -> Self {{", typ.name).unwrap();
-    writeln!(out, "        Self {{").unwrap();
-    for field in &typ.fields {
-        let conversion = skif_codegen::conversions::field_conversion_from_core(
-            &field.name,
-            &field.ty,
-            field.optional,
-            field.sanitized,
-            opaque_types,
-        );
-        writeln!(out, "            {conversion},").unwrap();
-    }
-    writeln!(out, "        }}").unwrap();
-    writeln!(out, "    }}").unwrap();
-    write!(out, "}}").unwrap();
-    out
-}
-
-/// Generate `impl From<JsEnum> for core::Enum` (WASM binding -> core).
-/// Binding enums are always unit-variant-only. Core enums may have data variants,
-/// in which case Default::default() is used for fields.
-fn gen_enum_from_js_binding_to_core(enum_def: &EnumDef, core_import: &str) -> String {
-    let mut out = String::with_capacity(256);
-    let js_name = format!("Js{}", enum_def.name);
-    writeln!(out, "impl From<{}> for {core_import}::{} {{", js_name, enum_def.name).unwrap();
-    writeln!(out, "    fn from(val: {}) -> Self {{", js_name).unwrap();
-    writeln!(out, "        match val {{").unwrap();
-    for variant in &enum_def.variants {
-        let arm = skif_codegen::conversions::binding_to_core_match_arm(&js_name, &variant.name, &variant.fields);
-        writeln!(out, "            {arm}").unwrap();
-    }
-    writeln!(out, "        }}").unwrap();
-    writeln!(out, "    }}").unwrap();
-    write!(out, "}}").unwrap();
-    out
-}
-
-/// Generate `impl From<core::Enum> for JsEnum` (core -> WASM binding).
-/// Core enums may have data variants; binding enums are always unit-variant-only,
-/// so data fields are discarded.
-fn gen_enum_from_core_to_js_binding(enum_def: &EnumDef, core_import: &str) -> String {
-    let mut out = String::with_capacity(256);
-    let js_name = format!("Js{}", enum_def.name);
-    let core_prefix = format!("{core_import}::{}", enum_def.name);
-    writeln!(out, "impl From<{core_import}::{}> for {} {{", enum_def.name, js_name).unwrap();
-    writeln!(out, "    fn from(val: {core_import}::{}) -> Self {{", enum_def.name).unwrap();
-    writeln!(out, "        match val {{").unwrap();
-    for variant in &enum_def.variants {
-        let arm = skif_codegen::conversions::core_to_binding_match_arm(&core_prefix, &variant.name, &variant.fields);
-        writeln!(out, "            {arm}").unwrap();
-    }
-    writeln!(out, "        }}").unwrap();
-    writeln!(out, "    }}").unwrap();
-    write!(out, "}}").unwrap();
-    out
 }

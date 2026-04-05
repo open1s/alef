@@ -115,7 +115,7 @@ impl Backend for ExtendrBackend {
         // Generate type bindings
         for typ in &api.types {
             builder.add_item(&generators::gen_struct(typ, self, &cfg));
-            let impl_block = generators::gen_impl_block(typ, self, &cfg, &adapter_bodies);
+            let impl_block = generators::gen_impl_block(typ, self, &cfg, &adapter_bodies, &opaque_types);
             if !impl_block.is_empty() {
                 builder.add_item(&impl_block);
             }

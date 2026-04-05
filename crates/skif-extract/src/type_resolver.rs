@@ -238,6 +238,11 @@ pub fn extract_result_error_type(ty: &syn::Type) -> Option<String> {
                     if type_args.len() >= 2 {
                         return Some(type_to_string(type_args[1]));
                     }
+                    // Result<T> with a single type arg (type alias) — error type is implicit.
+                    // Return a placeholder so that error handling code is still generated.
+                    if !type_args.is_empty() {
+                        return Some("anyhow::Error".to_string());
+                    }
                 }
             }
         }
