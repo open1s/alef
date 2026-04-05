@@ -341,12 +341,20 @@ fn gen_wrapper_class(
         out.push_str(&gen_wrapper_function(func, exception_name, prefix));
     }
 
-    // Generate wrapper methods for type methods
+    // Generate wrapper methods for type methods (prefixed with type name to avoid collisions)
     for typ in &api.types {
-        if !typ.is_opaque {
-            for method in &typ.methods {
-                out.push_str(&gen_wrapper_method(method, exception_name, prefix));
+        // Skip opaque types (no C# representation for their methods)
+        if typ.is_opaque {
+            continue;
+        }
+        for method in &typ.methods {
+            // Skip methods that return opaque types not representable in C#
+            if let skif_core::ir::TypeRef::Named(ref name) = method.return_type {
+                if api.types.iter().any(|t| t.name == *name && t.is_opaque) {
+                    continue;
+                }
             }
+            out.push_str(&gen_wrapper_method(method, exception_name, prefix, &typ.name));
         }
     }
 
@@ -383,10 +391,11 @@ fn gen_wrapper_function(func: &FunctionDef, _exception_name: &str, _prefix: &str
     // Parameters
     for (i, param) in func.params.iter().enumerate() {
         let param_name = param.name.to_lower_camel_case();
-        if param.optional {
-            out.push_str(&format!("{}? {}", csharp_type(&param.ty), param_name));
+        let mapped = csharp_type(&param.ty);
+        if param.optional && !mapped.ends_with('?') {
+            out.push_str(&format!("{mapped}? {param_name}"));
         } else {
-            out.push_str(&format!("{} {}", csharp_type(&param.ty), param_name));
+            out.push_str(&format!("{mapped} {param_name}"));
         }
 
         if i < func.params.len() - 1 {
@@ -429,7 +438,7 @@ fn gen_wrapper_function(func: &FunctionDef, _exception_name: &str, _prefix: &str
     out
 }
 
-fn gen_wrapper_method(method: &MethodDef, _exception_name: &str, _prefix: &str) -> String {
+fn gen_wrapper_method(method: &MethodDef, _exception_name: &str, _prefix: &str, type_name: &str) -> String {
     let mut out = String::with_capacity(1024);
 
     // The wrapper class is always `static class`, so all methods must be static.
@@ -442,16 +451,19 @@ fn gen_wrapper_method(method: &MethodDef, _exception_name: &str, _prefix: &str) 
         out.push_str(&csharp_type(&method.return_type));
     }
 
-    out.push_str(&format!(" {}", to_csharp_name(&method.name)));
+    // Prefix method name with type name to avoid collisions (e.g., MetadataConfigDefault)
+    let method_cs_name = format!("{}{}", type_name, to_csharp_name(&method.name));
+    out.push_str(&format!(" {method_cs_name}"));
     out.push('(');
 
     // Parameters
     for (i, param) in method.params.iter().enumerate() {
         let param_name = param.name.to_lower_camel_case();
-        if param.optional {
-            out.push_str(&format!("{}? {}", csharp_type(&param.ty), param_name));
+        let mapped = csharp_type(&param.ty);
+        if param.optional && !mapped.ends_with('?') {
+            out.push_str(&format!("{mapped}? {param_name}"));
         } else {
-            out.push_str(&format!("{} {}", csharp_type(&param.ty), param_name));
+            out.push_str(&format!("{mapped} {param_name}"));
         }
 
         if i < method.params.len() - 1 {
@@ -566,7 +578,12 @@ fn gen_record_type(typ: &TypeDef, namespace: &str) -> String {
 
         if field.optional {
             // Optional fields: nullable type, no `required`, default = null
-            let field_type = format!("{}?", csharp_type(&field.ty));
+            let mapped = csharp_type(&field.ty);
+            let field_type = if mapped.ends_with('?') {
+                mapped.to_string()
+            } else {
+                format!("{mapped}?")
+            };
             out.push_str(&format!("    public {} {} {{ get; set; }}", field_type, cs_name));
             out.push_str(" = null;\n");
         } else if let Some(default) = &field.default {
