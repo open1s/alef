@@ -248,7 +248,7 @@ fn gen_sync_function_method(out: &mut String, func: &FunctionDef, prefix: &str, 
         .iter()
         .map(|p| {
             let ptype = java_type(&p.ty);
-            format!("{} {}", ptype, p.name)
+            format!("{} {}", ptype, to_java_name(&p.name))
         })
         .collect();
 
@@ -266,15 +266,19 @@ fn gen_sync_function_method(out: &mut String, func: &FunctionDef, prefix: &str, 
 
     writeln!(out, "        try (var arena = Arena.ofConfined()) {{").ok();
 
-    // Marshal parameters
+    // Marshal parameters (use camelCase Java names)
     for param in &func.params {
-        marshal_param_to_ffi(out, &param.name, &param.ty);
+        marshal_param_to_ffi(out, &to_java_name(&param.name), &param.ty);
     }
 
     // Call FFI
     let ffi_handle = format!("NativeLib.{}_{}", prefix.to_uppercase(), func.name.to_uppercase());
 
-    let call_args: Vec<String> = func.params.iter().map(|p| ffi_param_name(&p.name, &p.ty)).collect();
+    let call_args: Vec<String> = func
+        .params
+        .iter()
+        .map(|p| ffi_param_name(&to_java_name(&p.name), &p.ty))
+        .collect();
 
     if matches!(func.return_type, TypeRef::Unit) {
         writeln!(out, "            {}.invoke({});", ffi_handle, call_args.join(", ")).ok();
@@ -344,7 +348,7 @@ fn gen_async_wrapper_method(out: &mut String, func: &FunctionDef) {
         .iter()
         .map(|p| {
             let ptype = java_type(&p.ty);
-            format!("{} {}", ptype, p.name)
+            format!("{} {}", ptype, to_java_name(&p.name))
         })
         .collect();
 
@@ -355,7 +359,7 @@ fn gen_async_wrapper_method(out: &mut String, func: &FunctionDef) {
 
     let sync_method_name = to_java_name(&func.name);
     let async_method_name = format!("{}Async", sync_method_name);
-    let param_names: Vec<String> = func.params.iter().map(|p| p.name.clone()).collect();
+    let param_names: Vec<String> = func.params.iter().map(|p| to_java_name(&p.name)).collect();
 
     writeln!(
         out,
