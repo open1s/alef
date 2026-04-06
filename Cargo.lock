@@ -290,6 +290,7 @@ dependencies = [
  "eisberg-adapters",
  "eisberg-codegen",
  "eisberg-core",
+ "heck",
 ]
 
 [[package]]

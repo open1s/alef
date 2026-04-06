@@ -335,236 +335,312 @@ impl Backend for Pyo3Backend {
     }
 }
 
-/// Generate options.py with enums and dataclasses for types with defaults.
+/// Generate options.py — Python-side enums (StrEnum) and @dataclass config types.
+///
+/// Enum fields in dataclasses use `str` type (not enum class) so users can pass
+/// plain strings like `"atx"` instead of `HeadingStyle.Atx`.
+/// Default values come from `typed_default` if available, otherwise type-appropriate zeros.
 fn gen_options_py(api: &ApiSurface, _package_name: &str) -> String {
-    use crate::type_map::python_type;
-    use eisberg_core::ir::{DefaultValue, TypeRef};
+    use eisberg_core::ir::TypeRef;
+    use heck::ToSnakeCase;
 
-    let mut lines = vec![
-        "\"\"\"Options and enums for conversion.\"\"\"".to_string(),
-        "".to_string(),
-        "from dataclasses import dataclass, field".to_string(),
-        "from enum import Enum".to_string(),
-        "".to_string(),
-    ];
+    let mut out = String::with_capacity(4096);
+    out.push_str("\"\"\"Configuration options for the conversion API.\"\"\"\n\n");
+    out.push_str("from __future__ import annotations\n\n");
+    out.push_str("from dataclasses import dataclass\n");
+    out.push_str("from enum import Enum\n");
+    out.push_str("from typing import Literal\n\n\n");
 
-    // Generate enums
-    for enum_def in &api.enums {
-        lines.push(format!("class {}(str, Enum):", enum_def.name));
-        lines.push("    \"\"\"\"".to_string() + enum_def.doc.lines().next().unwrap_or("") + "\"\"\"");
-        for variant in &enum_def.variants {
-            // Use the variant name in lowercase as the string value
-            let variant_value = variant.name.to_lowercase();
-            lines.push(format!("    {} = \"{}\"", variant.name, variant_value));
-        }
-        lines.push("".to_string());
-    }
+    // Collect enum names for type detection
+    let enum_names: std::collections::HashSet<String> = api.enums.iter().map(|e| e.name.clone()).collect();
 
-    // Generate dataclasses for types with has_default=true
+    // Generate only "public" enums — skip internal types like TextDirection, LinkType etc.
+    // that aren't part of the user-facing config API.
+    // Only generate enums referenced by has_default type fields.
+    let mut needed_enums: std::collections::HashSet<String> = std::collections::HashSet::new();
     for typ in &api.types {
-        if typ.has_default && !typ.fields.is_empty() {
-            lines.push("@dataclass".to_string());
-            lines.push(format!("class {}:", typ.name));
-            lines.push("    \"\"\"\"".to_string() + typ.doc.lines().next().unwrap_or("") + "\"\"\"");
-
+        if typ.has_default {
             for field in &typ.fields {
-                let field_type = python_type(&field.ty);
-
-                // Generate type hint
-                let type_hint = if field.optional {
-                    format!("{} | None", python_type(&field.ty.clone()))
-                } else {
-                    field_type
-                };
-
-                // Generate default value
-                if let Some(typed_default) = &field.typed_default {
-                    let default_val = match typed_default {
-                        DefaultValue::BoolLiteral(b) => {
-                            if *b {
-                                "True".to_string()
-                            } else {
-                                "False".to_string()
-                            }
-                        }
-                        DefaultValue::StringLiteral(s) => format!("\"{}\"", s.escape_default()),
-                        DefaultValue::IntLiteral(i) => i.to_string(),
-                        DefaultValue::FloatLiteral(f) => f.to_string(),
-                        DefaultValue::EnumVariant(v) => {
-                            // For enum defaults, use the enum class and variant
-                            format!("\"{}\".lower()", v)
-                        }
-                        DefaultValue::Empty => match &field.ty {
-                            TypeRef::Vec(_) => "field(default_factory=list)".to_string(),
-                            TypeRef::Map(_, _) => "field(default_factory=dict)".to_string(),
-                            TypeRef::String => "\"\"".to_string(),
-                            _ => "None".to_string(),
-                        },
-                        DefaultValue::None => "None".to_string(),
-                    };
-
-                    lines.push(format!("    {}: {} = {}", field.name, type_hint, default_val));
-                } else {
-                    lines.push(format!("    {}: {}", field.name, type_hint));
+                if let TypeRef::Named(name) = &field.ty {
+                    if enum_names.contains(name) {
+                        needed_enums.insert(name.clone());
+                    }
                 }
             }
-            lines.push("".to_string());
         }
     }
 
-    lines.join("\n")
+    for enum_def in &api.enums {
+        if !needed_enums.contains(&enum_def.name) {
+            continue;
+        }
+        out.push_str(&format!("class {}(str, Enum):\n", enum_def.name));
+        if !enum_def.doc.is_empty() {
+            out.push_str(&format!(
+                "    \"\"\"{}\"\"\"\n\n",
+                enum_def.doc.lines().next().unwrap_or("")
+            ));
+        }
+        for variant in &enum_def.variants {
+            let value = variant.name.to_snake_case();
+            out.push_str(&format!("    {} = \"{}\"\n", variant.name.to_uppercase(), value));
+        }
+        out.push_str("\n\n");
+    }
+
+    // Generate @dataclass for types with has_default (user-facing config types)
+    for typ in &api.types {
+        if !typ.has_default || typ.fields.is_empty() {
+            continue;
+        }
+        // Skip "Update" types — they're internal
+        if typ.name.ends_with("Update") {
+            continue;
+        }
+
+        out.push_str("@dataclass\n");
+        out.push_str(&format!("class {}:\n", typ.name));
+        if !typ.doc.is_empty() {
+            out.push_str(&format!("    \"\"\"{}\"\"\"\n\n", typ.doc.lines().next().unwrap_or("")));
+        }
+
+        for field in &typ.fields {
+            // Determine Python type hint
+            let type_hint = python_field_type(&field.ty, field.optional, &enum_names);
+
+            // Determine default value
+            let default = if let Some(td) = &field.typed_default {
+                typed_default_to_python(td, &field.ty)
+            } else if field.optional {
+                "None".to_string()
+            } else {
+                python_zero_value(&field.ty, &enum_names)
+            };
+
+            if !field.doc.is_empty() {
+                out.push_str(&format!("    {}: {} = {}\n", field.name, type_hint, default));
+                out.push_str(&format!(
+                    "    \"\"\"{}\"\"\"\n\n",
+                    field.doc.lines().next().unwrap_or("")
+                ));
+            } else {
+                out.push_str(&format!("    {}: {} = {}\n", field.name, type_hint, default));
+            }
+        }
+        out.push('\n');
+    }
+
+    out
 }
 
-/// Generate api.py with wrapper functions that convert Python types to Rust bindings.
+/// Map IR TypeRef to Python type hint string for dataclass fields.
+/// Enum-typed fields become `str` (users pass string literals).
+fn python_field_type(
+    ty: &eisberg_core::ir::TypeRef,
+    optional: bool,
+    enum_names: &std::collections::HashSet<String>,
+) -> String {
+    use eisberg_core::ir::TypeRef;
+    let base = match ty {
+        TypeRef::Primitive(p) => match p {
+            eisberg_core::ir::PrimitiveType::Bool => "bool".to_string(),
+            eisberg_core::ir::PrimitiveType::F32 | eisberg_core::ir::PrimitiveType::F64 => "float".to_string(),
+            _ => "int".to_string(),
+        },
+        TypeRef::String | TypeRef::Path | TypeRef::Json => "str".to_string(),
+        TypeRef::Bytes => "bytes".to_string(),
+        TypeRef::Vec(inner) => format!("list[{}]", python_field_type(inner, false, enum_names)),
+        TypeRef::Map(k, v) => format!(
+            "dict[{}, {}]",
+            python_field_type(k, false, enum_names),
+            python_field_type(v, false, enum_names)
+        ),
+        TypeRef::Named(name) if enum_names.contains(name) => "str".to_string(),
+        TypeRef::Named(name) => name.clone(),
+        TypeRef::Optional(inner) => {
+            return format!("{} | None", python_field_type(inner, false, enum_names));
+        }
+        TypeRef::Unit => "None".to_string(),
+        TypeRef::Duration => "int".to_string(),
+    };
+    if optional { format!("{} | None", base) } else { base }
+}
+
+/// Convert a typed default value to Python literal.
+fn typed_default_to_python(td: &eisberg_core::ir::DefaultValue, _ty: &eisberg_core::ir::TypeRef) -> String {
+    use eisberg_core::ir::DefaultValue;
+    match td {
+        DefaultValue::BoolLiteral(true) => "True".to_string(),
+        DefaultValue::BoolLiteral(false) => "False".to_string(),
+        DefaultValue::StringLiteral(s) => format!("\"{}\"", s),
+        DefaultValue::IntLiteral(i) => i.to_string(),
+        DefaultValue::FloatLiteral(f) => format!("{}", f),
+        DefaultValue::EnumVariant(v) => {
+            use heck::ToSnakeCase;
+            format!("\"{}\"", v.to_snake_case())
+        }
+        DefaultValue::Empty => "None".to_string(),
+        DefaultValue::None => "None".to_string(),
+    }
+}
+
+/// Generate a Python zero value for a type (when no typed_default is available).
+fn python_zero_value(ty: &eisberg_core::ir::TypeRef, enum_names: &std::collections::HashSet<String>) -> String {
+    use eisberg_core::ir::TypeRef;
+    match ty {
+        TypeRef::Primitive(p) => match p {
+            eisberg_core::ir::PrimitiveType::Bool => "False".to_string(),
+            eisberg_core::ir::PrimitiveType::F32 | eisberg_core::ir::PrimitiveType::F64 => "0.0".to_string(),
+            _ => "0".to_string(),
+        },
+        TypeRef::String | TypeRef::Path | TypeRef::Json => "\"\"".to_string(),
+        TypeRef::Bytes => "b\"\"".to_string(),
+        TypeRef::Vec(_) => "None".to_string(),
+        TypeRef::Map(_, _) => "None".to_string(),
+        TypeRef::Named(name) if enum_names.contains(name) => "\"\"".to_string(),
+        TypeRef::Named(_) => "None".to_string(),
+        TypeRef::Optional(_) => "None".to_string(),
+        TypeRef::Unit => "None".to_string(),
+        TypeRef::Duration => "0".to_string(),
+    }
+}
+
+/// Generate api.py — wrapper functions that convert Python types to Rust binding types.
 fn gen_api_py(api: &ApiSurface, module_name: &str) -> String {
-    use crate::type_map::python_type;
+    let package_name = module_name.trim_start_matches('_');
 
-    let mut lines = vec![
-        "\"\"\"Public API surface for conversion.\"\"\"".to_string(),
-        "".to_string(),
-        format!("import {} as _rust", module_name),
-        "from .options import *  # noqa: F401, F403".to_string(),
-        "".to_string(),
-    ];
+    let mut out = String::with_capacity(2048);
+    out.push_str("\"\"\"Public API for conversion.\"\"\"\n\n");
+    out.push_str("from __future__ import annotations\n\n");
+    out.push_str("from typing import Any\n\n");
+    out.push_str(&format!("import {package_name}.{module_name} as _rust\n\n\n"));
 
-    // Generate wrapper functions for each top-level function
+    // Generate wrapper for each function
     for func in &api.functions {
-        let return_type = python_type(&func.return_type);
-
-        // Build function signature
-        let mut params = vec!["self".to_string()];
+        // Build Python-side params (using option dataclasses)
+        let mut sig_parts = Vec::new();
         for param in &func.params {
-            let param_type = python_type(&param.ty);
-            params.push(format!("{}: {}", param.name, param_type));
+            let py_type = if param.optional {
+                format!("{} | None = None", crate::type_map::python_type(&param.ty))
+            } else {
+                crate::type_map::python_type(&param.ty)
+            };
+            sig_parts.push(format!("{}: {}", param.name, py_type));
         }
 
-        lines.push(format!("def {}({}) -> {}:", func.name, params.join(", "), return_type));
-
+        out.push_str(&format!("def {}({}) -> Any:\n", func.name, sig_parts.join(", ")));
         if !func.doc.is_empty() {
-            lines.push(format!("    \"\"\"{}\"\"\"", func.doc.lines().next().unwrap_or("")));
+            out.push_str(&format!("    \"\"\"{}\"\"\"\n", func.doc.lines().next().unwrap_or("")));
         }
 
-        // Build the Rust call
-        let mut rust_args = vec![];
-        for param in &func.params {
-            rust_args.push(format!("_rust.{}={}", param.name, param.name));
-        }
-
-        lines.push(format!("    return _rust.{}({})", func.name, rust_args.join(", ")));
-        lines.push("".to_string());
+        // Forward call to Rust binding
+        let args: Vec<String> = func.params.iter().map(|p| p.name.clone()).collect();
+        out.push_str(&format!("    return _rust.{}({})\n\n\n", func.name, args.join(", ")));
     }
 
-    lines.join("\n")
+    out
 }
 
-/// Generate exceptions.py with exception hierarchy from IR errors.
+/// Generate exceptions.py — exception hierarchy from IR error definitions.
 fn gen_exceptions_py(api: &ApiSurface) -> String {
-    let mut lines = vec![
-        "\"\"\"Exception hierarchy for errors.\"\"\"".to_string(),
-        "".to_string(),
-    ];
+    let mut out = String::with_capacity(1024);
+    out.push_str("\"\"\"Exception hierarchy.\"\"\"\n\n");
+    out.push_str("from __future__ import annotations\n\n\n");
 
-    // Generate base exception for each error
     for error in &api.errors {
-        lines.push(format!("class {}(Exception):", error.name));
-        lines.push(format!("    \"\"\"{}\"\"\"", error.doc));
-        lines.push("    pass".to_string());
-        lines.push("".to_string());
+        // Base exception class
+        out.push_str(&format!("class {}(Exception):\n", error.name));
+        if !error.doc.is_empty() {
+            out.push_str(&format!("    \"\"\"{}\"\"\"\n", error.doc.lines().next().unwrap_or("")));
+        }
+        out.push_str("\n\n");
 
-        // Generate specific exceptions for each variant
+        // Per-variant exception subclasses
         for variant in &error.variants {
-            lines.push(format!("class {}({}Exception):", variant.name, error.name));
-            lines.push(format!("    \"\"\"{}\"\"\"", variant.doc));
-            lines.push("    pass".to_string());
-            lines.push("".to_string());
+            out.push_str(&format!("class {}({}):\n", variant.name, error.name));
+            if !variant.doc.is_empty() {
+                out.push_str(&format!(
+                    "    \"\"\"{}\"\"\"\n",
+                    variant.doc.lines().next().unwrap_or("")
+                ));
+            }
+            out.push_str("\n\n");
         }
     }
 
-    lines.join("\n")
+    out
 }
 
-/// Generate __init__.py with re-exports of public API.
+/// Generate __init__.py — re-exports and version.
+/// Only exports user-facing types (not internal Update types or all enums).
 fn gen_init_py(api: &ApiSurface, _module_name: &str, version: &str) -> String {
-    let mut lines = vec![
-        "\"\"\"Public API for the conversion library.\"\"\"".to_string(),
-        "".to_string(),
-    ];
+    use eisberg_core::ir::TypeRef;
 
-    // Import and re-export from api module
+    let mut out = String::with_capacity(1024);
+    out.push_str(&format!(
+        "\"\"\"Public API for the conversion library.\n\nVersion: {version}\"\"\"\n\n"
+    ));
+
+    // Collect enum names referenced by config types (user-facing enums only)
+    let enum_names: std::collections::HashSet<String> = api.enums.iter().map(|e| e.name.clone()).collect();
+    let mut needed_enums: Vec<String> = Vec::new();
+    let mut config_types: Vec<String> = Vec::new();
+    for typ in &api.types {
+        if typ.has_default && !typ.name.ends_with("Update") {
+            config_types.push(typ.name.clone());
+            for field in &typ.fields {
+                if let TypeRef::Named(name) = &field.ty {
+                    if enum_names.contains(name) && !needed_enums.contains(name) {
+                        needed_enums.push(name.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Import functions from api
     if !api.functions.is_empty() {
-        let func_names: Vec<_> = api.functions.iter().map(|f| f.name.clone()).collect();
-        lines.push(format!("from .api import {}", func_names.join(", ")));
+        let names: Vec<_> = api.functions.iter().map(|f| f.name.as_str()).collect();
+        out.push_str(&format!("from .api import {}\n", names.join(", ")));
     }
 
-    // Import and re-export from options module
-    let mut option_names = vec![];
-    for enum_def in &api.enums {
-        option_names.push(enum_def.name.clone());
-    }
-    for typ in &api.types {
-        if typ.has_default {
-            option_names.push(typ.name.clone());
-        }
+    // Import config types and enums from options
+    let mut opt_imports = needed_enums.clone();
+    opt_imports.extend(config_types.iter().cloned());
+    if !opt_imports.is_empty() {
+        out.push_str(&format!("from .options import {}\n", opt_imports.join(", ")));
     }
 
-    if !option_names.is_empty() {
-        lines.push(format!("from .options import {}", option_names.join(", ")));
-    }
-
-    // Import and re-export from exceptions module
-    let mut exception_names = vec![];
+    // Import exceptions
+    let mut exc_names = Vec::new();
     for error in &api.errors {
-        exception_names.push(error.name.clone());
+        exc_names.push(error.name.clone());
         for variant in &error.variants {
-            exception_names.push(variant.name.clone());
+            exc_names.push(variant.name.clone());
         }
     }
-
-    if !exception_names.is_empty() {
-        lines.push(format!("from .exceptions import {}", exception_names.join(", ")));
+    if !exc_names.is_empty() {
+        out.push_str(&format!("from .exceptions import {}\n", exc_names.join(", ")));
     }
 
-    lines.push("".to_string());
-
-    // Build __all__ list
-    let mut all_items = vec![];
-    for func in &api.functions {
-        all_items.push(func.name.clone());
+    // __all__
+    let mut all_items = Vec::new();
+    for f in &api.functions {
+        all_items.push(f.name.clone());
     }
-    for enum_def in &api.enums {
-        all_items.push(enum_def.name.clone());
-    }
-    for typ in &api.types {
-        if typ.has_default {
-            all_items.push(typ.name.clone());
-        }
-    }
-    for error in &api.errors {
-        all_items.push(error.name.clone());
-        for variant in &error.variants {
-            all_items.push(variant.name.clone());
-        }
-    }
-
+    all_items.extend(needed_enums);
+    all_items.extend(config_types);
+    all_items.extend(exc_names);
     all_items.sort();
-    all_items.push("__version__".to_string());
 
-    if !all_items.is_empty() {
-        lines.push(format!("__all__ = [\n{}\n]", {
-            all_items
-                .iter()
-                .map(|name| format!("    \"{}\",", name))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }));
-    } else {
-        lines.push("__all__: list[str] = []".to_string());
+    out.push_str("\n__all__ = [\n");
+    for name in &all_items {
+        out.push_str(&format!("    \"{name}\",\n"));
     }
+    out.push_str("]\n\n");
+    out.push_str(&format!("__version__ = \"{version}\"\n"));
 
-    lines.push("".to_string());
-    lines.push(format!("__version__ = \"{}\"", version));
-
-    lines.join("\n")
+    out
 }
 
 /// Generate the async runtime initialization function.
