@@ -449,6 +449,10 @@ fn gen_struct(typ: &TypeDef, mapper: &WasmMapper) -> String {
     writeln!(out, "pub struct {} {{", js_name).ok();
 
     for field in &typ.fields {
+        // Skip cfg-gated fields — they depend on features that may not be enabled
+        if field.cfg.is_some() {
+            continue;
+        }
         let field_type = if field.optional {
             mapper.optional(&mapper.map_type(&field.ty))
         } else {

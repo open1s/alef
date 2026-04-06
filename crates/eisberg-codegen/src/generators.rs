@@ -683,6 +683,10 @@ pub fn gen_lossy_binding_to_core_fields(typ: &TypeDef, core_import: &str) -> Str
             writeln!(out, "            {name}: {expr},").ok();
         }
     }
+    // Use ..Default::default() to fill cfg-gated fields stripped from the IR
+    if typ.has_stripped_cfg_fields {
+        out.push_str("            ..Default::default()\n");
+    }
     out.push_str("        };\n        ");
     out
 }
@@ -700,6 +704,12 @@ pub fn gen_struct(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfi
         sb.add_derive("serde::Serialize");
     }
     for field in &typ.fields {
+        // Skip cfg-gated fields — they depend on features that may not be enabled
+        // for this binding crate. Including them would require the binding struct to
+        // handle conditional compilation which struct literal initializers can't express.
+        if field.cfg.is_some() {
+            continue;
+        }
         let ty = if field.optional {
             mapper.optional(&mapper.map_type(&field.ty))
         } else {

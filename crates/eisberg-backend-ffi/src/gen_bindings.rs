@@ -170,8 +170,11 @@ fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &SkifConfig) -> String {
         }
     }
 
-    // Free functions
+    // Free functions (skip async — FFI can't express async; use sync wrappers instead)
     for func in &api.functions {
+        if func.is_async {
+            continue;
+        }
         builder.add_item(&gen_free_function(func, prefix, &core_import, &opaque_types));
     }
 
@@ -1416,6 +1419,7 @@ mod tests {
                         sanitized: false,
                         is_boxed: false,
                         type_rust_path: None,
+                        cfg: None,
                     },
                     FieldDef {
                         name: "name".to_string(),
@@ -1426,6 +1430,7 @@ mod tests {
                         sanitized: false,
                         is_boxed: false,
                         type_rust_path: None,
+                        cfg: None,
                     },
                     FieldDef {
                         name: "verbose".to_string(),
@@ -1436,6 +1441,7 @@ mod tests {
                         sanitized: false,
                         is_boxed: false,
                         type_rust_path: None,
+                        cfg: None,
                     },
                 ],
                 methods: vec![],
@@ -1443,6 +1449,7 @@ mod tests {
                 is_clone: true,
                 is_trait: false,
                 has_default: false,
+                has_stripped_cfg_fields: false,
                 doc: "Configuration struct.".to_string(),
                 cfg: None,
             }],

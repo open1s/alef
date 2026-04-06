@@ -90,6 +90,10 @@ pub fn extract(config: &SkifConfig, config_path: &Path, clean: bool) -> anyhow::
     // Inject declared opaque types from config (external crate types eisberg can't extract)
     inject_declared_opaque_types(&mut api, config);
 
+    // Remove cfg-gated fields — binding crates may have different features
+    // enabled than the core crate, so cfg-gated fields can't be safely included.
+    strip_cfg_fields(&mut api);
+
     // Replace references to types not in the API surface with String
     sanitize_unknown_types(&mut api);
 
@@ -570,6 +574,7 @@ fn inject_declared_opaque_types(api: &mut ApiSurface, config: &SkifConfig) {
                 is_clone: false,
                 is_trait: false,
                 has_default: false,
+                has_stripped_cfg_fields: false,
                 doc: String::new(),
                 cfg: None,
             });
@@ -653,6 +658,20 @@ fn sanitize_type_ref(ty: &mut TypeRef, known_types: &AHashSet<String>, known_enu
 /// Deduplicate API surface items by name to prevent conflicting definitions.
 /// This resolves:
 /// 1. Type-enum collisions: If a name exists in both types and enums, keep only the enum
+/// Remove fields with `#[cfg(...)]` conditions from all types.
+///
+/// Binding crates may have different feature sets than the core crate,
+/// so including cfg-gated fields causes compilation errors.
+fn strip_cfg_fields(api: &mut ApiSurface) {
+    for typ in &mut api.types {
+        let had_cfg = typ.fields.iter().any(|f| f.cfg.is_some());
+        typ.fields.retain(|f| f.cfg.is_none());
+        if had_cfg {
+            typ.has_stripped_cfg_fields = true;
+        }
+    }
+}
+
 /// 2. Duplicate types: Keep only the first occurrence of each type name
 /// 3. Duplicate enums: Keep only the first occurrence of each enum name
 /// 4. Duplicate functions: Keep only the first occurrence of each function name

@@ -23,6 +23,10 @@ pub struct ConversionConfig<'a> {
     /// in the binding struct and need `.unwrap_or_default()` in binding→core From.
     /// Used by NAPI to make JS-facing structs fully optional.
     pub optionalize_defaults: bool,
+    /// When true, Json (serde_json::Value) fields are mapped to String in the binding layer.
+    /// Core→binding uses `.to_string()`, binding→core uses `Default::default()` (lossy).
+    /// Used by PHP where serde_json::Value can't cross the extension boundary.
+    pub json_to_string: bool,
 }
 
 /// Returns true if a primitive type needs i64 casting (NAPI/PHP — JS/PHP lack native u64).
@@ -316,7 +320,21 @@ pub fn gen_from_binding_to_core_cfg(typ: &TypeDef, core_import: &str, config: &C
         } else {
             field_conversion_to_core_cfg(&field.name, &field.ty, field.optional, config)
         };
+        // Box<T> fields: wrap the converted value in Box::new()
+        let conversion = if field.is_boxed && matches!(&field.ty, TypeRef::Named(_)) {
+            if let Some(expr) = conversion.strip_prefix(&format!("{}: ", field.name)) {
+                format!("{}: Box::new({})", field.name, expr)
+            } else {
+                conversion
+            }
+        } else {
+            conversion
+        };
         writeln!(out, "            {conversion},").ok();
+    }
+    // Use ..Default::default() to fill cfg-gated fields stripped from the IR
+    if typ.has_stripped_cfg_fields {
+        writeln!(out, "            ..Default::default()").ok();
     }
     writeln!(out, "        }}").ok();
     writeln!(out, "    }}").ok();
@@ -396,6 +414,20 @@ pub fn gen_from_core_to_binding_cfg(
             opaque_types,
             config,
         );
+        // Box<T> fields: dereference before conversion.
+        let base_conversion = if field.is_boxed && matches!(&field.ty, TypeRef::Named(_)) {
+            if field.optional {
+                // Optional<Box<T>>: replace .map(Into::into) with .map(|v| (*v).into())
+                let src = format!("{}: val.{}.map(Into::into)", field.name, field.name);
+                let dst = format!("{}: val.{}.map(|v| (*v).into())", field.name, field.name);
+                if base_conversion == src { dst } else { base_conversion }
+            } else {
+                // Box<T>: replace `val.{name}` with `(*val.{name})`
+                base_conversion.replace(&format!("val.{}", field.name), &format!("(*val.{})", field.name))
+            }
+        } else {
+            base_conversion
+        };
         // Optionalized non-optional fields need Some() wrapping in core→binding direction
         let conversion = if optionalized && !field.optional {
             // Extract the value expression after "name: " and wrap in Some()
@@ -407,6 +439,10 @@ pub fn gen_from_core_to_binding_cfg(
         } else {
             base_conversion
         };
+        // Skip cfg-gated fields — they don't exist in the binding struct
+        if field.cfg.is_some() {
+            continue;
+        }
         writeln!(out, "            {conversion},").ok();
     }
     writeln!(out, "        }}").ok();
@@ -551,6 +587,11 @@ pub fn field_conversion_from_core(
         // Check if binding type is Vec<String> (inner was sanitized from Named→String)
         if let TypeRef::Vec(inner) = ty {
             if matches!(inner.as_ref(), TypeRef::String) {
+                if optional {
+                    return format!(
+                        "{name}: val.{name}.as_ref().map(|v| v.iter().map(|i| format!(\"{{:?}}\", i)).collect())"
+                    );
+                }
                 return format!("{name}: val.{name}.iter().map(|v| format!(\"{{:?}}\", v)).collect()");
             }
         }
@@ -587,6 +628,14 @@ pub fn field_conversion_from_core(
         }
         TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Path) => {
             format!("{name}: val.{name}.map(|p| p.to_string_lossy().to_string())")
+        }
+        // Bytes: core uses bytes::Bytes, binding uses Vec<u8>
+        TypeRef::Bytes => {
+            if optional {
+                format!("{name}: val.{name}.map(|v| v.to_vec())")
+            } else {
+                format!("{name}: val.{name}.to_vec()")
+            }
         }
         // Opaque Named types: wrap in Arc to create the binding wrapper
         TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
@@ -626,7 +675,18 @@ pub fn field_conversion_to_core_cfg(name: &str, ty: &TypeRef, optional: bool, co
         }
     }
 
-    if !config.cast_large_ints_to_i64 && !config.cast_f32_to_f64 {
+    // Json→String binding→core: use Default::default() (lossy — can't parse String back)
+    if config.json_to_string && matches!(ty, TypeRef::Json) {
+        return format!("{name}: Default::default()");
+    }
+    // Json→JsValue binding→core: use serde_wasm_bindgen to convert (WASM)
+    if config.map_uses_jsvalue && matches!(ty, TypeRef::Json) {
+        if optional {
+            return format!("{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::from_value(v.clone()).ok())");
+        }
+        return format!("{name}: serde_wasm_bindgen::from_value(val.{name}.clone()).unwrap_or_default()");
+    }
+    if !config.cast_large_ints_to_i64 && !config.cast_f32_to_f64 && !config.json_to_string {
         return field_conversion_to_core(name, ty, optional);
     }
     // Cast mode: handle primitives and Duration differently
@@ -658,6 +718,22 @@ pub fn field_conversion_to_core_cfg(name: &str, ty: &TypeRef, optional: bool, co
             if let TypeRef::Primitive(p) = inner.as_ref() {
                 let core_ty = core_prim_str(p);
                 format!("{name}: val.{name}.map(|v| v as {core_ty})")
+            } else {
+                field_conversion_to_core(name, ty, optional)
+            }
+        }
+        // Vec<u64/usize/isize> needs element-wise i64→core casting
+        TypeRef::Vec(inner)
+            if config.cast_large_ints_to_i64
+                && matches!(inner.as_ref(), TypeRef::Primitive(p) if needs_i64_cast(p)) =>
+        {
+            if let TypeRef::Primitive(p) = inner.as_ref() {
+                let core_ty = core_prim_str(p);
+                if optional {
+                    format!("{name}: val.{name}.map(|v| v.into_iter().map(|x| x as {core_ty}).collect())")
+                } else {
+                    format!("{name}: val.{name}.into_iter().map(|v| v as {core_ty}).collect()")
+                }
             } else {
                 field_conversion_to_core(name, ty, optional)
             }
@@ -792,6 +868,38 @@ pub fn field_conversion_from_core_cfg(
                 field_conversion_from_core(name, ty, optional, sanitized, opaque_types)
             }
         }
+        // Vec<u64/usize/isize> needs element-wise i64 casting (core→binding)
+        TypeRef::Vec(inner)
+            if config.cast_large_ints_to_i64
+                && matches!(inner.as_ref(), TypeRef::Primitive(p) if needs_i64_cast(p)) =>
+        {
+            if let TypeRef::Primitive(p) = inner.as_ref() {
+                let cast_to = binding_prim_str(p);
+                if optional {
+                    format!("{name}: val.{name}.as_ref().map(|v| v.iter().map(|&x| x as {cast_to}).collect())")
+                } else {
+                    format!("{name}: val.{name}.iter().map(|&v| v as {cast_to}).collect()")
+                }
+            } else {
+                field_conversion_from_core(name, ty, optional, sanitized, opaque_types)
+            }
+        }
+        // Json→String: core uses serde_json::Value, binding uses String (PHP)
+        TypeRef::Json if config.json_to_string => {
+            if optional {
+                format!("{name}: val.{name}.as_ref().map(|v| v.to_string())")
+            } else {
+                format!("{name}: val.{name}.to_string()")
+            }
+        }
+        // Json→JsValue: core uses serde_json::Value, binding uses JsValue (WASM)
+        TypeRef::Json if config.map_uses_jsvalue => {
+            if optional {
+                format!("{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())")
+            } else {
+                format!("{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)")
+            }
+        }
         // Fall through to default (handles paths, opaque without prefix, etc.)
         _ => field_conversion_from_core(name, ty, optional, sanitized, opaque_types),
     }
@@ -819,6 +927,7 @@ mod tests {
                     sanitized: false,
                     is_boxed: false,
                     type_rust_path: None,
+                    cfg: None,
                 },
                 FieldDef {
                     name: "timeout".into(),
@@ -829,6 +938,7 @@ mod tests {
                     sanitized: false,
                     is_boxed: false,
                     type_rust_path: None,
+                    cfg: None,
                 },
                 FieldDef {
                     name: "backend".into(),
@@ -839,6 +949,7 @@ mod tests {
                     sanitized: false,
                     is_boxed: false,
                     type_rust_path: None,
+                    cfg: None,
                 },
             ],
             methods: vec![],
@@ -846,6 +957,7 @@ mod tests {
             is_clone: true,
             is_trait: false,
             has_default: false,
+            has_stripped_cfg_fields: false,
             doc: String::new(),
             cfg: None,
         }

@@ -31,6 +31,11 @@ pub struct TypeDef {
     /// Used by backends like NAPI to make all fields optional with defaults.
     #[serde(default)]
     pub has_default: bool,
+    /// True if some fields were stripped due to `#[cfg]` conditions.
+    /// When true, struct literal initializers need `..Default::default()` to fill
+    /// the missing fields that may exist when the core crate is compiled with features.
+    #[serde(default)]
+    pub has_stripped_cfg_fields: bool,
 }
 
 /// A field on a public struct.
@@ -53,6 +58,10 @@ pub struct FieldDef {
     /// Used by backends to disambiguate types with the same short name.
     #[serde(default)]
     pub type_rust_path: Option<String>,
+    /// `#[cfg(...)]` condition string on this field, if any.
+    /// Used by backends to conditionally include fields in struct literals.
+    #[serde(default)]
+    pub cfg: Option<String>,
 }
 
 /// A method on a public struct.

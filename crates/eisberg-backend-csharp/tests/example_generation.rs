@@ -23,6 +23,7 @@ fn test_generated_code_example() {
                     sanitized: false,
                     is_boxed: false,
                     type_rust_path: None,
+                    cfg: None,
                 },
                 FieldDef {
                     name: "timeout".to_string(),
@@ -33,6 +34,7 @@ fn test_generated_code_example() {
                     sanitized: false,
                     is_boxed: false,
                     type_rust_path: None,
+                    cfg: None,
                 },
             ],
             methods: vec![],
@@ -40,6 +42,7 @@ fn test_generated_code_example() {
             is_clone: true,
             is_trait: false,
             has_default: false,
+            has_stripped_cfg_fields: false,
             doc: "Configuration for text extraction".to_string(),
             cfg: None,
         }],

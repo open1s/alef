@@ -212,6 +212,7 @@ fn extract_items(
                         is_clone: false,
                         is_trait: false,
                         has_default: false,
+                        has_stripped_cfg_fields: false,
                         doc,
                         cfg: None,
                     });
@@ -279,6 +280,7 @@ fn extract_items(
                         is_clone: false,
                         is_trait: true,
                         has_default: false,
+                        has_stripped_cfg_fields: false,
                         doc,
                         cfg: None,
                     });
@@ -470,6 +472,7 @@ fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_path: &str) -
                 sanitized: false,
                 is_boxed: syn_type_is_boxed(&field.ty),
                 type_rust_path: extract_field_type_rust_path(&field.ty),
+                cfg: None,
             }]
         }
         _ => vec![],
@@ -490,6 +493,7 @@ fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_path: &str) -
         is_clone,
         is_trait: false,
         has_default,
+        has_stripped_cfg_fields: false,
         doc,
         cfg,
     })
@@ -499,6 +503,7 @@ fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_path: &str) -
 fn extract_field(field: &syn::Field) -> FieldDef {
     let name = field.ident.as_ref().map(|i| i.to_string()).unwrap_or_default();
     let doc = extract_doc_comments(&field.attrs);
+    let cfg = extract_cfg_condition(&field.attrs);
 
     let is_boxed = syn_type_is_boxed(&field.ty);
     let type_rust_path = extract_field_type_rust_path(&field.ty);
@@ -515,6 +520,7 @@ fn extract_field(field: &syn::Field) -> FieldDef {
         sanitized: false,
         is_boxed,
         type_rust_path,
+        cfg,
     }
 }
 
@@ -613,6 +619,13 @@ fn extract_field_type_rust_path(ty: &syn::Type) -> Option<String> {
     // Now check if the type has a multi-segment path
     if let syn::Type::Path(type_path) = check_ty {
         if type_path.path.segments.len() >= 2 {
+            let first_segment = type_path.path.segments[0].ident.to_string();
+            // Skip relative paths (`crate::...`, `super::...`) — these can't be resolved
+            // to absolute paths without full module context and would produce invalid
+            // paths like `kreuzberg::super::super::pdf::PdfConfig` in codegen.
+            if first_segment == "crate" || first_segment == "super" {
+                return None;
+            }
             let segments: Vec<String> = type_path.path.segments.iter().map(|s| s.ident.to_string()).collect();
             return Some(segments.join("::"));
         }
@@ -660,6 +673,7 @@ fn extract_enum(item: &syn::ItemEnum, crate_name: &str, module_path: &str) -> Op
                             sanitized: false,
                             is_boxed: syn_type_is_boxed(&f.ty),
                             type_rust_path: extract_field_type_rust_path(&f.ty),
+                            cfg: None,
                         }
                     })
                     .collect(),
@@ -795,6 +809,7 @@ fn extract_impl_block(
             is_clone: false,
             is_trait: false,
             has_default: false,
+            has_stripped_cfg_fields: false,
             doc: String::new(),
             cfg: None,
         });
@@ -1965,6 +1980,7 @@ mod tests {
                 is_clone: false,
                 is_trait: false,
                 has_default: false,
+                has_stripped_cfg_fields: false,
                 doc: String::new(),
                 cfg: None,
             }],
@@ -1986,6 +2002,7 @@ mod tests {
                     is_clone: false,
                     is_trait: false,
                     has_default: false,
+                    has_stripped_cfg_fields: false,
                     doc: String::new(),
                     cfg: None,
                 },
@@ -1998,6 +2015,7 @@ mod tests {
                     is_clone: false,
                     is_trait: false,
                     has_default: false,
+                    has_stripped_cfg_fields: false,
                     doc: String::new(),
                     cfg: None,
                 },
@@ -2037,6 +2055,7 @@ mod tests {
                     is_clone: false,
                     is_trait: false,
                     has_default: false,
+                    has_stripped_cfg_fields: false,
                     doc: String::new(),
                     cfg: None,
                 },
@@ -2049,6 +2068,7 @@ mod tests {
                     is_clone: false,
                     is_trait: false,
                     has_default: false,
+                    has_stripped_cfg_fields: false,
                     doc: String::new(),
                     cfg: None,
                 },

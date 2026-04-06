@@ -638,9 +638,18 @@ fn gen_nif_init(api: &ApiSurface, config: &SkifConfig) -> String {
         }
     }
 
-    if exports.is_empty() {
-        "rustler::init!(\"elixir_module\", []);".to_string()
-    } else {
-        format!("rustler::init!(\"elixir_module\", [{}]);", exports.join(", "))
-    }
+    // Rustler auto-detects #[rustler::nif] functions; explicit list is deprecated
+    let _ = exports; // computed for potential future use
+    let module = config
+        .elixir
+        .as_ref()
+        .map(|e| {
+            use heck::ToUpperCamelCase;
+            format!(
+                "Elixir.{}",
+                e.app_name.as_deref().unwrap_or("NativeModule").to_upper_camel_case()
+            )
+        })
+        .unwrap_or_else(|| "Elixir.NativeModule".to_string());
+    format!("rustler::init!(\"{module}\");")
 }

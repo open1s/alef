@@ -26,6 +26,7 @@ fn test_basic_generation() {
                     sanitized: false,
                     is_boxed: false,
                     type_rust_path: None,
+                    cfg: None,
                 },
                 FieldDef {
                     name: "backend".to_string(),
@@ -36,6 +37,7 @@ fn test_basic_generation() {
                     sanitized: false,
                     is_boxed: false,
                     type_rust_path: None,
+                    cfg: None,
                 },
             ],
             methods: vec![],
@@ -43,6 +45,7 @@ fn test_basic_generation() {
             is_clone: true,
             is_trait: false,
             has_default: false,
+            has_stripped_cfg_fields: false,
             doc: "Extraction configuration".to_string(),
             cfg: None,
         }],
@@ -367,6 +370,7 @@ fn test_type_mapping() {
                     sanitized: false,
                     is_boxed: false,
                     type_rust_path: None,
+                    cfg: None,
                 },
                 FieldDef {
                     name: "i64_val".to_string(),
@@ -377,6 +381,7 @@ fn test_type_mapping() {
                     sanitized: false,
                     is_boxed: false,
                     type_rust_path: None,
+                    cfg: None,
                 },
                 FieldDef {
                     name: "string_val".to_string(),
@@ -387,6 +392,7 @@ fn test_type_mapping() {
                     sanitized: false,
                     is_boxed: false,
                     type_rust_path: None,
+                    cfg: None,
                 },
                 FieldDef {
                     name: "list_val".to_string(),
@@ -397,6 +403,7 @@ fn test_type_mapping() {
                     sanitized: false,
                     is_boxed: false,
                     type_rust_path: None,
+                    cfg: None,
                 },
             ],
             methods: vec![],
@@ -404,6 +411,7 @@ fn test_type_mapping() {
             is_clone: true,
             is_trait: false,
             has_default: false,
+            has_stripped_cfg_fields: false,
             doc: String::new(),
             cfg: None,
         }],

@@ -159,6 +159,7 @@ impl Backend for PhpBackend {
         let php_conv_config = ConversionConfig {
             cast_large_ints_to_i64: true,
             enum_string_names: Some(enum_names_ref),
+            json_to_string: true,
             ..Default::default()
         };
         // Build transitive set of types that can't have binding→core From
@@ -662,15 +663,19 @@ fn gen_function(func: &FunctionDef, mapper: &PhpMapper, opaque_types: &AHashSet<
     let can_delegate = shared::can_auto_delegate_function(func, opaque_types);
 
     let body = if can_delegate {
-        let call_args = gen_php_call_args(&func.params, opaque_types);
+        let let_bindings = gen_php_named_let_bindings(&func.params, opaque_types, core_import);
+        let call_args = gen_php_call_args_with_let_bindings(&func.params, opaque_types);
         let core_call = format!("{core_import}::{}({call_args})", func.name);
         if func.error_type.is_some() {
             let wrap = generators::wrap_return("result", &func.return_type, "", opaque_types, false, func.returns_ref);
             format!(
-                "let result = {core_call}.map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))?;\n    Ok({wrap})"
+                "{let_bindings}let result = {core_call}.map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))?;\n    Ok({wrap})"
             )
         } else {
-            generators::wrap_return(&core_call, &func.return_type, "", opaque_types, false, func.returns_ref)
+            format!(
+                "{let_bindings}{}",
+                generators::wrap_return(&core_call, &func.return_type, "", opaque_types, false, func.returns_ref)
+            )
         }
     } else {
         gen_php_unimplemented_body(&func.return_type, &func.name, func.error_type.is_some())
@@ -707,18 +712,21 @@ fn gen_async_function(
     let can_delegate = shared::can_auto_delegate_function(func, opaque_types);
 
     let body = if can_delegate {
-        let call_args = gen_php_call_args(&func.params, opaque_types);
+        let let_bindings = gen_php_named_let_bindings(&func.params, opaque_types, core_import);
+        let call_args = gen_php_call_args_with_let_bindings(&func.params, opaque_types);
         let core_call = format!("{core_import}::{}({call_args})", func.name);
         let result_wrap =
             generators::wrap_return("result", &func.return_type, "", opaque_types, false, func.returns_ref);
         if func.error_type.is_some() {
             format!(
-                "WORKER_RUNTIME.block_on(async {{\n        \
+                "{let_bindings}WORKER_RUNTIME.block_on(async {{\n        \
                  let result = {core_call}.await.map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))?;\n        \
                  Ok({result_wrap})\n    }})"
             )
         } else {
-            format!("let result = WORKER_RUNTIME.block_on(async {{ {core_call}.await }});\n    {result_wrap}")
+            format!(
+                "{let_bindings}let result = WORKER_RUNTIME.block_on(async {{ {core_call}.await }});\n    {result_wrap}"
+            )
         }
     } else {
         gen_php_unimplemented_body(
@@ -970,6 +978,71 @@ fn gen_php_call_args(params: &[eisberg_core::ir::ParamDef], opaque_types: &AHash
         .join(", ")
 }
 
+/// Generate let bindings for non-opaque Named params in free functions.
+/// Creates `let {name}_core: {core_import}::{TypeName} = {name}.clone().into();`
+/// so the function body can pass `&{name}_core` instead of `{name}.clone().into()`.
+fn gen_php_named_let_bindings(
+    params: &[eisberg_core::ir::ParamDef],
+    opaque_types: &AHashSet<String>,
+    core_import: &str,
+) -> String {
+    let mut out = String::new();
+    for p in params {
+        if let TypeRef::Named(name) = &p.ty {
+            if !opaque_types.contains(name.as_str()) {
+                if p.optional {
+                    writeln!(
+                        out,
+                        "let {}_core: Option<{core_import}::{name}> = {}.clone().map(Into::into);",
+                        p.name, p.name
+                    )
+                    .ok();
+                } else {
+                    writeln!(
+                        out,
+                        "let {}_core: {core_import}::{name} = {}.clone().into();",
+                        p.name, p.name
+                    )
+                    .ok();
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Generate call args using pre-bound let bindings for non-opaque Named params.
+fn gen_php_call_args_with_let_bindings(
+    params: &[eisberg_core::ir::ParamDef],
+    opaque_types: &AHashSet<String>,
+) -> String {
+    params
+        .iter()
+        .map(|p| match &p.ty {
+            TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
+                if p.optional {
+                    format!("{}.as_ref().map(|v| &v.inner)", p.name)
+                } else {
+                    format!("&{}.inner", p.name)
+                }
+            }
+            TypeRef::Named(_) => {
+                if p.optional {
+                    format!("{}_core.as_ref()", p.name)
+                } else {
+                    format!("&{}_core", p.name)
+                }
+            }
+            TypeRef::String => format!("&{}", p.name),
+            TypeRef::Path => format!("std::path::PathBuf::from({})", p.name),
+            TypeRef::Bytes => format!("&{}", p.name),
+            TypeRef::Duration => format!("std::time::Duration::from_secs({})", p.name),
+            _ => p.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Returns true if a primitive type needs i64→core casting in PHP.
 fn needs_i64_cast(p: &PrimitiveType) -> bool {
     matches!(p, PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize)
@@ -998,7 +1071,11 @@ fn gen_php_lossy_binding_to_core_fields(typ: &TypeDef, core_import: &str) -> Str
             let expr = match &field.ty {
                 TypeRef::Primitive(p) if needs_i64_cast(p) => {
                     let core_ty = core_prim_str(p);
-                    format!("self.{name} as {core_ty}")
+                    if field.optional {
+                        format!("self.{name}.map(|v| v as {core_ty})")
+                    } else {
+                        format!("self.{name} as {core_ty}")
+                    }
                 }
                 TypeRef::Primitive(_) => format!("self.{name}"),
                 TypeRef::Duration => {
@@ -1025,7 +1102,19 @@ fn gen_php_lossy_binding_to_core_fields(typ: &TypeDef, core_import: &str) -> Str
                 }
                 TypeRef::Vec(inner) => match inner.as_ref() {
                     TypeRef::Named(_) => {
-                        format!("self.{name}.clone().into_iter().map(Into::into).collect()")
+                        if field.optional {
+                            format!("self.{name}.clone().map(|v| v.into_iter().map(Into::into).collect())")
+                        } else {
+                            format!("self.{name}.clone().into_iter().map(Into::into).collect()")
+                        }
+                    }
+                    TypeRef::Primitive(p) if needs_i64_cast(p) => {
+                        let core_ty = core_prim_str(p);
+                        if field.optional {
+                            format!("self.{name}.clone().map(|v| v.into_iter().map(|x| x as {core_ty}).collect())")
+                        } else {
+                            format!("self.{name}.clone().into_iter().map(|v| v as {core_ty}).collect()")
+                        }
                     }
                     _ => format!("self.{name}.clone()"),
                 },
@@ -1040,13 +1129,27 @@ fn gen_php_lossy_binding_to_core_fields(typ: &TypeDef, core_import: &str) -> Str
                     TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Named(_)) => {
                         format!("self.{name}.clone().map(|v| v.into_iter().map(Into::into).collect())")
                     }
+                    TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Primitive(p) if needs_i64_cast(p)) => {
+                        if let TypeRef::Primitive(p) = vi.as_ref() {
+                            let core_ty = core_prim_str(p);
+                            format!("self.{name}.clone().map(|v| v.into_iter().map(|x| x as {core_ty}).collect())")
+                        } else {
+                            format!("self.{name}.clone()")
+                        }
+                    }
                     _ => format!("self.{name}.clone()"),
                 },
                 TypeRef::Map(_, _) => format!("self.{name}.clone()"),
-                TypeRef::Unit | TypeRef::Json => format!("self.{name}.clone()"),
+                TypeRef::Unit => format!("self.{name}.clone()"),
+                // Json maps to String in PHP — can't directly assign to serde_json::Value
+                TypeRef::Json => "Default::default()".to_string(),
             };
             writeln!(out, "            {name}: {expr},").ok();
         }
+    }
+    // Use ..Default::default() to fill cfg-gated fields stripped from the IR
+    if typ.has_stripped_cfg_fields {
+        out.push_str("            ..Default::default()\n");
     }
     out.push_str("        };\n        ");
     out

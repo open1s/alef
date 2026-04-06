@@ -129,7 +129,8 @@ pub fn partition_methods(methods: &[MethodDef]) -> (Vec<&MethodDef>, Vec<&Method
 pub fn constructor_parts(fields: &[FieldDef], type_mapper: &dyn Fn(&TypeRef) -> String) -> (String, String, String) {
     // Sort fields: required first, then optional.
     // Many FFI frameworks (PyO3, NAPI) require required params before optional ones.
-    let mut sorted_fields: Vec<&FieldDef> = fields.iter().collect();
+    // Skip cfg-gated fields — they depend on features that may not be enabled.
+    let mut sorted_fields: Vec<&FieldDef> = fields.iter().filter(|f| f.cfg.is_none()).collect();
     sorted_fields.sort_by_key(|f| f.optional as u8);
 
     let params: Vec<String> = sorted_fields
@@ -155,8 +156,12 @@ pub fn constructor_parts(fields: &[FieldDef], type_mapper: &dyn Fn(&TypeRef) -> 
         })
         .collect();
 
-    // Assignments keep original field order (for struct literal)
-    let assignments: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+    // Assignments keep original field order (for struct literal), excluding cfg-gated
+    let assignments: Vec<String> = fields
+        .iter()
+        .filter(|f| f.cfg.is_none())
+        .map(|f| f.name.clone())
+        .collect();
 
     // Format param_list with line wrapping if needed
     let single_line = params.join(", ");
