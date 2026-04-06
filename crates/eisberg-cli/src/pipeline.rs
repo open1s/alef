@@ -691,6 +691,10 @@ fn dedup_api_surface(api: &mut ApiSurface) {
     // Dedup functions by name (keep first)
     let mut seen_fns: AHashSet<String> = AHashSet::new();
     api.functions.retain(|f| seen_fns.insert(f.name.clone()));
+
+    // Dedup errors by name (keep first)
+    let mut seen_errors: AHashSet<String> = AHashSet::new();
+    api.errors.retain(|e| seen_errors.insert(e.name.clone()));
 }
 
 fn apply_filters(mut api: ApiSurface, config: &SkifConfig) -> ApiSurface {
@@ -702,7 +706,8 @@ fn apply_filters(mut api: ApiSurface, config: &SkifConfig) -> ApiSurface {
         let expanded = expand_include_list(&api, &include.types);
         api.types.retain(|t| expanded.contains(&t.name));
         api.enums.retain(|e| expanded.contains(&e.name));
-        api.errors.retain(|e| expanded.contains(&e.name));
+        // Errors are NOT filtered by include list — they're always extracted
+        // when [generate] errors = true (controlled by the generation layer, not include)
     }
     if !include.functions.is_empty() {
         api.functions.retain(|f| include.functions.contains(&f.name));
