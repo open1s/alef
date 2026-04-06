@@ -55,6 +55,12 @@ pub struct SkifConfig {
     /// These get opaque wrapper structs in all backends.
     #[serde(default)]
     pub opaque_types: HashMap<String, String>,
+    /// Controls which generation passes eisberg runs (all default to true).
+    #[serde(default)]
+    pub generate: GenerateConfig,
+    /// Per-language overrides for generate flags (key = language name, e.g., "python").
+    #[serde(default)]
+    pub generate_overrides: HashMap<String, GenerateConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +85,52 @@ pub struct CrateConfig {
 
 fn default_version_from() -> String {
     "Cargo.toml".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Controls which generation passes eisberg runs.
+/// All flags default to `true`; set to `false` to skip a pass.
+/// Can be overridden per-language via `[generate_overrides.<lang>]`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerateConfig {
+    /// Generate low-level struct wrappers, From impls, module init (default: true)
+    #[serde(default = "default_true")]
+    pub bindings: bool,
+    /// Generate error type hierarchies from thiserror enums (default: true)
+    #[serde(default = "default_true")]
+    pub errors: bool,
+    /// Generate config builder constructors from Default types (default: true)
+    #[serde(default = "default_true")]
+    pub configs: bool,
+    /// Generate async/sync function pairs with runtime management (default: true)
+    #[serde(default = "default_true")]
+    pub async_wrappers: bool,
+    /// Generate recursive type marshaling helpers (default: true)
+    #[serde(default = "default_true")]
+    pub type_conversions: bool,
+    /// Generate package manifests (pyproject.toml, package.json, etc.) (default: true)
+    #[serde(default = "default_true")]
+    pub package_metadata: bool,
+    /// Generate idiomatic public API wrappers (default: true)
+    #[serde(default = "default_true")]
+    pub public_api: bool,
+}
+
+impl Default for GenerateConfig {
+    fn default() -> Self {
+        Self {
+            bindings: true,
+            errors: true,
+            configs: true,
+            async_wrappers: true,
+            type_conversions: true,
+            package_metadata: true,
+            public_api: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]

@@ -244,6 +244,8 @@ mod tests {
             custom_modules: CustomModulesConfig::default(),
             custom_registrations: CustomRegistrationsConfig::default(),
             opaque_types: std::collections::HashMap::new(),
+            generate: GenerateConfig::default(),
+            generate_overrides: std::collections::HashMap::new(),
         }
     }
 

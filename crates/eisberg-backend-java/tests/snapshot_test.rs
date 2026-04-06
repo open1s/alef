@@ -175,12 +175,20 @@ fn print_generated_java_code() {
             variants: vec![
                 ErrorVariant {
                     name: "IoError".to_string(),
-                    message: Some("I/O error".to_string()),
+                    message_template: Some("I/O error".to_string()),
+                    fields: vec![],
+                    has_source: false,
+                    has_from: false,
+                    is_unit: true,
                     doc: "File I/O error".to_string(),
                 },
                 ErrorVariant {
                     name: "OcrError".to_string(),
-                    message: Some("OCR processing failed".to_string()),
+                    message_template: Some("OCR processing failed".to_string()),
+                    fields: vec![],
+                    has_source: false,
+                    has_from: false,
+                    is_unit: true,
                     doc: "OCR processing error".to_string(),
                 },
             ],
@@ -229,6 +237,8 @@ fn print_generated_java_code() {
         custom_modules: eisberg_core::config::CustomModulesConfig::default(),
         custom_registrations: eisberg_core::config::CustomRegistrationsConfig::default(),
         opaque_types: std::collections::HashMap::new(),
+        generate: eisberg_core::config::GenerateConfig::default(),
+        generate_overrides: std::collections::HashMap::new(),
     };
 
     let result = backend.generate_bindings(&api, &config).unwrap();

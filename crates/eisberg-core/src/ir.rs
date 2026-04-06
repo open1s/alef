@@ -162,7 +162,20 @@ pub struct ErrorDef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorVariant {
     pub name: String,
-    pub message: Option<String>,
+    /// The `#[error("...")]` message template string, e.g. `"I/O error: {0}"`.
+    pub message_template: Option<String>,
+    /// Fields on this variant (struct or tuple fields).
+    #[serde(default)]
+    pub fields: Vec<FieldDef>,
+    /// True if any field has `#[source]` or `#[from]`.
+    #[serde(default)]
+    pub has_source: bool,
+    /// True if any field has `#[from]` (auto From conversion).
+    #[serde(default)]
+    pub has_from: bool,
+    /// True if this is a unit variant (no fields).
+    #[serde(default)]
+    pub is_unit: bool,
     pub doc: String,
 }
 

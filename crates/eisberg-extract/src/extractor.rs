@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use ahash::AHashMap;
 use anyhow::{Context, Result};
 use eisberg_core::ir::{
-    ApiSurface, EnumDef, EnumVariant, FieldDef, FunctionDef, MethodDef, ParamDef, ReceiverKind, TypeDef, TypeRef,
+    ApiSurface, EnumDef, EnumVariant, ErrorDef, ErrorVariant, FieldDef, FunctionDef, MethodDef, ParamDef, ReceiverKind,
+    TypeDef, TypeRef,
 };
 
 use crate::type_resolver;
@@ -183,7 +184,11 @@ fn extract_items(
             }
             syn::Item::Enum(item_enum) => {
                 if is_pub(&item_enum.vis) {
-                    if let Some(ed) = extract_enum(item_enum, crate_name, module_path) {
+                    if is_thiserror_enum(&item_enum.attrs) {
+                        if let Some(ed) = extract_error_enum(item_enum, crate_name, module_path) {
+                            surface.errors.push(ed);
+                        }
+                    } else if let Some(ed) = extract_enum(item_enum, crate_name, module_path) {
                         surface.enums.push(ed);
                     }
                 }
@@ -695,6 +700,147 @@ fn extract_enum(item: &syn::ItemEnum, crate_name: &str, module_path: &str) -> Op
         variants,
         doc,
         cfg,
+    })
+}
+
+/// Check if an enum derives `thiserror::Error` (or just `Error` from a `use thiserror::Error`).
+fn is_thiserror_enum(attrs: &[syn::Attribute]) -> bool {
+    has_derive(attrs, "Error") || has_derive_path(attrs, &["thiserror", "Error"])
+}
+
+/// Check if a `#[derive(...)]` attribute contains a specific multi-segment derive path.
+/// e.g. `has_derive_path(attrs, &["thiserror", "Error"])` matches `#[derive(thiserror::Error)]`.
+fn has_derive_path(attrs: &[syn::Attribute], segments: &[&str]) -> bool {
+    for attr in attrs {
+        if attr.path().is_ident("derive") {
+            if let Ok(nested) =
+                attr.parse_args_with(syn::punctuated::Punctuated::<syn::Path, syn::token::Comma>::parse_terminated)
+            {
+                for path in &nested {
+                    if path.segments.len() == segments.len()
+                        && path
+                            .segments
+                            .iter()
+                            .zip(segments.iter())
+                            .all(|(seg, expected)| seg.ident == expected)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Extract the `#[error("...")]` message template from a variant's attributes.
+fn extract_error_message_template(attrs: &[syn::Attribute]) -> Option<String> {
+    for attr in attrs {
+        if attr.path().is_ident("error") {
+            // Parse as #[error("template string")]
+            if let Ok(lit) = attr.parse_args::<syn::LitStr>() {
+                return Some(lit.value());
+            }
+        }
+    }
+    None
+}
+
+/// Check if a field has a specific attribute (e.g. `#[source]`, `#[from]`).
+fn has_field_attr(attrs: &[syn::Attribute], name: &str) -> bool {
+    attrs.iter().any(|a| a.path().is_ident(name))
+}
+
+/// Extract a `#[derive(thiserror::Error)]` enum into an `ErrorDef`.
+/// Returns `None` for generic enums.
+fn extract_error_enum(item: &syn::ItemEnum, crate_name: &str, module_path: &str) -> Option<ErrorDef> {
+    if !item.generics.params.is_empty() {
+        return None;
+    }
+    let name = item.ident.to_string();
+    let doc = extract_doc_comments(&item.attrs);
+
+    let variants = item
+        .variants
+        .iter()
+        .map(|v| {
+            let message_template = extract_error_message_template(&v.attrs);
+            let variant_doc = extract_doc_comments(&v.attrs);
+
+            let (fields, has_source, has_from, is_unit) = match &v.fields {
+                syn::Fields::Named(named) => {
+                    let mut source = false;
+                    let mut from = false;
+                    let fields: Vec<FieldDef> = named
+                        .named
+                        .iter()
+                        .map(|f| {
+                            if has_field_attr(&f.attrs, "source") {
+                                source = true;
+                            }
+                            if has_field_attr(&f.attrs, "from") {
+                                from = true;
+                                source = true; // #[from] implies source
+                            }
+                            extract_field(f)
+                        })
+                        .collect();
+                    (fields, source, from, false)
+                }
+                syn::Fields::Unnamed(unnamed) => {
+                    let mut source = false;
+                    let mut from = false;
+                    let fields: Vec<FieldDef> = unnamed
+                        .unnamed
+                        .iter()
+                        .enumerate()
+                        .map(|(i, f)| {
+                            if has_field_attr(&f.attrs, "source") {
+                                source = true;
+                            }
+                            if has_field_attr(&f.attrs, "from") {
+                                from = true;
+                                source = true;
+                            }
+                            let ty = type_resolver::resolve_type(&f.ty);
+                            let optional = type_resolver::is_option_type(&f.ty).is_some();
+                            FieldDef {
+                                name: format!("_{i}"),
+                                ty,
+                                optional,
+                                default: None,
+                                doc: extract_doc_comments(&f.attrs),
+                                sanitized: false,
+                                is_boxed: syn_type_is_boxed(&f.ty),
+                                type_rust_path: extract_field_type_rust_path(&f.ty),
+                                cfg: None,
+                            }
+                        })
+                        .collect();
+                    (fields, source, from, false)
+                }
+                syn::Fields::Unit => (vec![], false, false, true),
+            };
+
+            ErrorVariant {
+                name: v.ident.to_string(),
+                message_template,
+                fields,
+                has_source,
+                has_from,
+                is_unit,
+                doc: variant_doc,
+            }
+        })
+        .collect();
+
+    let rust_path = build_rust_path(crate_name, module_path, &name);
+
+    Some(ErrorDef {
+        name,
+        rust_path,
+        variants,
+        doc,
     })
 }
 
@@ -2433,5 +2579,142 @@ pub struct Beta { pub name: String }
             TypeRef::Named("Wrapper".to_string()),
             "Wrapper reference should remain as Named"
         );
+    }
+
+    #[test]
+    fn test_extract_thiserror_enum() {
+        let source = r#"
+            #[derive(Debug, thiserror::Error)]
+            pub enum MyError {
+                /// An I/O error.
+                #[error("I/O error: {0}")]
+                Io(#[from] std::io::Error),
+
+                /// A parsing error.
+                #[error("Parsing error: {message}")]
+                Parsing {
+                    message: String,
+                    #[source]
+                    source: Option<Box<dyn std::error::Error + Send + Sync>>,
+                },
+
+                /// A timeout error.
+                #[error("Extraction timed out after {elapsed_ms}ms")]
+                Timeout { elapsed_ms: u64, limit_ms: u64 },
+
+                /// A missing dependency.
+                #[error("Missing dependency: {0}")]
+                MissingDependency(String),
+
+                /// An unknown error.
+                #[error("Unknown error")]
+                Unknown,
+            }
+        "#;
+
+        let surface = extract_from_source(source);
+
+        // Should be in errors, NOT in enums
+        assert_eq!(surface.enums.len(), 0, "thiserror enum should not be in enums");
+        assert_eq!(surface.errors.len(), 1, "thiserror enum should be in errors");
+
+        let err = &surface.errors[0];
+        assert_eq!(err.name, "MyError");
+        assert_eq!(err.variants.len(), 5);
+
+        // Io variant: tuple with #[from]
+        let io = &err.variants[0];
+        assert_eq!(io.name, "Io");
+        assert_eq!(io.message_template.as_deref(), Some("I/O error: {0}"));
+        assert!(io.has_from, "Io should have from");
+        assert!(io.has_source, "Io should have source (implied by from)");
+        assert!(!io.is_unit, "Io is not a unit variant");
+        assert_eq!(io.fields.len(), 1);
+
+        // Parsing variant: struct with #[source]
+        let parsing = &err.variants[1];
+        assert_eq!(parsing.name, "Parsing");
+        assert_eq!(parsing.message_template.as_deref(), Some("Parsing error: {message}"));
+        assert!(!parsing.has_from, "Parsing should not have from");
+        assert!(parsing.has_source, "Parsing should have source");
+        assert!(!parsing.is_unit);
+        assert_eq!(parsing.fields.len(), 2);
+        assert_eq!(parsing.fields[0].name, "message");
+        assert_eq!(parsing.fields[1].name, "source");
+
+        // Timeout variant: struct, no source/from
+        let timeout = &err.variants[2];
+        assert_eq!(timeout.name, "Timeout");
+        assert_eq!(
+            timeout.message_template.as_deref(),
+            Some("Extraction timed out after {elapsed_ms}ms")
+        );
+        assert!(!timeout.has_from);
+        assert!(!timeout.has_source);
+        assert!(!timeout.is_unit);
+        assert_eq!(timeout.fields.len(), 2);
+
+        // MissingDependency: tuple variant, no source/from
+        let missing = &err.variants[3];
+        assert_eq!(missing.name, "MissingDependency");
+        assert_eq!(missing.message_template.as_deref(), Some("Missing dependency: {0}"));
+        assert!(!missing.has_from);
+        assert!(!missing.has_source);
+        assert!(!missing.is_unit);
+        assert_eq!(missing.fields.len(), 1);
+
+        // Unknown: unit variant
+        let unknown = &err.variants[4];
+        assert_eq!(unknown.name, "Unknown");
+        assert_eq!(unknown.message_template.as_deref(), Some("Unknown error"));
+        assert!(!unknown.has_from);
+        assert!(!unknown.has_source);
+        assert!(unknown.is_unit);
+        assert_eq!(unknown.fields.len(), 0);
+    }
+
+    #[test]
+    fn test_extract_thiserror_with_use_import() {
+        // When Error is imported via `use thiserror::Error`, the derive is just `Error`
+        let source = r#"
+            #[derive(Debug, Error)]
+            pub enum AppError {
+                #[error("not found")]
+                NotFound,
+
+                #[error("invalid input: {0}")]
+                InvalidInput(String),
+            }
+        "#;
+
+        let surface = extract_from_source(source);
+
+        assert_eq!(surface.enums.len(), 0);
+        assert_eq!(surface.errors.len(), 1);
+
+        let err = &surface.errors[0];
+        assert_eq!(err.name, "AppError");
+        assert_eq!(err.variants.len(), 2);
+
+        assert!(err.variants[0].is_unit);
+        assert_eq!(err.variants[0].message_template.as_deref(), Some("not found"));
+
+        assert!(!err.variants[1].is_unit);
+        assert_eq!(err.variants[1].fields.len(), 1);
+    }
+
+    #[test]
+    fn test_non_thiserror_enum_not_in_errors() {
+        let source = r#"
+            #[derive(Debug, Clone)]
+            pub enum Format {
+                Pdf,
+                Html,
+            }
+        "#;
+
+        let surface = extract_from_source(source);
+        assert_eq!(surface.enums.len(), 1);
+        assert_eq!(surface.errors.len(), 0, "non-thiserror enum should not be in errors");
     }
 }

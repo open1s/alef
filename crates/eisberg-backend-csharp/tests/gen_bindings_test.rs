@@ -139,6 +139,8 @@ fn test_basic_generation() {
         custom_modules: eisberg_core::config::CustomModulesConfig::default(),
         custom_registrations: eisberg_core::config::CustomRegistrationsConfig::default(),
         opaque_types: std::collections::HashMap::new(),
+        generate: eisberg_core::config::GenerateConfig::default(),
+        generate_overrides: std::collections::HashMap::new(),
     };
 
     // Generate bindings
@@ -269,6 +271,8 @@ fn test_namespace_resolution() {
         custom_modules: eisberg_core::config::CustomModulesConfig::default(),
         custom_registrations: eisberg_core::config::CustomRegistrationsConfig::default(),
         opaque_types: std::collections::HashMap::new(),
+        generate: eisberg_core::config::GenerateConfig::default(),
+        generate_overrides: std::collections::HashMap::new(),
     };
 
     let result = backend.generate_bindings(&api, &config);
@@ -330,6 +334,8 @@ fn test_generated_header() {
         custom_modules: eisberg_core::config::CustomModulesConfig::default(),
         custom_registrations: eisberg_core::config::CustomRegistrationsConfig::default(),
         opaque_types: std::collections::HashMap::new(),
+        generate: eisberg_core::config::GenerateConfig::default(),
+        generate_overrides: std::collections::HashMap::new(),
     };
 
     let result = backend.generate_bindings(&api, &config);
@@ -453,6 +459,8 @@ fn test_type_mapping() {
         custom_modules: eisberg_core::config::CustomModulesConfig::default(),
         custom_registrations: eisberg_core::config::CustomRegistrationsConfig::default(),
         opaque_types: std::collections::HashMap::new(),
+        generate: eisberg_core::config::GenerateConfig::default(),
+        generate_overrides: std::collections::HashMap::new(),
     };
 
     let result = backend.generate_bindings(&api, &config);

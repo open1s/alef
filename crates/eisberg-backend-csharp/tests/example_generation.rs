@@ -135,6 +135,8 @@ fn test_generated_code_example() {
         custom_modules: eisberg_core::config::CustomModulesConfig::default(),
         custom_registrations: eisberg_core::config::CustomRegistrationsConfig::default(),
         opaque_types: std::collections::HashMap::new(),
+        generate: eisberg_core::config::GenerateConfig::default(),
+        generate_overrides: std::collections::HashMap::new(),
     };
 
     let files = backend.generate_bindings(&api, &config).unwrap();
