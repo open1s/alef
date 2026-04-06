@@ -993,7 +993,7 @@ fn gen_php_named_let_bindings(
                 if p.optional {
                     writeln!(
                         out,
-                        "let {}_core: Option<{core_import}::{name}> = {}.clone().map(Into::into);",
+                        "let {}_core: Option<{core_import}::{name}> = {}.map(|v| v.clone().into());",
                         p.name, p.name
                     )
                     .ok();
