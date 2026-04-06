@@ -206,6 +206,8 @@ pub struct PythonConfig {
     pub module_name: Option<String>,
     pub async_runtime: Option<String>,
     pub stubs: Option<StubsConfig>,
+    #[serde(default)]
+    pub config_style: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,12 +218,16 @@ pub struct StubsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeConfig {
     pub package_name: Option<String>,
+    #[serde(default)]
+    pub config_style: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RubyConfig {
     pub gem_name: Option<String>,
     pub stubs: Option<StubsConfig>,
+    #[serde(default)]
+    pub config_style: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,11 +237,15 @@ pub struct PhpConfig {
     /// All generated code is wrapped in `#[cfg(feature = "...")]`.
     #[serde(default)]
     pub feature_gate: Option<String>,
+    #[serde(default)]
+    pub config_style: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElixirConfig {
     pub app_name: Option<String>,
+    #[serde(default)]
+    pub config_style: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -269,6 +279,8 @@ pub struct GoConfig {
     pub module: Option<String>,
     /// Override the Go package name (default: derived from module path)
     pub package_name: Option<String>,
+    #[serde(default)]
+    pub config_style: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -276,6 +288,8 @@ pub struct JavaConfig {
     pub package: Option<String>,
     #[serde(default = "default_java_ffi_style")]
     pub ffi_style: String,
+    #[serde(default)]
+    pub config_style: Option<String>,
 }
 
 fn default_java_ffi_style() -> String {
@@ -286,11 +300,15 @@ fn default_java_ffi_style() -> String {
 pub struct CSharpConfig {
     pub namespace: Option<String>,
     pub target_framework: Option<String>,
+    #[serde(default)]
+    pub config_style: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RConfig {
     pub package_name: Option<String>,
+    #[serde(default)]
+    pub config_style: Option<String>,
 }
 
 /// A parameter in an adapter function.

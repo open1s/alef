@@ -66,6 +66,14 @@ impl Backend for GoBackend {
             generated_header: true,
         }])
     }
+
+    /// Go bindings are already the public API (single .go file wrapping C FFI).
+    /// This returns empty since the binding.go file serves as both the FFI layer
+    /// and the high-level public API for consumers.
+    fn generate_public_api(&self, _api: &ApiSurface, _config: &SkifConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        // Go's binding.go IS the public API — no additional wrapper needed.
+        Ok(vec![])
+    }
 }
 
 /// Strip trailing whitespace from every line and ensure the file ends with a single newline.
@@ -89,10 +97,24 @@ fn gen_go_file(api: &ApiSurface, ffi_prefix: &str, pkg_name: &str, _ffi_lib_name
     writeln!(out, "package {}\n", pkg_name).ok();
     writeln!(out, "/*\n#include \"{}\"\n*/\nimport \"C\"", ffi_header).ok();
     writeln!(out).ok();
-    writeln!(out, "import (\n    \"encoding/json\"\n    \"fmt\"\n    \"unsafe\"\n)\n").ok();
+    // Determine imports — add "errors" if we have error types
+    if api.errors.is_empty() {
+        writeln!(out, "import (\n    \"encoding/json\"\n    \"fmt\"\n    \"unsafe\"\n)\n").ok();
+    } else {
+        writeln!(
+            out,
+            "import (\n    \"encoding/json\"\n    \"errors\"\n    \"fmt\"\n    \"unsafe\"\n)\n"
+        )
+        .ok();
+    }
 
     // Error helper functions
     writeln!(out, "{}\n", gen_last_error_helper(ffi_prefix)).ok();
+
+    // Generate error types (sentinel errors + structured error type)
+    for error in &api.errors {
+        writeln!(out, "{}\n", eisberg_codegen::error_gen::gen_go_error_types(error)).ok();
+    }
 
     // Generate enum types and constants
     for enum_def in &api.enums {
@@ -102,6 +124,10 @@ fn gen_go_file(api: &ApiSurface, ffi_prefix: &str, pkg_name: &str, _ffi_lib_name
     // Generate struct types
     for typ in &api.types {
         writeln!(out, "{}\n", gen_struct_type(typ)).ok();
+        // Generate functional options pattern if type has defaults
+        if typ.has_default {
+            writeln!(out, "{}\n", gen_config_options(typ)).ok();
+        }
     }
 
     // Generate free function wrappers
@@ -268,6 +294,13 @@ fn gen_struct_type(typ: &TypeDef) -> String {
     writeln!(out, "type {} struct {{", typ.name).ok();
 
     for field in &typ.fields {
+        // Skip unnamed tuple fields (name is "_0", "_1", "0", "1", etc.) — Go structs require named fields
+        if field.name.starts_with('_') && field.name[1..].chars().all(|c| c.is_ascii_digit())
+            || field.name.chars().next().is_none_or(|c| c.is_ascii_digit())
+        {
+            continue;
+        }
+
         let field_type = if field.optional {
             go_optional_type(&field.ty)
         } else {
@@ -678,4 +711,92 @@ fn type_name(ty: &TypeRef) -> String {
             eisberg_core::ir::PrimitiveType::Isize => "Isize".to_string(),
         },
     }
+}
+
+/// Generate functional options pattern for Go config types with defaults.
+/// Produces ConfigOption type and WithFieldName constructors.
+fn gen_config_options(typ: &TypeDef) -> String {
+    let mut out = String::with_capacity(2048);
+
+    // ConfigOption type definition
+    writeln!(out, "// {} option function", typ.name).ok();
+    writeln!(out, "type {}Option func(*{})", typ.name, typ.name).ok();
+    writeln!(out).ok();
+
+    // Generate WithFieldName constructors for each field
+    for field in &typ.fields {
+        // Skip unnamed tuple fields (name is "_0", "_1", "0", "1", etc.) — Go structs require named fields
+        if field.name.starts_with('_') && field.name[1..].chars().all(|c| c.is_ascii_digit())
+            || field.name.chars().next().is_none_or(|c| c.is_ascii_digit())
+        {
+            continue;
+        }
+
+        let field_go_name = to_go_name(&field.name);
+        // For the function parameter, always accept the direct type (not wrapped in optional)
+        let param_type = go_type(&field.ty);
+
+        writeln!(out, "// With{} sets the {} field.", field_go_name, field.name).ok();
+        writeln!(
+            out,
+            "func With{}(v {}) {}Option {{",
+            field_go_name, param_type, typ.name
+        )
+        .ok();
+        writeln!(out, "    return func(c *{}) {{ c.{} = v }}", typ.name, field_go_name).ok();
+        writeln!(out, "}}").ok();
+        writeln!(out).ok();
+    }
+
+    // Generate NewConfig constructor
+    writeln!(
+        out,
+        "// New{} creates a {} with optional parameters.",
+        typ.name, typ.name
+    )
+    .ok();
+    writeln!(out, "func New{}(opts ...{}Option) *{} {{", typ.name, typ.name, typ.name).ok();
+    writeln!(out, "    c := &{} {{", typ.name).ok();
+
+    // Set default values for fields
+    for field in &typ.fields {
+        // Skip unnamed tuple fields (name is "_0", "_1", "0", "1", etc.) — Go structs require named fields
+        if field.name.starts_with('_') && field.name[1..].chars().all(|c| c.is_ascii_digit())
+            || field.name.chars().next().is_none_or(|c| c.is_ascii_digit())
+        {
+            continue;
+        }
+
+        let field_go_name = to_go_name(&field.name);
+        let default_val = if let Some(default) = &field.default {
+            default.clone()
+        } else {
+            // Use type-appropriate zero value
+            match &field.ty {
+                TypeRef::String | TypeRef::Path | TypeRef::Json => "\"\"".to_string(),
+                TypeRef::Bytes => "[]byte{}".to_string(),
+                TypeRef::Primitive(p) => match p {
+                    eisberg_core::ir::PrimitiveType::Bool => "false".to_string(),
+                    eisberg_core::ir::PrimitiveType::F32 | eisberg_core::ir::PrimitiveType::F64 => "0.0".to_string(),
+                    _ => "0".to_string(),
+                },
+                TypeRef::Vec(_) => "[]".to_string() + &go_type(&field.ty),
+                TypeRef::Map(_, _) => "make(".to_string() + &go_type(&field.ty) + ")",
+                TypeRef::Optional(_) => "nil".to_string(),
+                TypeRef::Named(name) => format!("&{}{{}}", name),
+                TypeRef::Unit => "".to_string(),
+                TypeRef::Duration => "0".to_string(),
+            }
+        };
+        writeln!(out, "        {}: {},", field_go_name, default_val).ok();
+    }
+
+    writeln!(out, "    }}").ok();
+    writeln!(out, "    for _, opt := range opts {{").ok();
+    writeln!(out, "        opt(c)").ok();
+    writeln!(out, "    }}").ok();
+    writeln!(out, "    return c").ok();
+    writeln!(out, "}}").ok();
+
+    out
 }

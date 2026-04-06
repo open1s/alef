@@ -13,3 +13,4 @@ anyhow = { workspace = true }
 eisberg-adapters = { workspace = true }
 eisberg-codegen = { path = "../eisberg-codegen" }
 eisberg-core = { workspace = true }
+heck = { workspace = true }

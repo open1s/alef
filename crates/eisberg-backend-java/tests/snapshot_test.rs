@@ -31,6 +31,7 @@ fn print_generated_java_code() {
                         is_boxed: false,
                         type_rust_path: None,
                         cfg: None,
+                        typed_default: None,
                     },
                     FieldDef {
                         name: "timeout".to_string(),
@@ -42,6 +43,7 @@ fn print_generated_java_code() {
                         is_boxed: false,
                         type_rust_path: None,
                         cfg: None,
+                        typed_default: None,
                     },
                 ],
                 methods: vec![],
@@ -67,6 +69,7 @@ fn print_generated_java_code() {
                         is_boxed: false,
                         type_rust_path: None,
                         cfg: None,
+                        typed_default: None,
                     },
                     FieldDef {
                         name: "confidence".to_string(),
@@ -78,6 +81,7 @@ fn print_generated_java_code() {
                         is_boxed: false,
                         type_rust_path: None,
                         cfg: None,
+                        typed_default: None,
                     },
                 ],
                 methods: vec![],
@@ -101,6 +105,7 @@ fn print_generated_java_code() {
                         optional: false,
                         default: None,
                         sanitized: false,
+                        typed_default: None,
                     },
                     ParamDef {
                         name: "config".to_string(),
@@ -108,6 +113,7 @@ fn print_generated_java_code() {
                         optional: true,
                         default: None,
                         sanitized: false,
+                        typed_default: None,
                     },
                 ],
                 return_type: TypeRef::Named("ExtractionResult".to_string()),
@@ -128,6 +134,7 @@ fn print_generated_java_code() {
                         optional: false,
                         default: None,
                         sanitized: false,
+                        typed_default: None,
                     },
                     ParamDef {
                         name: "config".to_string(),
@@ -135,6 +142,7 @@ fn print_generated_java_code() {
                         optional: true,
                         default: None,
                         sanitized: false,
+                        typed_default: None,
                     },
                 ],
                 return_type: TypeRef::Named("ExtractionResult".to_string()),
@@ -226,6 +234,7 @@ fn print_generated_java_code() {
         java: Some(JavaConfig {
             package: Some("dev.kreuzberg.extraction".to_string()),
             ffi_style: "panama".to_string(),
+            config_style: None,
         }),
         csharp: None,
         r: None,

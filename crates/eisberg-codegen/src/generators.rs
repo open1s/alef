@@ -721,6 +721,27 @@ pub fn gen_struct(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfi
     sb.build()
 }
 
+/// Generate a `Default` impl for a non-opaque binding struct with `has_default`.
+/// All fields use their type's Default::default().
+/// This enables the struct to be used with `unwrap_or_default()` in config constructors.
+pub fn gen_struct_default_impl(typ: &TypeDef, name_prefix: &str) -> String {
+    let full_name = format!("{}{}", name_prefix, typ.name);
+    let mut out = String::with_capacity(256);
+    writeln!(out, "impl Default for {} {{", full_name).ok();
+    writeln!(out, "    fn default() -> Self {{").ok();
+    writeln!(out, "        Self {{").ok();
+    for field in &typ.fields {
+        if field.cfg.is_some() {
+            continue;
+        }
+        writeln!(out, "            {}: Default::default(),", field.name).ok();
+    }
+    writeln!(out, "        }}").ok();
+    writeln!(out, "    }}").ok();
+    write!(out, "}}").ok();
+    out
+}
+
 /// Generate an opaque wrapper struct with `inner: Arc<core::Type>`.
 /// For trait types, uses `Arc<dyn Type + Send + Sync>`.
 pub fn gen_opaque_struct(typ: &TypeDef, cfg: &RustBindingConfig) -> String {
@@ -806,7 +827,13 @@ pub fn gen_opaque_impl_block(
 /// Generate a constructor method.
 pub fn gen_constructor(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfig) -> String {
     let map_fn = |ty: &eisberg_core::ir::TypeRef| mapper.map_type(ty);
-    let (param_list, sig_defaults, assignments) = constructor_parts(&typ.fields, &map_fn);
+
+    // For types with has_default, generate optional kwargs-style constructor
+    let (param_list, sig_defaults, assignments) = if typ.has_default {
+        crate::shared::config_constructor_parts(&typ.fields, &map_fn)
+    } else {
+        constructor_parts(&typ.fields, &map_fn)
+    };
 
     let mut out = String::with_capacity(512);
     // Per-item clippy suppression: too_many_arguments when >7 params
@@ -1329,7 +1356,17 @@ pub fn gen_enum(enum_def: &EnumDef, cfg: &RustBindingConfig) -> String {
     for (idx, variant) in enum_def.variants.iter().enumerate() {
         writeln!(out, "    {} = {idx},", variant.name).ok();
     }
-    write!(out, "}}").ok();
+    writeln!(out, "}}").ok();
+
+    // Generate Default impl (first variant) so enums can be used with unwrap_or_default()
+    // in config constructors for types with has_default.
+    if let Some(first) = enum_def.variants.first() {
+        writeln!(out).ok();
+        writeln!(out, "impl Default for {} {{", enum_def.name).ok();
+        writeln!(out, "    fn default() -> Self {{ Self::{} }}", first.name).ok();
+        writeln!(out, "}}").ok();
+    }
+
     out
 }
 

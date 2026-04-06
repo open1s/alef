@@ -478,6 +478,7 @@ fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_path: &str) -
                 is_boxed: syn_type_is_boxed(&field.ty),
                 type_rust_path: extract_field_type_rust_path(&field.ty),
                 cfg: None,
+                typed_default: None,
             }]
         }
         _ => vec![],
@@ -526,6 +527,7 @@ fn extract_field(field: &syn::Field) -> FieldDef {
         is_boxed,
         type_rust_path,
         cfg,
+        typed_default: None,
     }
 }
 
@@ -679,6 +681,7 @@ fn extract_enum(item: &syn::ItemEnum, crate_name: &str, module_path: &str) -> Op
                             is_boxed: syn_type_is_boxed(&f.ty),
                             type_rust_path: extract_field_type_rust_path(&f.ty),
                             cfg: None,
+                            typed_default: None,
                         }
                     })
                     .collect(),
@@ -814,6 +817,7 @@ fn extract_error_enum(item: &syn::ItemEnum, crate_name: &str, module_path: &str)
                                 is_boxed: syn_type_is_boxed(&f.ty),
                                 type_rust_path: extract_field_type_rust_path(&f.ty),
                                 cfg: None,
+                                typed_default: None,
                             }
                         })
                         .collect();
@@ -1244,6 +1248,7 @@ fn extract_params(inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::token::C
                     optional,
                     default: None,
                     sanitized: false,
+                    typed_default: None,
                 })
             } else {
                 None // Skip self receiver

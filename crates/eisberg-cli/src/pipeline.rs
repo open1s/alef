@@ -173,6 +173,23 @@ pub fn generate_stubs(
     Ok(results)
 }
 
+/// Generate public API wrappers for given languages.
+pub fn generate_public_api(
+    api: &ApiSurface,
+    config: &SkifConfig,
+    languages: &[Language],
+) -> anyhow::Result<Vec<(Language, Vec<GeneratedFile>)>> {
+    let mut results = vec![];
+    for &lang in languages {
+        let backend = registry::get_backend(lang);
+        let files = backend.generate_public_api(api, config)?;
+        if !files.is_empty() {
+            results.push((lang, files));
+        }
+    }
+    Ok(results)
+}
+
 /// Write generated files to disk.
 pub fn write_files(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) -> anyhow::Result<usize> {
     let mut count = 0;
@@ -658,7 +675,7 @@ fn sanitize_type_ref(ty: &mut TypeRef, known_types: &AHashSet<String>, known_enu
 /// Deduplicate API surface items by name to prevent conflicting definitions.
 /// This resolves:
 /// 1. Type-enum collisions: If a name exists in both types and enums, keep only the enum
-/// Remove fields with `#[cfg(...)]` conditions from all types.
+/// 2. Remove fields with `#[cfg(...)]` conditions from all types.
 ///
 /// Binding crates may have different feature sets than the core crate,
 /// so including cfg-gated fields causes compilation errors.

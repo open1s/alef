@@ -27,6 +27,7 @@ fn test_basic_generation() {
                     is_boxed: false,
                     type_rust_path: None,
                     cfg: None,
+                    typed_default: None,
                 },
                 FieldDef {
                     name: "backend".to_string(),
@@ -38,6 +39,7 @@ fn test_basic_generation() {
                     is_boxed: false,
                     type_rust_path: None,
                     cfg: None,
+                    typed_default: None,
                 },
             ],
             methods: vec![],
@@ -59,6 +61,7 @@ fn test_basic_generation() {
                     optional: false,
                     default: None,
                     sanitized: false,
+                    typed_default: None,
                 },
                 ParamDef {
                     name: "config".to_string(),
@@ -66,6 +69,7 @@ fn test_basic_generation() {
                     optional: true,
                     default: None,
                     sanitized: false,
+                    typed_default: None,
                 },
             ],
             return_type: TypeRef::String,
@@ -129,6 +133,7 @@ fn test_basic_generation() {
         csharp: Some(CSharpConfig {
             namespace: Some("Kreuzberg".to_string()),
             target_framework: None,
+            config_style: None,
         }),
         r: None,
         scaffold: None,
@@ -261,6 +266,7 @@ fn test_namespace_resolution() {
         csharp: Some(CSharpConfig {
             namespace: Some("MyCompany.MyLib".to_string()),
             target_framework: None,
+            config_style: None,
         }),
         r: None,
         scaffold: None,
@@ -377,6 +383,7 @@ fn test_type_mapping() {
                     is_boxed: false,
                     type_rust_path: None,
                     cfg: None,
+                    typed_default: None,
                 },
                 FieldDef {
                     name: "i64_val".to_string(),
@@ -388,6 +395,7 @@ fn test_type_mapping() {
                     is_boxed: false,
                     type_rust_path: None,
                     cfg: None,
+                    typed_default: None,
                 },
                 FieldDef {
                     name: "string_val".to_string(),
@@ -399,6 +407,7 @@ fn test_type_mapping() {
                     is_boxed: false,
                     type_rust_path: None,
                     cfg: None,
+                    typed_default: None,
                 },
                 FieldDef {
                     name: "list_val".to_string(),
@@ -410,6 +419,7 @@ fn test_type_mapping() {
                     is_boxed: false,
                     type_rust_path: None,
                     cfg: None,
+                    typed_default: None,
                 },
             ],
             methods: vec![],

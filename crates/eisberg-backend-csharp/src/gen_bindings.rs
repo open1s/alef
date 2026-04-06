@@ -55,13 +55,34 @@ impl Backend for CsharpBackend {
             generated_header: true,
         });
 
-        // 2. Generate exception class
+        // 2. Generate error types from thiserror enums (if any), otherwise generic exception
+        if !api.errors.is_empty() {
+            for error in &api.errors {
+                let error_files = eisberg_codegen::error_gen::gen_csharp_error_types(error, &namespace);
+                for (class_name, content) in error_files {
+                    files.push(GeneratedFile {
+                        path: base_path.join(format!("{}.cs", class_name)),
+                        content: strip_trailing_whitespace(&content),
+                        generated_header: false, // already has header
+                    });
+                }
+            }
+        }
+
+        // Fallback generic exception class (always generated for GetLastError)
         let exception_class_name = format!("{}Exception", api.crate_name.to_pascal_case());
-        files.push(GeneratedFile {
-            path: base_path.join(format!("{}.cs", exception_class_name)),
-            content: strip_trailing_whitespace(&gen_exception_class(&namespace, &exception_class_name)),
-            generated_header: true,
-        });
+        if api.errors.is_empty()
+            || !api
+                .errors
+                .iter()
+                .any(|e| format!("{}Exception", e.name) == exception_class_name)
+        {
+            files.push(GeneratedFile {
+                path: base_path.join(format!("{}.cs", exception_class_name)),
+                content: strip_trailing_whitespace(&gen_exception_class(&namespace, &exception_class_name)),
+                generated_header: true,
+            });
+        }
 
         // 3. Generate main wrapper class
         let base_class_name = api.crate_name.to_pascal_case();
@@ -108,6 +129,15 @@ impl Backend for CsharpBackend {
         let _adapter_bodies = eisberg_adapters::build_adapter_bodies(config, Language::Csharp)?;
 
         Ok(files)
+    }
+
+    /// C# wrapper class is already the public API.
+    /// The `gen_wrapper_class` (generated in `generate_bindings`) provides high-level public methods
+    /// that wrap NativeMethods (P/Invoke), marshal types, and handle errors.
+    /// No additional facade is needed.
+    fn generate_public_api(&self, _api: &ApiSurface, _config: &SkifConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        // C#'s wrapper class IS the public API — no additional wrapper needed.
+        Ok(vec![])
     }
 }
 
@@ -580,6 +610,13 @@ fn gen_record_type(typ: &TypeDef, namespace: &str) -> String {
     out.push_str("{\n");
 
     for field in &typ.fields {
+        // Skip tuple struct internals (e.g., _0, _1, etc.)
+        if field.name.starts_with('_') && field.name[1..].chars().all(|c| c.is_ascii_digit())
+            || field.name.chars().next().is_none_or(|c| c.is_ascii_digit())
+        {
+            continue;
+        }
+
         // Doc comment for field
         if !field.doc.is_empty() {
             out.push_str("    /// <summary>\n");
@@ -605,11 +642,29 @@ fn gen_record_type(typ: &TypeDef, namespace: &str) -> String {
             };
             out.push_str(&format!("    public {} {} {{ get; set; }}", field_type, cs_name));
             out.push_str(" = null;\n");
-        } else if let Some(default) = &field.default {
-            // Field with an explicit default value
+        } else if typ.has_default || field.default.is_some() {
+            // Field with an explicit default value or part of a type with defaults
             let field_type = csharp_type(&field.ty).to_string();
             out.push_str(&format!("    public {} {} {{ get; set; }}", field_type, cs_name));
-            out.push_str(&format!(" = {};\n", default));
+            if let Some(default) = &field.default {
+                out.push_str(&format!(" = {};\n", default));
+            } else {
+                // Use type-appropriate zero value
+                let default_val = match &field.ty {
+                    TypeRef::String | TypeRef::Path | TypeRef::Json => "\"\"".to_string(),
+                    TypeRef::Bytes => "Array.Empty<byte>()".to_string(),
+                    TypeRef::Primitive(p) => match p {
+                        PrimitiveType::Bool => "false".to_string(),
+                        PrimitiveType::F32 | PrimitiveType::F64 => "0.0".to_string(),
+                        _ => "0".to_string(),
+                    },
+                    TypeRef::Vec(_) => "[]".to_string(),
+                    TypeRef::Map(_, _) => "new Dictionary<>()".to_string(),
+                    TypeRef::Duration => "0".to_string(),
+                    _ => "null".to_string(),
+                };
+                out.push_str(&format!(" = {};\n", default_val));
+            }
         } else {
             // Required field: no default, not optional
             let field_type = csharp_type(&field.ty).to_string();

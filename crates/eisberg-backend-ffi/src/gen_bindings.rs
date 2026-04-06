@@ -1420,6 +1420,7 @@ mod tests {
                         is_boxed: false,
                         type_rust_path: None,
                         cfg: None,
+                        typed_default: None,
                     },
                     FieldDef {
                         name: "name".to_string(),
@@ -1431,6 +1432,7 @@ mod tests {
                         is_boxed: false,
                         type_rust_path: None,
                         cfg: None,
+                        typed_default: None,
                     },
                     FieldDef {
                         name: "verbose".to_string(),
@@ -1442,6 +1444,7 @@ mod tests {
                         is_boxed: false,
                         type_rust_path: None,
                         cfg: None,
+                        typed_default: None,
                     },
                 ],
                 methods: vec![],
@@ -1462,6 +1465,7 @@ mod tests {
                     optional: false,
                     default: None,
                     sanitized: false,
+                    typed_default: None,
                 }],
                 return_type: TypeRef::Named("ExtractionResult".to_string()),
                 is_async: false,

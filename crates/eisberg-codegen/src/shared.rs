@@ -1,5 +1,5 @@
 use ahash::AHashSet;
-use eisberg_core::ir::{FieldDef, MethodDef, ParamDef, TypeRef};
+use eisberg_core::ir::{DefaultValue, FieldDef, MethodDef, ParamDef, TypeRef};
 
 /// Returns true if this parameter is required but must be promoted to optional
 /// because it follows an optional parameter in the list.
@@ -215,4 +215,75 @@ pub fn function_sig_defaults(params: &[ParamDef]) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Format a DefaultValue as Rust code for the target language.
+/// Used by backends generating config constructors with defaults.
+pub fn format_default_value(default: &DefaultValue) -> String {
+    match default {
+        DefaultValue::BoolLiteral(b) => format!("{}", b),
+        DefaultValue::StringLiteral(s) => format!("\"{}\"", s.escape_default()),
+        DefaultValue::IntLiteral(i) => format!("{}", i),
+        DefaultValue::FloatLiteral(f) => format!("{}", f),
+        DefaultValue::EnumVariant(v) => v.clone(),
+        DefaultValue::Empty => "Default::default()".to_string(),
+        DefaultValue::None => "None".to_string(),
+    }
+}
+
+/// Generate constructor parameter and assignment lists for types with has_default.
+/// All fields become Option<T> with None defaults for optional fields,
+/// or unwrap_or_else with actual defaults for required fields.
+///
+/// Returns (param_list, signature_defaults, assignments).
+/// This is used by PyO3 and similar backends that need signature annotations.
+pub fn config_constructor_parts(
+    fields: &[FieldDef],
+    type_mapper: &dyn Fn(&TypeRef) -> String,
+) -> (String, String, String) {
+    let mut sorted_fields: Vec<&FieldDef> = fields.iter().filter(|f| f.cfg.is_none()).collect();
+    sorted_fields.sort_by_key(|f| f.optional as u8);
+
+    let params: Vec<String> = sorted_fields
+        .iter()
+        .map(|f| {
+            let ty = type_mapper(&f.ty);
+            // All fields become Option<T>
+            format!("{}: Option<{}>", f.name, ty)
+        })
+        .collect();
+
+    // All fields have None default in signature
+    let defaults = sorted_fields
+        .iter()
+        .map(|f| format!("{}=None", f.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    // Assignments use unwrap_or_else with the typed default
+    let assignments: Vec<String> = fields
+        .iter()
+        .filter(|f| f.cfg.is_none())
+        .map(|f| {
+            if let Some(ref typed_default) = f.typed_default {
+                let default_val = format_default_value(typed_default);
+                format!("{}: {}.unwrap_or_else(|| {})", f.name, f.name, default_val)
+            } else if f.optional {
+                format!("{}: {}", f.name, f.name)
+            } else {
+                // All binding types should impl Default (enums default to first variant,
+                // structs default via From<CoreType::default()>). unwrap_or_default() works.
+                format!("{}: {}.unwrap_or_default()", f.name, f.name)
+            }
+        })
+        .collect();
+
+    let single_line = params.join(", ");
+    let param_list = if single_line.len() > 100 {
+        format!("\n        {},\n    ", params.join(",\n        "))
+    } else {
+        single_line
+    };
+
+    (param_list, defaults, assignments.join(", "))
 }

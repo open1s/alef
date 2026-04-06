@@ -48,4 +48,9 @@ pub trait Backend: Send + Sync {
     fn generate_scaffold(&self, _api: &ApiSurface, _config: &SkifConfig) -> anyhow::Result<Vec<GeneratedFile>> {
         Ok(vec![])
     }
+
+    /// Generate language-native public API wrappers. Optional — default returns empty.
+    fn generate_public_api(&self, _api: &ApiSurface, _config: &SkifConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        Ok(vec![])
+    }
 }

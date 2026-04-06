@@ -137,6 +137,16 @@ fn main() -> Result<()> {
             let count = pipeline::write_files(&files, &base_dir)?;
             // Auto-format generated Rust files
             pipeline::format_rust_files(&files, &base_dir);
+
+            // Generate public API wrappers
+            if config.generate.public_api {
+                let public_api_files = pipeline::generate_public_api(&api, &config, &languages)?;
+                if !public_api_files.is_empty() {
+                    let api_count = pipeline::write_files(&public_api_files, &base_dir)?;
+                    eprintln!("Generated {api_count} public API files");
+                }
+            }
+
             println!("Generated {count} files");
             Ok(())
         }
@@ -268,6 +278,15 @@ fn main() -> Result<()> {
             let stubs = pipeline::generate_stubs(&api, &config, &languages)?;
             let stub_count = pipeline::write_files(&stubs, &base_dir)?;
 
+            // Generate public API wrappers
+            let mut api_count = 0;
+            if config.generate.public_api {
+                let public_api_files = pipeline::generate_public_api(&api, &config, &languages)?;
+                if !public_api_files.is_empty() {
+                    api_count = pipeline::write_files(&public_api_files, &base_dir)?;
+                }
+            }
+
             eprintln!("Generating scaffolding...");
             let scaffold_files = pipeline::scaffold(&api, &config, &languages)?;
             let scaffold_count = pipeline::write_scaffold_files(&scaffold_files, &base_dir)?;
@@ -277,7 +296,7 @@ fn main() -> Result<()> {
             let readme_count = pipeline::write_scaffold_files(&readme_files, &base_dir)?;
 
             println!(
-                "Done: {binding_count} binding files, {stub_count} stub files, {scaffold_count} scaffold files, {readme_count} readme files"
+                "Done: {binding_count} binding files, {stub_count} stub files, {api_count} API files, {scaffold_count} scaffold files, {readme_count} readme files"
             );
             Ok(())
         }

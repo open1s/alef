@@ -1,4 +1,5 @@
 pub mod builder;
+pub mod config_gen;
 pub mod conversions;
 pub mod error_gen;
 pub mod generators;

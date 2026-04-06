@@ -1,5 +1,19 @@
 use serde::{Deserialize, Serialize};
 
+/// Typed default value for a field, enabling backends to emit language-native defaults.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum DefaultValue {
+    BoolLiteral(bool),
+    StringLiteral(String),
+    IntLiteral(i64),
+    FloatLiteral(f64),
+    EnumVariant(String),
+    /// Empty collection or Default::default()
+    Empty,
+    /// None / null
+    None,
+}
+
 /// Complete API surface extracted from a Rust crate's public interface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiSurface {
@@ -62,6 +76,9 @@ pub struct FieldDef {
     /// Used by backends to conditionally include fields in struct literals.
     #[serde(default)]
     pub cfg: Option<String>,
+    /// Typed default value for language-native default emission.
+    #[serde(default)]
+    pub typed_default: Option<DefaultValue>,
 }
 
 /// A method on a public struct.
@@ -128,6 +145,9 @@ pub struct ParamDef {
     /// True if this param's type was sanitized during unknown type resolution.
     #[serde(default)]
     pub sanitized: bool,
+    /// Typed default value for language-native default emission.
+    #[serde(default)]
+    pub typed_default: Option<DefaultValue>,
 }
 
 /// A public enum.

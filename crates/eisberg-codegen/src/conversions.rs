@@ -928,6 +928,7 @@ mod tests {
                     is_boxed: false,
                     type_rust_path: None,
                     cfg: None,
+                    typed_default: None,
                 },
                 FieldDef {
                     name: "timeout".into(),
@@ -939,6 +940,7 @@ mod tests {
                     is_boxed: false,
                     type_rust_path: None,
                     cfg: None,
+                    typed_default: None,
                 },
                 FieldDef {
                     name: "backend".into(),
@@ -950,6 +952,7 @@ mod tests {
                     is_boxed: false,
                     type_rust_path: None,
                     cfg: None,
+                    typed_default: None,
                 },
             ],
             methods: vec![],

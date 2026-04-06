@@ -24,6 +24,7 @@ fn test_generated_code_example() {
                     is_boxed: false,
                     type_rust_path: None,
                     cfg: None,
+                    typed_default: None,
                 },
                 FieldDef {
                     name: "timeout".to_string(),
@@ -35,6 +36,7 @@ fn test_generated_code_example() {
                     is_boxed: false,
                     type_rust_path: None,
                     cfg: None,
+                    typed_default: None,
                 },
             ],
             methods: vec![],
@@ -56,6 +58,7 @@ fn test_generated_code_example() {
                     optional: false,
                     default: None,
                     sanitized: false,
+                    typed_default: None,
                 },
                 ParamDef {
                     name: "config".to_string(),
@@ -63,6 +66,7 @@ fn test_generated_code_example() {
                     optional: true,
                     default: None,
                     sanitized: false,
+                    typed_default: None,
                 },
             ],
             return_type: TypeRef::String,
@@ -125,6 +129,7 @@ fn test_generated_code_example() {
         csharp: Some(CSharpConfig {
             namespace: Some("Kreuzberg".to_string()),
             target_framework: None,
+            config_style: None,
         }),
         r: None,
         scaffold: None,
