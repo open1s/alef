@@ -506,14 +506,136 @@ fn python_zero_value(ty: &eisberg_core::ir::TypeRef, enum_names: &std::collectio
 }
 
 /// Generate api.py — wrapper functions that convert Python types to Rust binding types.
+///
+/// For each function parameter whose type is a `has_default` struct (e.g. `ConversionOptions`),
+/// we generate a `_to_rust_{snake_name}` converter that maps the Python `@dataclass` instance
+/// to the Rust binding's pyclass by passing every field as a keyword argument.
 fn gen_api_py(api: &ApiSurface, module_name: &str) -> String {
+    use eisberg_core::ir::TypeRef;
+    use heck::ToSnakeCase;
+
     let package_name = module_name.trim_start_matches('_');
 
-    let mut out = String::with_capacity(2048);
+    // Build lookup: type_name → TypeDef for has_default types
+    let default_types: std::collections::HashMap<String, &eisberg_core::ir::TypeDef> = api
+        .types
+        .iter()
+        .filter(|t| t.has_default && !t.name.ends_with("Update"))
+        .map(|t| (t.name.clone(), t))
+        .collect();
+
+    // Determine which has_default types are referenced by function parameters (directly or nested)
+    let mut needed_converters: Vec<String> = Vec::new();
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    fn collect_needed(
+        type_name: &str,
+        default_types: &std::collections::HashMap<String, &eisberg_core::ir::TypeDef>,
+        needed: &mut Vec<String>,
+        visited: &mut std::collections::HashSet<String>,
+    ) {
+        if !visited.insert(type_name.to_string()) {
+            return;
+        }
+        if let Some(typ) = default_types.get(type_name) {
+            // First collect nested types so they appear before the parent converter
+            for field in &typ.fields {
+                let inner_name = match &field.ty {
+                    TypeRef::Named(n) => Some(n.as_str()),
+                    TypeRef::Optional(inner) => {
+                        if let TypeRef::Named(n) = inner.as_ref() {
+                            Some(n.as_str())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(name) = inner_name {
+                    if default_types.contains_key(name) {
+                        collect_needed(name, default_types, needed, visited);
+                    }
+                }
+            }
+            needed.push(type_name.to_string());
+        }
+    }
+
+    for func in &api.functions {
+        for param in &func.params {
+            let type_name = match &param.ty {
+                TypeRef::Named(n) => Some(n.as_str()),
+                TypeRef::Optional(inner) => {
+                    if let TypeRef::Named(n) = inner.as_ref() {
+                        Some(n.as_str())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some(name) = type_name {
+                collect_needed(name, &default_types, &mut needed_converters, &mut visited);
+            }
+        }
+    }
+
+    let mut out = String::with_capacity(4096);
     out.push_str("\"\"\"Public API for conversion.\"\"\"\n\n");
     out.push_str("from __future__ import annotations\n\n");
     out.push_str("from typing import Any\n\n");
-    out.push_str(&format!("import {package_name}.{module_name} as _rust\n\n\n"));
+    out.push_str(&format!("import {package_name}.{module_name} as _rust\n"));
+
+    // Import needed option types from .options
+    if !needed_converters.is_empty() {
+        let imports: Vec<&str> = needed_converters.iter().map(|s| s.as_str()).collect();
+        out.push_str(&format!("from .options import {}\n", imports.join(", ")));
+    }
+    out.push_str("\n\n");
+
+    // Generate converter functions for each needed has_default type
+    for type_name in &needed_converters {
+        let typ = default_types[type_name];
+        let snake = type_name.to_snake_case();
+
+        out.push_str(&format!("def _to_rust_{snake}(value: {type_name} | None) -> Any:\n"));
+        out.push_str(&format!(
+            "    \"\"\"Convert Python {type_name} to Rust binding type.\"\"\"\n"
+        ));
+        out.push_str("    if value is None:\n");
+        out.push_str("        return None\n");
+        out.push_str(&format!("    return _rust.{type_name}(\n"));
+
+        for field in &typ.fields {
+            // Check if the field's type is itself a has_default Named type (needs nested conversion)
+            let inner_named = match &field.ty {
+                TypeRef::Named(n) => Some(n.as_str()),
+                TypeRef::Optional(inner) => {
+                    if let TypeRef::Named(n) = inner.as_ref() {
+                        Some(n.as_str())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(nested_name) = inner_named {
+                if default_types.contains_key(nested_name) {
+                    let nested_snake = nested_name.to_snake_case();
+                    out.push_str(&format!(
+                        "        {}=_to_rust_{nested_snake}(value.{}),\n",
+                        field.name, field.name
+                    ));
+                    continue;
+                }
+            }
+
+            out.push_str(&format!("        {name}=value.{name},\n", name = field.name));
+        }
+
+        out.push_str("    )\n\n\n");
+    }
 
     // Generate wrapper for each function
     for func in &api.functions {
@@ -533,9 +655,38 @@ fn gen_api_py(api: &ApiSurface, module_name: &str) -> String {
             out.push_str(&format!("    \"\"\"{}\"\"\"\n", func.doc.lines().next().unwrap_or("")));
         }
 
-        // Forward call to Rust binding
-        let args: Vec<String> = func.params.iter().map(|p| p.name.clone()).collect();
-        out.push_str(&format!("    return _rust.{}({})\n\n\n", func.name, args.join(", ")));
+        // For each param that has a converter, emit a local conversion variable
+        let mut call_args = Vec::new();
+        for param in &func.params {
+            let type_name = match &param.ty {
+                TypeRef::Named(n) => Some(n.as_str()),
+                TypeRef::Optional(inner) => {
+                    if let TypeRef::Named(n) = inner.as_ref() {
+                        Some(n.as_str())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(name) = type_name {
+                if default_types.contains_key(name) {
+                    let snake = name.to_snake_case();
+                    let var = format!("_rust_{}", param.name);
+                    out.push_str(&format!("    {var} = _to_rust_{snake}({})\n", param.name));
+                    call_args.push(var);
+                    continue;
+                }
+            }
+            call_args.push(param.name.clone());
+        }
+
+        out.push_str(&format!(
+            "    return _rust.{}({})\n\n\n",
+            func.name,
+            call_args.join(", ")
+        ));
     }
 
     out
