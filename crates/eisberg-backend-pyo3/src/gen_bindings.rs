@@ -190,6 +190,16 @@ impl Backend for Pyo3Backend {
             ));
         }
 
+        // Error types (create_exception! macros + converter functions)
+        let module_name = config.python_module_name();
+        for error in &api.errors {
+            builder.add_item(&eisberg_codegen::error_gen::gen_pyo3_error_types(error, &module_name));
+            builder.add_item(&eisberg_codegen::error_gen::gen_pyo3_error_converter(
+                error,
+                &core_import,
+            ));
+        }
+
         let binding_to_core = eisberg_codegen::conversions::convertible_types(api);
         let core_to_binding = eisberg_codegen::conversions::core_to_binding_convertible_types(api);
         // From/Into conversions — separate sets for each direction
@@ -318,6 +328,13 @@ fn gen_module_init(module_name: &str, api: &ApiSurface, config: &SkifConfig) -> 
     }
     for func in &api.functions {
         lines.push(format!("    m.add_function(wrap_pyfunction!({}, m)?)?;", func.name));
+    }
+
+    // Register error exception types
+    for error in &api.errors {
+        for reg_line in eisberg_codegen::error_gen::gen_pyo3_error_registration(error) {
+            lines.push(reg_line);
+        }
     }
 
     lines.push("    Ok(())".to_string());
