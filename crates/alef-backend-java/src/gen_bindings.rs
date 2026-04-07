@@ -328,6 +328,9 @@ fn gen_main_class(api: &ApiSurface, _config: &AlefConfig, package: &str, class_n
     if body.contains("CompletionException") {
         writeln!(out, "import java.util.concurrent.CompletionException;").ok();
     }
+    if body.contains("com.fasterxml.jackson.databind.ObjectMapper") {
+        writeln!(out, "import com.fasterxml.jackson.databind.ObjectMapper;").ok();
+    }
     writeln!(out).ok();
 
     out.push_str(&body);
@@ -378,7 +381,7 @@ fn gen_sync_function_method(out: &mut String, func: &FunctionDef, prefix: &str, 
         writeln!(out, "        }} catch (Exception e) {{").ok();
         writeln!(
             out,
-            "            throw new {}Exception(\"FFI call failed\", t);",
+            "            throw new {}Exception(\"FFI call failed\", e);",
             class_name
         )
         .ok();
@@ -405,7 +408,49 @@ fn gen_sync_function_method(out: &mut String, func: &FunctionDef, prefix: &str, 
         writeln!(out, "        }} catch (Exception e) {{").ok();
         writeln!(
             out,
-            "            throw new {}Exception(\"FFI call failed\", t);",
+            "            throw new {}Exception(\"FFI call failed\", e);",
+            class_name
+        )
+        .ok();
+        writeln!(out, "        }}").ok();
+    } else if matches!(func.return_type, TypeRef::Named(_)) {
+        // Named types return a JSON string pointer that needs deserialization
+        let return_type_name = match &func.return_type {
+            TypeRef::Named(name) => name,
+            _ => unreachable!(),
+        };
+        let free_handle = format!("NativeLib.{}_FREE_STRING", prefix.to_uppercase());
+        writeln!(
+            out,
+            "            var resultPtr = (MemorySegment) {}.invoke({});",
+            ffi_handle,
+            call_args.join(", ")
+        )
+        .ok();
+        writeln!(out, "            if (resultPtr.equals(MemorySegment.NULL)) {{").ok();
+        writeln!(out, "                return null;").ok();
+        writeln!(out, "            }}").ok();
+        writeln!(
+            out,
+            "            String json = resultPtr.reinterpret(Long.MAX_VALUE).getString(0);"
+        )
+        .ok();
+        writeln!(out, "            {}.invoke(resultPtr);", free_handle).ok();
+        writeln!(
+            out,
+            "            var objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();"
+        )
+        .ok();
+        writeln!(
+            out,
+            "            return objectMapper.readValue(json, {}.class);",
+            return_type_name
+        )
+        .ok();
+        writeln!(out, "        }} catch (Exception e) {{").ok();
+        writeln!(
+            out,
+            "            throw new {}Exception(\"FFI call failed\", e);",
             class_name
         )
         .ok();
@@ -422,7 +467,7 @@ fn gen_sync_function_method(out: &mut String, func: &FunctionDef, prefix: &str, 
         writeln!(out, "        }} catch (Exception e) {{").ok();
         writeln!(
             out,
-            "            throw new {}Exception(\"FFI call failed\", t);",
+            "            throw new {}Exception(\"FFI call failed\", e);",
             class_name
         )
         .ok();

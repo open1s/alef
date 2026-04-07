@@ -215,7 +215,7 @@ impl Backend for NapiBackend {
         }])
     }
 
-    fn generate_public_api(&self, api: &ApiSurface, _config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+    fn generate_public_api(&self, api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
         // Collect all exported names from the API
         let mut exports = vec![];
 
@@ -256,7 +256,7 @@ impl Backend for NapiBackend {
                 let comma = if i < exports.len() - 1 { "," } else { "" };
                 lines.push(format!("  {}{}", name, comma));
             }
-            lines.push("} from './native';".to_string());
+            lines.push(format!("}} from '{}';", config.node_package_name()));
         }
 
         let content = lines.join("\n");
