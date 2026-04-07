@@ -341,7 +341,7 @@ fn gen_options_py(api: &ApiSurface, _package_name: &str) -> String {
     let mut out = String::with_capacity(4096);
     out.push_str("\"\"\"Configuration options for the conversion API.\"\"\"\n\n");
     out.push_str("from __future__ import annotations\n\n");
-    out.push_str("from dataclasses import dataclass\n");
+    out.push_str("from dataclasses import dataclass, field\n");
     out.push_str("from enum import Enum\n\n");
 
     // Collect enum names for type detection
@@ -496,11 +496,18 @@ fn typed_default_to_python(
                     return format!("\"{}\"", default_variant);
                 }
             }
-            // For Vec/Map/String, use Python-appropriate empty
+            // Type-appropriate zero values for Python
             match ty {
-                TypeRef::Vec(_) => "None".to_string(),
-                TypeRef::Map(_, _) => "None".to_string(),
-                TypeRef::String => "\"\"".to_string(),
+                TypeRef::Primitive(p) => match p {
+                    alef_core::ir::PrimitiveType::Bool => "False".to_string(),
+                    alef_core::ir::PrimitiveType::F32 | alef_core::ir::PrimitiveType::F64 => "0.0".to_string(),
+                    _ => "0".to_string(),
+                },
+                TypeRef::String | TypeRef::Path | TypeRef::Json => "\"\"".to_string(),
+                TypeRef::Bytes => "b\"\"".to_string(),
+                TypeRef::Duration => "0".to_string(),
+                TypeRef::Vec(_) => "field(default_factory=list)".to_string(),
+                TypeRef::Map(_, _) => "field(default_factory=dict)".to_string(),
                 _ => "None".to_string(),
             }
         }
@@ -519,8 +526,8 @@ fn python_zero_value(ty: &alef_core::ir::TypeRef, enum_names: &std::collections:
         },
         TypeRef::String | TypeRef::Path | TypeRef::Json => "\"\"".to_string(),
         TypeRef::Bytes => "b\"\"".to_string(),
-        TypeRef::Vec(_) => "None".to_string(),
-        TypeRef::Map(_, _) => "None".to_string(),
+        TypeRef::Vec(_) => "field(default_factory=list)".to_string(),
+        TypeRef::Map(_, _) => "field(default_factory=dict)".to_string(),
         TypeRef::Named(name) if enum_names.contains(name) => "\"\"".to_string(),
         TypeRef::Named(_) => "None".to_string(),
         TypeRef::Optional(_) => "None".to_string(),
@@ -734,7 +741,13 @@ fn gen_exceptions_py(api: &ApiSurface) -> String {
         // Base exception class
         out.push_str(&format!("class {}(Exception):\n", error.name));
         if !error.doc.is_empty() {
-            out.push_str(&format!("    \"\"\"{}\"\"\"\n", error.doc.lines().next().unwrap_or("")));
+            let doc = error.doc.lines().next().unwrap_or("").trim();
+            let doc = if doc.ends_with('.') {
+                doc.to_string()
+            } else {
+                format!("{}.", doc)
+            };
+            out.push_str(&format!("    \"\"\"{}\"\"\"\n", doc));
         }
         out.push_str("\n\n");
 
@@ -742,10 +755,13 @@ fn gen_exceptions_py(api: &ApiSurface) -> String {
         for variant in &error.variants {
             out.push_str(&format!("class {}({}):\n", variant.name, error.name));
             if !variant.doc.is_empty() {
-                out.push_str(&format!(
-                    "    \"\"\"{}\"\"\"\n",
-                    variant.doc.lines().next().unwrap_or("")
-                ));
+                let doc = variant.doc.lines().next().unwrap_or("").trim();
+                let doc = if doc.ends_with('.') {
+                    doc.to_string()
+                } else {
+                    format!("{}.", doc)
+                };
+                out.push_str(&format!("    \"\"\"{}\"\"\"\n", doc));
             }
             out.push_str("\n\n");
         }
