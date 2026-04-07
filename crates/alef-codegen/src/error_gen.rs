@@ -590,7 +590,7 @@ mod tests {
         let output = gen_pyo3_error_types(&error, "_module");
         assert!(output.contains("pyo3::create_exception!(_module, ParseError, pyo3::exceptions::PyException);"));
         assert!(output.contains("pyo3::create_exception!(_module, IoError, pyo3::exceptions::PyException);"));
-        assert!(output.contains("pyo3::create_exception!(_module, Other, pyo3::exceptions::PyException);"));
+        assert!(output.contains("pyo3::create_exception!(_module, OtherError, pyo3::exceptions::PyException);"));
         assert!(output.contains("pyo3::create_exception!(_module, ConversionError, pyo3::exceptions::PyException);"));
     }
 
@@ -631,7 +631,7 @@ mod tests {
             doc: String::new(),
         };
         let output = gen_pyo3_error_converter(&error, "my_crate");
-        assert!(output.contains("my_crate::MyError::NotFound => NotFound::new_err(msg),"));
+        assert!(output.contains("my_crate::MyError::NotFound => NotFoundError::new_err(msg),"));
         // Ensure no (..) for unit variants
         assert!(!output.contains("NotFound(..)"));
     }
