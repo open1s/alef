@@ -342,10 +342,27 @@ fn gen_options_py(api: &ApiSurface, _package_name: &str) -> String {
     out.push_str("\"\"\"Configuration options for the conversion API.\"\"\"\n\n");
     out.push_str("from __future__ import annotations\n\n");
     out.push_str("from dataclasses import dataclass, field\n");
-    out.push_str("from enum import Enum\n\n");
+    out.push_str("from enum import Enum\n");
+    out.push_str("from typing import Any\n\n\n");
 
     // Collect enum names for type detection
     let enum_names: std::collections::HashSet<String> = api.enums.iter().map(|e| e.name.clone()).collect();
+
+    // Collect all Named types referenced by has_default types
+    let mut referenced_types: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for typ in &api.types {
+        if typ.has_default {
+            for field in &typ.fields {
+                if let TypeRef::Named(name) = &field.ty {
+                    referenced_types.insert(name.clone());
+                } else if let TypeRef::Optional(inner) = &field.ty {
+                    if let TypeRef::Named(name) = inner.as_ref() {
+                        referenced_types.insert(name.clone());
+                    }
+                }
+            }
+        }
+    }
 
     // Generate only "public" enums — skip internal types like TextDirection, LinkType etc.
     // that aren't part of the user-facing config API.
@@ -357,6 +374,12 @@ fn gen_options_py(api: &ApiSurface, _package_name: &str) -> String {
                 if let TypeRef::Named(name) = &field.ty {
                     if enum_names.contains(name) {
                         needed_enums.insert(name.clone());
+                    }
+                } else if let TypeRef::Optional(inner) = &field.ty {
+                    if let TypeRef::Named(name) = inner.as_ref() {
+                        if enum_names.contains(name) {
+                            needed_enums.insert(name.clone());
+                        }
                     }
                 }
             }
@@ -392,6 +415,15 @@ fn gen_options_py(api: &ApiSurface, _package_name: &str) -> String {
         out.push_str("\n\n");
     }
 
+    // Generate stub classes for non-enum Named types that are referenced
+    for type_name in &referenced_types {
+        if !enum_names.contains(type_name) && !api.types.iter().any(|t| &t.name == type_name && t.has_default) {
+            out.push_str(&format!("class {}:\n", type_name));
+            out.push_str(&format!("    \"\"\"Placeholder for {} type.\"\"\"\n", type_name));
+            out.push_str("\n\n");
+        }
+    }
+
     // Generate @dataclass for types with has_default (user-facing config types)
     for typ in &api.types {
         if !typ.has_default || typ.fields.is_empty() {
@@ -412,23 +444,30 @@ fn gen_options_py(api: &ApiSurface, _package_name: &str) -> String {
             // Determine Python type hint
             let type_hint = python_field_type(&field.ty, field.optional, &enum_names);
 
-            // Determine default value
-            let default = if let Some(td) = &field.typed_default {
-                typed_default_to_python(td, &field.ty, &enum_defaults)
+            // Determine default value and check if we need | None
+            let (type_hint_with_none, default) = if let Some(td) = &field.typed_default {
+                let default = typed_default_to_python(td, &field.ty, &enum_defaults);
+                (type_hint.clone(), default)
             } else if field.optional {
-                "None".to_string()
+                // If default is None but type is Named (not already Optional), add | None
+                let final_hint = if !type_hint.contains('|') && matches!(&field.ty, TypeRef::Named(_)) {
+                    format!("{} | None", type_hint)
+                } else {
+                    type_hint.clone()
+                };
+                (final_hint, "None".to_string())
             } else {
-                python_zero_value(&field.ty, &enum_names)
+                (type_hint.clone(), python_zero_value(&field.ty, &enum_names))
             };
 
             if !field.doc.is_empty() {
-                out.push_str(&format!("    {}: {} = {}\n", field.name, type_hint, default));
+                out.push_str(&format!("    {}: {} = {}\n", field.name, type_hint_with_none, default));
                 out.push_str(&format!(
                     "    \"\"\"{}\"\"\"\n\n",
                     field.doc.lines().next().unwrap_or("")
                 ));
             } else {
-                out.push_str(&format!("    {}: {} = {}\n", field.name, type_hint, default));
+                out.push_str(&format!("    {}: {} = {}\n", field.name, type_hint_with_none, default));
             }
         }
         out.push('\n');
@@ -439,6 +478,7 @@ fn gen_options_py(api: &ApiSurface, _package_name: &str) -> String {
 
 /// Map IR TypeRef to Python type hint string for dataclass fields.
 /// Enum-typed fields become `str` (users pass string literals).
+/// Non-enum Named types that aren't defined become `Any` to avoid F821 errors.
 fn python_field_type(
     ty: &alef_core::ir::TypeRef,
     optional: bool,
@@ -460,7 +500,7 @@ fn python_field_type(
             python_field_type(v, false, enum_names)
         ),
         TypeRef::Named(name) if enum_names.contains(name) => "str".to_string(),
-        TypeRef::Named(name) => name.clone(),
+        TypeRef::Named(_name) => "Any".to_string(), // Use Any for undefined types to avoid F821
         TypeRef::Optional(inner) => {
             return format!("{} | None", python_field_type(inner, false, enum_names));
         }
@@ -732,6 +772,7 @@ fn gen_api_py(api: &ApiSurface, module_name: &str) -> String {
 }
 
 /// Generate exceptions.py — exception hierarchy from IR error definitions.
+/// Appends "Error" suffix to variant names that don't already have it (N818 compliance).
 fn gen_exceptions_py(api: &ApiSurface) -> String {
     let mut out = String::with_capacity(1024);
     out.push_str("\"\"\"Exception hierarchy.\"\"\"\n\n");
@@ -753,7 +794,13 @@ fn gen_exceptions_py(api: &ApiSurface) -> String {
 
         // Per-variant exception subclasses
         for variant in &error.variants {
-            out.push_str(&format!("class {}({}):\n", variant.name, error.name));
+            // Append "Error" suffix if not already present (N818 compliance)
+            let variant_name = if variant.name.ends_with("Error") {
+                variant.name.clone()
+            } else {
+                format!("{}Error", variant.name)
+            };
+            out.push_str(&format!("class {}({}):\n", variant_name, error.name));
             if !variant.doc.is_empty() {
                 let doc = variant.doc.lines().next().unwrap_or("").trim();
                 let doc = if doc.ends_with('.') {
@@ -815,12 +862,18 @@ fn gen_init_py(api: &ApiSurface, _module_name: &str, version: &str) -> String {
     opt_imports.sort();
     imports_from_options.extend(opt_imports);
 
-    // Import exceptions
+    // Import exceptions (append "Error" suffix to variant names if not present)
     let mut exc_names = Vec::new();
     for error in &api.errors {
         exc_names.push(error.name.clone());
         for variant in &error.variants {
-            exc_names.push(variant.name.clone());
+            // Append "Error" suffix if not already present (N818 compliance)
+            let variant_name = if variant.name.ends_with("Error") {
+                variant.name.clone()
+            } else {
+                format!("{}Error", variant.name)
+            };
+            exc_names.push(variant_name);
         }
     }
     exc_names.sort();

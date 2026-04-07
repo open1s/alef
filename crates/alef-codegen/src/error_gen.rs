@@ -1,15 +1,21 @@
 use alef_core::ir::{ErrorDef, ErrorVariant};
 
 /// Generate `pyo3::create_exception!` macros for each error variant plus the base error type.
+/// Appends "Error" suffix to variant names that don't already have it (N818 compliance).
 pub fn gen_pyo3_error_types(error: &ErrorDef, module_name: &str) -> String {
     let mut lines = Vec::with_capacity(error.variants.len() + 2);
     lines.push("// Error types".to_string());
 
-    // One exception per variant
+    // One exception per variant (with Error suffix if needed)
     for variant in &error.variants {
+        let variant_name = if variant.name.ends_with("Error") {
+            variant.name.clone()
+        } else {
+            format!("{}Error", variant.name)
+        };
         lines.push(format!(
             "pyo3::create_exception!({module_name}, {}, pyo3::exceptions::PyException);",
-            variant.name
+            variant_name
         ));
     }
 
@@ -23,6 +29,7 @@ pub fn gen_pyo3_error_types(error: &ErrorDef, module_name: &str) -> String {
 }
 
 /// Generate a `to_py_err` converter function that maps each Rust error variant to a Python exception.
+/// Uses Error-suffixed names for variant exceptions (N818 compliance).
 pub fn gen_pyo3_error_converter(error: &ErrorDef, core_import: &str) -> String {
     let rust_path = if error.rust_path.is_empty() {
         format!("{core_import}::{}", error.name)
@@ -44,7 +51,12 @@ pub fn gen_pyo3_error_converter(error: &ErrorDef, core_import: &str) -> String {
         } else {
             format!("{rust_path}::{}(..)", variant.name)
         };
-        lines.push(format!("        {pattern} => {}::new_err(msg),", variant.name));
+        let variant_exc_name = if variant.name.ends_with("Error") {
+            variant.name.clone()
+        } else {
+            format!("{}Error", variant.name)
+        };
+        lines.push(format!("        {pattern} => {}::new_err(msg),", variant_exc_name));
     }
 
     // Catch-all for cfg-gated variants not in the IR
@@ -55,13 +67,19 @@ pub fn gen_pyo3_error_converter(error: &ErrorDef, core_import: &str) -> String {
 }
 
 /// Generate `m.add(...)` registration calls for each exception type.
+/// Uses Error-suffixed names for variant exceptions (N818 compliance).
 pub fn gen_pyo3_error_registration(error: &ErrorDef) -> Vec<String> {
     let mut registrations = Vec::with_capacity(error.variants.len() + 1);
 
     for variant in &error.variants {
+        let variant_exc_name = if variant.name.ends_with("Error") {
+            variant.name.clone()
+        } else {
+            format!("{}Error", variant.name)
+        };
         registrations.push(format!(
             "    m.add(\"{}\", m.py().get_type::<{}>())?;",
-            variant.name, variant.name
+            variant_exc_name, variant_exc_name
         ));
     }
 
