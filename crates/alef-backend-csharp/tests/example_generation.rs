@@ -131,7 +131,6 @@ fn test_generated_code_example() {
         csharp: Some(CSharpConfig {
             namespace: Some("Kreuzberg".to_string()),
             target_framework: None,
-            config_style: None,
         }),
         r: None,
         scaffold: None,

@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum SkifError {
+pub enum AlefError {
     #[error("Config error: {0}")]
     Config(String),
     #[error("Extraction error: {0}")]

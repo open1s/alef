@@ -5,5 +5,5 @@ pub mod ir;
 
 pub use backend::{Backend, Capabilities, GeneratedFile};
 pub use config::{AlefConfig, resolve_output_dir};
-pub use error::SkifError;
+pub use error::AlefError;
 pub use ir::ApiSurface;

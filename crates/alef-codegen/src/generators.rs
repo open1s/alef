@@ -77,6 +77,25 @@ pub fn is_trait_method_name(name: &str) -> bool {
     TRAIT_METHOD_NAMES.contains(&name)
 }
 
+/// Check if any two field names are similar enough to trigger clippy::similar_names.
+/// This detects patterns like "sub_symbol" and "sup_symbol" (differ by 1-2 chars).
+fn has_similar_names(names: &[&String]) -> bool {
+    for (i, &name1) in names.iter().enumerate() {
+        for &name2 in &names[i + 1..] {
+            // Simple heuristic: if names differ by <= 2 characters and have same length, flag it
+            if name1.len() == name2.len() && diff_count(name1, name2) <= 2 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Count how many characters differ between two strings of equal length.
+fn diff_count(s1: &str, s2: &str) -> usize {
+    s1.chars().zip(s2.chars()).filter(|(c1, c2)| c1 != c2).count()
+}
+
 /// Wrap a core-call result for opaque delegation methods.
 ///
 /// - `TypeRef::Named(n)` where `n == type_name` → re-wrap in `Self { inner: Arc::new(...) }`
@@ -697,6 +716,13 @@ pub fn gen_struct(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfi
     for attr in cfg.struct_attrs {
         sb.add_attr(attr);
     }
+
+    // Check if struct has similar field names (e.g., sub_symbol and sup_symbol)
+    let field_names: Vec<_> = typ.fields.iter().filter(|f| f.cfg.is_none()).map(|f| &f.name).collect();
+    if has_similar_names(&field_names) {
+        sb.add_attr("allow(clippy::similar_names)");
+    }
+
     for d in cfg.struct_derives {
         sb.add_derive(d);
     }
@@ -723,6 +749,7 @@ pub fn gen_struct(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfi
 
 /// Generate a `Default` impl for a non-opaque binding struct with `has_default`.
 /// All fields use their type's Default::default().
+/// Optional fields use None instead of Default::default().
 /// This enables the struct to be used with `unwrap_or_default()` in config constructors.
 pub fn gen_struct_default_impl(typ: &TypeDef, name_prefix: &str) -> String {
     let full_name = format!("{}{}", name_prefix, typ.name);
@@ -734,7 +761,11 @@ pub fn gen_struct_default_impl(typ: &TypeDef, name_prefix: &str) -> String {
         if field.cfg.is_some() {
             continue;
         }
-        writeln!(out, "            {}: Default::default(),", field.name).ok();
+        let default_val = match &field.ty {
+            TypeRef::Optional(_) => "None".to_string(),
+            _ => "Default::default()".to_string(),
+        };
+        writeln!(out, "            {}: {},", field.name, default_val).ok();
     }
     writeln!(out, "        }}").ok();
     writeln!(out, "    }}").ok();
@@ -840,6 +871,7 @@ pub fn gen_constructor(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBinding
     if typ.fields.len() > 7 {
         writeln!(out, "    #[allow(clippy::too_many_arguments)]").ok();
     }
+    writeln!(out, "    #[must_use]").ok();
     if cfg.needs_signature {
         writeln!(
             out,

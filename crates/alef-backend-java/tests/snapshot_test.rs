@@ -237,7 +237,6 @@ fn print_generated_java_code() {
         java: Some(JavaConfig {
             package: Some("dev.kreuzberg.extraction".to_string()),
             ffi_style: "panama".to_string(),
-            config_style: None,
         }),
         csharp: None,
         r: None,

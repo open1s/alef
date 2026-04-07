@@ -627,23 +627,6 @@ fn gen_method_wrapper(
 
     let qualified = format!("{core_import}::{type_name}");
 
-    // Build parameter list
-    let mut params = Vec::new();
-    if !method.is_static {
-        let receiver_ty = match method.receiver.as_ref().unwrap_or(&ReceiverKind::Ref) {
-            ReceiverKind::Ref => format!("*const {qualified}"),
-            ReceiverKind::RefMut | ReceiverKind::Owned => format!("*mut {qualified}"),
-        };
-        params.push(format!("    this: {receiver_ty}"));
-    }
-    for p in &method.params {
-        params.push(format!("    {}: {}", p.name, c_param_type(&p.ty, core_import)));
-        // Bytes parameters need a separate length parameter
-        if matches!(p.ty, TypeRef::Bytes) {
-            params.push(format!("    {}_len: usize", p.name));
-        }
-    }
-
     // Return type
     let has_error = method.error_type.is_some();
     let mut ret_type = if has_error && is_void_return(&method.return_type) {
@@ -663,6 +646,42 @@ fn gen_method_wrapper(
         ret_type = ret_type.replace("Self", &qualified);
     }
 
+    // Check if this method will be unimplemented before building params
+    let has_opaque_param = method
+        .params
+        .iter()
+        .any(|p| matches!(&p.ty, TypeRef::Named(n) if opaque_types.contains(n)));
+    let has_opaque_return = has_opaque_type_in_return(&method.return_type, opaque_types);
+    let will_be_unimplemented = method.sanitized || has_opaque_param || has_opaque_return;
+
+    // Build parameter list — prefix with _ if unimplemented
+    let mut params = Vec::new();
+    if !method.is_static {
+        let receiver_ty = match method.receiver.as_ref().unwrap_or(&ReceiverKind::Ref) {
+            ReceiverKind::Ref => format!("*const {qualified}"),
+            ReceiverKind::RefMut | ReceiverKind::Owned => format!("*mut {qualified}"),
+        };
+        let param_name = if will_be_unimplemented { "_this" } else { "this" };
+        params.push(format!("    {param_name}: {receiver_ty}"));
+    }
+    for p in &method.params {
+        let param_name = if will_be_unimplemented {
+            format!("_{}", p.name)
+        } else {
+            p.name.clone()
+        };
+        params.push(format!("    {}: {}", param_name, c_param_type(&p.ty, core_import)));
+        // Bytes parameters need a separate length parameter
+        if matches!(p.ty, TypeRef::Bytes) {
+            let len_param_name = if will_be_unimplemented {
+                format!("_{}_len", p.name)
+            } else {
+                format!("{}_len", p.name)
+            };
+            params.push(format!("    {}: usize", len_param_name));
+        }
+    }
+
     if is_void_return(&method.return_type) && !has_error {
         writeln!(out, "pub unsafe extern \"C\" fn {fn_name}(").unwrap();
         writeln!(out, "{}", params.join(",\n")).unwrap();
@@ -675,15 +694,8 @@ fn gen_method_wrapper(
 
     writeln!(out, "    clear_last_error();").unwrap();
 
-    // If method signature was sanitized, generate todo!() — delegation would fail
-    // Also skip if any param is an opaque Named type (no serde/Clone available)
-    // or if return type involves opaque types in Vec/Map (no serde Serialize)
-    let has_opaque_param = method
-        .params
-        .iter()
-        .any(|p| matches!(&p.ty, TypeRef::Named(n) if opaque_types.contains(n)));
-    let has_opaque_return = has_opaque_type_in_return(&method.return_type, opaque_types);
-    if method.sanitized || has_opaque_param || has_opaque_return {
+    // If method signature was sanitized, generate unimplemented body
+    if will_be_unimplemented {
         writeln!(
             out,
             "{}",
@@ -821,22 +833,40 @@ fn gen_free_function(
     }
     writeln!(out, "#[unsafe(no_mangle)]").unwrap();
 
-    // Build parameter list
-    let mut params = Vec::new();
-    for p in &func.params {
-        params.push(format!("    {}: {}", p.name, c_param_type(&p.ty, core_import)));
-        // Bytes parameters need a separate length parameter
-        if matches!(p.ty, TypeRef::Bytes) {
-            params.push(format!("    {}_len: usize", p.name));
-        }
-    }
-
     let has_error = func.error_type.is_some();
     let ret_type = if has_error && is_void_return(&func.return_type) {
         "i32".to_string()
     } else {
         c_return_type(&func.return_type, core_import).into_owned()
     };
+
+    // Check if this function will be unimplemented before building params
+    let has_opaque_param = func
+        .params
+        .iter()
+        .any(|p| matches!(&p.ty, TypeRef::Named(n) if opaque_types.contains(n)));
+    let has_opaque_return = has_opaque_type_in_return(&func.return_type, opaque_types);
+    let will_be_unimplemented = func.sanitized || has_opaque_param || has_opaque_return;
+
+    // Build parameter list — prefix with _ if unimplemented
+    let mut params = Vec::new();
+    for p in &func.params {
+        let param_name = if will_be_unimplemented {
+            format!("_{}", p.name)
+        } else {
+            p.name.clone()
+        };
+        params.push(format!("    {}: {}", param_name, c_param_type(&p.ty, core_import)));
+        // Bytes parameters need a separate length parameter
+        if matches!(p.ty, TypeRef::Bytes) {
+            let len_param_name = if will_be_unimplemented {
+                format!("_{}_len", p.name)
+            } else {
+                format!("{}_len", p.name)
+            };
+            params.push(format!("    {}: usize", len_param_name));
+        }
+    }
 
     if is_void_return(&func.return_type) && !has_error {
         writeln!(out, "pub unsafe extern \"C\" fn {ffi_name}(").unwrap();
@@ -850,13 +880,8 @@ fn gen_free_function(
 
     writeln!(out, "    clear_last_error();").unwrap();
 
-    // If function signature was sanitized or involves opaque types, generate todo!()
-    let has_opaque_param = func
-        .params
-        .iter()
-        .any(|p| matches!(&p.ty, TypeRef::Named(n) if opaque_types.contains(n)));
-    let has_opaque_return = has_opaque_type_in_return(&func.return_type, opaque_types);
-    if func.sanitized || has_opaque_param || has_opaque_return {
+    // If function signature was sanitized or involves opaque types, generate unimplemented body
+    if will_be_unimplemented {
         writeln!(
             out,
             "{}",

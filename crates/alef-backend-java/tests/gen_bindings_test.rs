@@ -110,7 +110,6 @@ fn test_basic_generation() {
         java: Some(JavaConfig {
             package: Some("com.example".to_string()),
             ffi_style: "panama".to_string(),
-            config_style: None,
         }),
         csharp: None,
         r: None,
@@ -368,7 +367,6 @@ fn test_optional_field_defaults_in_builder() {
         java: Some(JavaConfig {
             package: Some("com.example".to_string()),
             ffi_style: "panama".to_string(),
-            config_style: None,
         }),
         csharp: None,
         r: None,

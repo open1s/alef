@@ -43,6 +43,7 @@ pub fn gen_pyo3_error_converter(error: &ErrorDef, core_import: &str) -> String {
     lines.push(format!("/// Convert a `{rust_path}` error to a Python exception."));
     lines.push(format!("fn {fn_name}(e: {rust_path}) -> pyo3::PyErr {{"));
     lines.push("    let msg = e.to_string();".to_string());
+    lines.push("    #[allow(unreachable_patterns)]".to_string());
     lines.push("    match &e {".to_string());
 
     for variant in &error.variants {
@@ -147,6 +148,7 @@ pub fn gen_napi_error_converter(error: &ErrorDef, core_import: &str) -> String {
     lines.push("#[allow(dead_code)]".to_string());
     lines.push(format!("fn {fn_name}(e: {rust_path}) -> napi::Error {{"));
     lines.push("    let msg = e.to_string();".to_string());
+    lines.push("    #[allow(unreachable_patterns)]".to_string());
     lines.push("    match &e {".to_string());
 
     for variant in &error.variants {
@@ -222,6 +224,7 @@ pub fn gen_php_error_converter(error: &ErrorDef, core_import: &str) -> String {
         "fn {fn_name}(e: {rust_path}) -> ext_php_rs::exception::PhpException {{"
     ));
     lines.push("    let msg = e.to_string();".to_string());
+    lines.push("    #[allow(unreachable_patterns)]".to_string());
     lines.push("    match &e {".to_string());
 
     for variant in &error.variants {
