@@ -83,11 +83,8 @@ impl Backend for NapiBackend {
             builder.add_import("std::collections::HashMap");
         }
 
-        // Custom module declarations (NAPI auto-exports, no explicit registration needed)
-        let custom_mods = config.custom_modules.for_language(Language::Node);
-        for module in custom_mods {
-            builder.add_item(&format!("pub mod {module};"));
-        }
+        // Note: custom_modules for Node are TypeScript-only re-exports
+        // (used in generate_public_api), not Rust module declarations.
 
         // Check if any function or method is async
         let has_async =
