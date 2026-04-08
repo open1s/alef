@@ -223,16 +223,14 @@ impl Backend for NapiBackend {
             type_exports.push(format!("Js{}", typ.name));
         }
 
-        // Collect all enums (exported with Js prefix from native module) - plain export
-        // Enums are runtime values in TypeScript (const enum), not just types
+        // Collect all enums (exported with Js prefix from native module) - value export
+        // NAPI string enums are runtime objects (const enum), not just types
         for enum_def in &api.enums {
             function_exports.push(format!("Js{}", enum_def.name));
         }
 
-        // Collect all error types (exported from native module) - export type
-        for error in &api.errors {
-            type_exports.push(error.name.clone());
-        }
+        // NAPI errors are thrown as native JS Error objects, not exported as TS types.
+        // Skip error types in the public API re-exports.
 
         // Collect all functions (exported from native module) - plain export
         for func in &api.functions {
@@ -251,7 +249,7 @@ impl Backend for NapiBackend {
             "".to_string(),
         ];
 
-        // Export functions (plain export)
+        // Export values (functions + enums)
         if !function_exports.is_empty() {
             lines.push("export {".to_string());
             for (i, name) in function_exports.iter().enumerate() {
@@ -261,7 +259,7 @@ impl Backend for NapiBackend {
             lines.push(format!("}} from '{}';", config.node_package_name()));
         }
 
-        // Export types (export type)
+        // Export types (structs)
         if !type_exports.is_empty() {
             lines.push("export type {".to_string());
             for (i, name) in type_exports.iter().enumerate() {
