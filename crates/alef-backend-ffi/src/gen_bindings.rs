@@ -494,7 +494,7 @@ fn gen_value_to_c(expr: &str, ty: &TypeRef, indent: &str) -> String {
             }
         }
         TypeRef::String => {
-            writeln!(out, "{indent}match CString::new({expr}.clone()) {{").unwrap();
+            writeln!(out, "{indent}match CString::new({expr}.to_string()) {{").unwrap();
             writeln!(out, "{indent}    Ok(cs) => cs.into_raw(),").unwrap();
             writeln!(out, "{indent}    Err(_) => std::ptr::null_mut(),").unwrap();
             writeln!(out, "{indent}}}").unwrap();

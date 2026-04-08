@@ -1,0 +1,4 @@
+
+[dto]
+python = "dataclass"
+python_output = "typeddict"

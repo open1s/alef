@@ -158,16 +158,19 @@ impl Backend for JavaBackend {
 // NativeLib.java - FFI method handles
 // ---------------------------------------------------------------------------
 
-fn gen_native_lib(api: &ApiSurface, _config: &AlefConfig, package: &str, prefix: &str) -> String {
+fn gen_native_lib(api: &ApiSurface, config: &AlefConfig, package: &str, prefix: &str) -> String {
     // Generate the class body first, then scan it to determine which imports are needed.
     let mut body = String::with_capacity(2048);
+    // Derive the native library name from the FFI output path (directory name with hyphens replaced
+    // by underscores), falling back to `{ffi_prefix}_ffi`.
+    let lib_name = config.ffi_lib_name();
 
     writeln!(body, "final class NativeLib {{").ok();
     writeln!(body, "    private static final Linker LINKER = Linker.nativeLinker();").ok();
     writeln!(body, "    private static final SymbolLookup LIB;").ok();
     writeln!(body).ok();
     writeln!(body, "    static {{").ok();
-    writeln!(body, "        System.loadLibrary(\"{}\");", prefix).ok();
+    writeln!(body, "        System.loadLibrary(\"{}\");", lib_name).ok();
     writeln!(body, "        LIB = SymbolLookup.loaderLookup();").ok();
     writeln!(body, "    }}").ok();
     writeln!(body).ok();

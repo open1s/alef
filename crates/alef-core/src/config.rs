@@ -612,12 +612,48 @@ impl AlefConfig {
     }
 
     /// Get the FFI native library name (for Go cgo, Java Panama, C# P/Invoke).
+    ///
+    /// Resolution order:
+    /// 1. `[ffi] lib_name` explicit override
+    /// 2. Directory name of `output.ffi` path with hyphens replaced by underscores
+    ///    (e.g. `crates/html-to-markdown-ffi/src/` → `html_to_markdown_ffi`)
+    /// 3. `{ffi_prefix}_ffi` fallback
     pub fn ffi_lib_name(&self) -> String {
-        self.ffi
-            .as_ref()
-            .and_then(|f| f.lib_name.as_ref())
-            .cloned()
-            .unwrap_or_else(|| format!("{}_ffi", self.ffi_prefix()))
+        // 1. Explicit override in [ffi] section.
+        if let Some(name) = self.ffi.as_ref().and_then(|f| f.lib_name.as_ref()) {
+            return name.clone();
+        }
+
+        // 2. Derive from output.ffi path: take the last meaningful directory component
+        //    (skip trailing "src" or similar), then replace hyphens with underscores.
+        if let Some(ffi_path) = self.output.ffi.as_ref() {
+            let path = std::path::Path::new(ffi_path);
+            // Walk components from the end to find the crate directory name.
+            // Skip components like "src" that are inside the crate dir.
+            let components: Vec<_> = path
+                .components()
+                .filter_map(|c| {
+                    if let std::path::Component::Normal(s) = c {
+                        s.to_str()
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            // The crate name is typically the last component that looks like a crate dir
+            // (i.e. not "src", "lib", or similar). Search from the end.
+            let crate_dir = components
+                .iter()
+                .rev()
+                .find(|&&s| s != "src" && s != "lib" && s != "include")
+                .copied();
+            if let Some(dir) = crate_dir {
+                return dir.replace('-', "_");
+            }
+        }
+
+        // 3. Default fallback.
+        format!("{}_ffi", self.ffi_prefix())
     }
 
     /// Get the FFI header name.
