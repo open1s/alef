@@ -259,6 +259,12 @@ impl Backend for NapiBackend {
             lines.push(format!("}} from '{}';", config.node_package_name()));
         }
 
+        // Append re-exports for custom modules (from [custom_modules] node = [...])
+        let custom_mods = config.custom_modules.for_language(Language::Node);
+        for module_name in custom_mods {
+            lines.push(format!("export * from './{module_name}';"));
+        }
+
         let content = lines.join("\n");
 
         // Output path: packages/typescript/src/index.ts
