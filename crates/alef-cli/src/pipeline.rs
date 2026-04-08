@@ -500,7 +500,15 @@ pub fn build(config: &AlefConfig, languages: &[Language], release: bool) -> anyh
             .iter()
             .any(|(_, bc)| bc.tool == "cargo" && bc.crate_suffix == "-ffi")
     {
-        let ffi_crate = format!("{crate_name}-ffi");
+        // Resolve FFI crate name from output path
+        let ffi_crate = output_path_for(Language::Ffi, config)
+            .map(resolve_crate_dir)
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or_else(|| {
+                // Fallback: construct from crate name
+                Box::leak(format!("{crate_name}-ffi").into_boxed_str())
+            });
         info!("Building FFI crate: {ffi_crate}");
         let mut cmd = format!("cargo build -p {ffi_crate}");
         if release {
@@ -512,56 +520,87 @@ pub fn build(config: &AlefConfig, languages: &[Language], release: bool) -> anyh
     // Build independent languages
     for (lang, bc) in &independent {
         info!("Building {lang} ({})...", bc.tool);
-        let build_cmd = build_command_for(bc, crate_name, config, release);
+        let build_cmd = build_command_for(*lang, bc, config, release);
         run_command(&build_cmd)?;
 
         // Run post-build steps
-        run_post_build(bc, crate_name, &base_dir)?;
+        run_post_build(*lang, bc, config, &base_dir)?;
     }
 
     // Build FFI-dependent languages
     for (lang, bc) in &ffi_dependent {
         info!("Building {lang} ({})...", bc.tool);
-        let build_cmd = build_command_for(bc, crate_name, config, release);
+        let build_cmd = build_command_for(*lang, bc, config, release);
         run_command(&build_cmd)?;
 
-        run_post_build(bc, crate_name, &base_dir)?;
+        run_post_build(*lang, bc, config, &base_dir)?;
     }
 
     Ok(())
 }
 
+/// Resolve the crate directory from the output config path.
+/// Output paths like `crates/html-to-markdown-node/src/` → `crates/html-to-markdown-node`.
+fn resolve_crate_dir(output_path: &Path) -> &Path {
+    // If path ends in src/ or src, go up one level
+    if output_path.file_name().is_some_and(|n| n == "src") {
+        output_path.parent().unwrap_or(output_path)
+    } else {
+        output_path
+    }
+}
+
+/// Get the output path for a language from config.
+fn output_path_for(lang: Language, config: &AlefConfig) -> Option<&Path> {
+    match lang {
+        Language::Python => config.output.python.as_deref(),
+        Language::Node => config.output.node.as_deref(),
+        Language::Ruby => config.output.ruby.as_deref(),
+        Language::Php => config.output.php.as_deref(),
+        Language::Ffi => config.output.ffi.as_deref(),
+        Language::Go => config.output.go.as_deref(),
+        Language::Java => config.output.java.as_deref(),
+        Language::Csharp => config.output.csharp.as_deref(),
+        Language::Wasm => config.output.wasm.as_deref(),
+        Language::Elixir => config.output.elixir.as_deref(),
+        Language::R => config.output.r.as_deref(),
+    }
+}
+
 /// Generate the shell command to build a specific language.
 fn build_command_for(
+    lang: Language,
     bc: &alef_core::backend::BuildConfig,
-    crate_name: &str,
     config: &AlefConfig,
     release: bool,
 ) -> String {
-    let binding_crate = format!("{crate_name}{}", bc.crate_suffix);
     let release_flag = if release { " --release" } else { "" };
+
+    // Resolve the crate directory from the output path
+    let crate_dir = output_path_for(lang, config)
+        .map(resolve_crate_dir)
+        .and_then(|p| p.to_str())
+        .unwrap_or("");
 
     match bc.tool {
         "maturin" => {
-            format!("maturin develop --manifest-path crates/{binding_crate}/Cargo.toml{release_flag}")
+            format!("maturin develop --manifest-path {crate_dir}/Cargo.toml{release_flag}")
         }
         "napi" => {
-            let output_dir = config
-                .output
-                .node
-                .as_ref()
-                .and_then(|p| p.to_str())
-                .unwrap_or("packages/typescript");
-            format!(
-                "napi build --platform --manifest-path crates/{binding_crate}/Cargo.toml -o {output_dir}{release_flag}"
-            )
+            // NAPI outputs .node + .d.ts to the crate directory
+            format!("napi build --platform --manifest-path {crate_dir}/Cargo.toml -o {crate_dir}{release_flag}")
         }
         "wasm-pack" => {
             let profile = if release { "--release" } else { "--dev" };
-            format!("wasm-pack build crates/{binding_crate} {profile} --target bundler")
+            format!("wasm-pack build {crate_dir} {profile} --target bundler")
         }
         "cargo" => {
-            format!("cargo build -p {binding_crate}{release_flag}")
+            // Extract crate name from directory name for -p flag
+            let crate_name = Path::new(crate_dir)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(crate_dir);
+            format!("cargo build -p {crate_name}{release_flag}")
         }
         "mix" => "mix compile".to_string(),
         "mvn" => {
@@ -597,15 +636,23 @@ fn build_command_for(
 }
 
 /// Run post-build processing steps (e.g., patching .d.ts files).
-fn run_post_build(bc: &alef_core::backend::BuildConfig, crate_name: &str, base_dir: &Path) -> anyhow::Result<()> {
+fn run_post_build(
+    lang: Language,
+    bc: &alef_core::backend::BuildConfig,
+    config: &AlefConfig,
+    base_dir: &Path,
+) -> anyhow::Result<()> {
     use alef_core::backend::PostBuildStep;
 
-    let binding_crate = format!("{crate_name}{}", bc.crate_suffix);
+    // Resolve the crate directory from the output path
+    let crate_dir = output_path_for(lang, config)
+        .map(resolve_crate_dir)
+        .unwrap_or(Path::new(""));
 
     for step in &bc.post_build {
         match step {
             PostBuildStep::PatchFile { path, find, replace } => {
-                let file_path = base_dir.join("crates").join(&binding_crate).join(path);
+                let file_path = base_dir.join(crate_dir).join(path);
                 if file_path.exists() {
                     let content = std::fs::read_to_string(&file_path)?;
                     let patched = content.replace(find, replace);
