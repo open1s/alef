@@ -497,6 +497,8 @@ fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_path: &str) -
         }
     }
 
+    let has_stripped_cfg_fields = fields.iter().any(|f| f.cfg.is_some());
+
     Some(TypeDef {
         rust_path,
         name,
@@ -506,7 +508,7 @@ fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_path: &str) -
         is_clone,
         is_trait: false,
         has_default,
-        has_stripped_cfg_fields: false,
+        has_stripped_cfg_fields,
         doc,
         cfg,
     })

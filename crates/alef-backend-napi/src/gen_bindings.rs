@@ -151,6 +151,7 @@ impl Backend for NapiBackend {
             // make all fields Option<T> and apply defaults via FromNapiValue,
             // enabling JS users to pass partial objects and omit fields they want defaults for.
             optionalize_defaults: true,
+            include_cfg_metadata: true,
             ..Default::default()
         };
         // From/Into conversions using shared parameterized generators
