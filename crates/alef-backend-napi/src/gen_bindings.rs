@@ -213,33 +213,35 @@ impl Backend for NapiBackend {
     }
 
     fn generate_public_api(&self, api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
-        // Collect all exported names from the API
-        let mut exports = vec![];
+        // Separate exports into functions (plain export) and types (export type)
+        let mut type_exports = vec![];
+        let mut function_exports = vec![];
 
-        // Collect all types (exported with Js prefix from native module)
+        // Collect all types (exported with Js prefix from native module) - export type
         for typ in &api.types {
-            exports.push(format!("Js{}", typ.name));
+            type_exports.push(format!("Js{}", typ.name));
         }
 
-        // Collect all enums (exported with Js prefix from native module)
+        // Collect all enums (exported with Js prefix from native module) - export type
         for enum_def in &api.enums {
-            exports.push(format!("Js{}", enum_def.name));
+            type_exports.push(format!("Js{}", enum_def.name));
         }
 
-        // Collect all functions (exported from native module)
+        // Collect all error types (exported from native module) - export type
+        for error in &api.errors {
+            type_exports.push(error.name.clone());
+        }
+
+        // Collect all functions (exported from native module) - plain export
         for func in &api.functions {
             // Convert snake_case to camelCase for JavaScript naming
             let js_name = to_node_name(&func.name);
-            exports.push(js_name);
-        }
-
-        // Collect all error types (exported from native module)
-        for error in &api.errors {
-            exports.push(error.name.clone());
+            function_exports.push(js_name);
         }
 
         // Sort for consistent output
-        exports.sort();
+        type_exports.sort();
+        function_exports.sort();
 
         // Generate the index.ts re-export file
         let mut lines = vec![
@@ -247,10 +249,21 @@ impl Backend for NapiBackend {
             "".to_string(),
         ];
 
-        if !exports.is_empty() {
+        // Export functions (plain export)
+        if !function_exports.is_empty() {
             lines.push("export {".to_string());
-            for (i, name) in exports.iter().enumerate() {
-                let comma = if i < exports.len() - 1 { "," } else { "" };
+            for (i, name) in function_exports.iter().enumerate() {
+                let comma = if i < function_exports.len() - 1 { "," } else { "" };
+                lines.push(format!("  {}{}", name, comma));
+            }
+            lines.push(format!("}} from '{}';", config.node_package_name()));
+        }
+
+        // Export types (export type)
+        if !type_exports.is_empty() {
+            lines.push("export type {".to_string());
+            for (i, name) in type_exports.iter().enumerate() {
+                let comma = if i < type_exports.len() - 1 { "," } else { "" };
                 lines.push(format!("  {}{}", name, comma));
             }
             lines.push(format!("}} from '{}';", config.node_package_name()));

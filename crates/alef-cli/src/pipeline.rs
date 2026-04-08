@@ -351,6 +351,30 @@ pub fn sync_versions(config: &AlefConfig) -> anyhow::Result<()> {
         }
     }
 
+    // R: DESCRIPTION file
+    if let Ok(content) = std::fs::read_to_string("packages/r/DESCRIPTION") {
+        if let Some(new_content) = replace_version_pattern(&content, r"Version:\s*[^\n]*", &version) {
+            std::fs::write("packages/r/DESCRIPTION", &new_content)?;
+            updated.push("packages/r/DESCRIPTION".to_string());
+        }
+    }
+
+    // Python: __init__.py
+    if let Ok(content) = std::fs::read_to_string("packages/python/__init__.py") {
+        if let Some(new_content) = replace_version_pattern(&content, r#"__version__\s*=\s*"[^"]*""#, &version) {
+            std::fs::write("packages/python/__init__.py", &new_content)?;
+            updated.push("packages/python/__init__.py".to_string());
+        }
+    }
+
+    // Go: ffi_loader.go
+    if let Ok(content) = std::fs::read_to_string("packages/go/ffi_loader.go") {
+        if let Some(new_content) = replace_version_pattern(&content, r#"defaultFFIVersion\s*=\s*"[^"]*""#, &version) {
+            std::fs::write("packages/go/ffi_loader.go", &new_content)?;
+            updated.push("packages/go/ffi_loader.go".to_string());
+        }
+    }
+
     for file in updated {
         info!("  Updated: {file}");
     }
@@ -371,7 +395,10 @@ fn replace_version_pattern(content: &str, pattern: &str, version: &str) -> Optio
         p if p.contains("spec") => format!(r#"spec.version = "{version}""#),
         p if p.contains("<version>") => format!("<version>{version}</version>"),
         p if p.contains("<Version>") => format!("<Version>{version}</Version>"),
-        p if p.contains("version:") => format!(r#"version: "{version}""#),
+        p if p.contains("version:") && p.contains(":") => format!(r#"version: "{version}""#),
+        p if p.contains("__version__") => format!(r#"__version__ = "{version}""#),
+        p if p.contains("defaultFFIVersion") => format!(r#"defaultFFIVersion = "{version}""#),
+        p if p.contains("Version:") => format!("Version: {version}"),
         _ => return None,
     };
 

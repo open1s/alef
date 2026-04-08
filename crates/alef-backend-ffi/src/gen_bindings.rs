@@ -394,6 +394,10 @@ fn gen_field_accessor(typ: &TypeDef, field: &FieldDef, prefix: &str, core_import
     // Determine if we need an extra out-param for byte-length
     let needs_len_out = matches!(field.ty, TypeRef::Bytes) && !field.optional;
 
+    // Simple field accessors (non-optional primitives) can be const
+    let is_const = !field.optional && matches!(field.ty, TypeRef::Primitive(_));
+    let const_kw = if is_const { "const " } else { "" };
+
     if needs_len_out {
         writeln!(
             out,
@@ -403,7 +407,7 @@ fn gen_field_accessor(typ: &TypeDef, field: &FieldDef, prefix: &str, core_import
     } else {
         writeln!(
             out,
-            "pub unsafe extern \"C\" fn {prefix}_{type_snake}_{field_name}(ptr: *const {qualified}) -> {ret_type} {{"
+            "pub {const_kw}unsafe extern \"C\" fn {prefix}_{type_snake}_{field_name}(ptr: *const {qualified}) -> {ret_type} {{"
         )
         .unwrap();
     }
@@ -475,7 +479,7 @@ fn gen_value_to_c(expr: &str, ty: &TypeRef, indent: &str) -> String {
         TypeRef::Primitive(p) => {
             // Bool needs cast to i32 for C ABI; other primitives may need deref if from Option
             if matches!(p, alef_core::ir::PrimitiveType::Bool) {
-                writeln!(out, "{indent}{expr} as i32").unwrap();
+                writeln!(out, "{indent}i32::from({expr})").unwrap();
             } else {
                 writeln!(out, "{indent}{expr}").unwrap();
             }

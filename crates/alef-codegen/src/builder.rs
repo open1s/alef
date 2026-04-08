@@ -90,7 +90,7 @@ pub struct StructBuilder {
     visibility: String,
     name: String,
     derives: Vec<String>,
-    fields: Vec<(String, String, Vec<String>)>, // (name, type, field_attrs)
+    fields: Vec<(String, String, Vec<String>, String)>, // (name, type, field_attrs, doc)
 }
 
 impl StructBuilder {
@@ -115,7 +115,12 @@ impl StructBuilder {
     }
 
     pub fn add_field(&mut self, name: &str, ty: &str, attrs: Vec<String>) -> &mut Self {
-        self.fields.push((name.to_string(), ty.to_string(), attrs));
+        self.add_field_with_doc(name, ty, attrs, "")
+    }
+
+    pub fn add_field_with_doc(&mut self, name: &str, ty: &str, attrs: Vec<String>, doc: &str) -> &mut Self {
+        self.fields
+            .push((name.to_string(), ty.to_string(), attrs, doc.to_string()));
         self
     }
 
@@ -127,7 +132,9 @@ impl StructBuilder {
         capacity += self
             .fields
             .iter()
-            .map(|(n, t, attrs)| n.len() + t.len() + 12 + attrs.iter().map(|a| a.len() + 5).sum::<usize>())
+            .map(|(n, t, attrs, doc)| {
+                n.len() + t.len() + 12 + doc.len() + 8 + attrs.iter().map(|a| a.len() + 5).sum::<usize>()
+            })
             .sum::<usize>();
 
         let mut out = String::with_capacity(capacity);
@@ -142,7 +149,10 @@ impl StructBuilder {
 
         writeln!(out, "{} struct {} {{", self.visibility, self.name).unwrap();
 
-        for (name, ty, attrs) in &self.fields {
+        for (name, ty, attrs, doc) in &self.fields {
+            if !doc.is_empty() {
+                writeln!(out, "    /// {doc}").unwrap();
+            }
             for attr in attrs {
                 writeln!(out, "    #[{attr}]").unwrap();
             }

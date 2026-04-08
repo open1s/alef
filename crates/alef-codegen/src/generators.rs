@@ -742,7 +742,7 @@ pub fn gen_struct(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfi
             mapper.map_type(&field.ty)
         };
         let attrs: Vec<String> = cfg.field_attrs.iter().map(|a| a.to_string()).collect();
-        sb.add_field(&field.name, &ty, attrs);
+        sb.add_field_with_doc(&field.name, &ty, attrs, &field.doc);
     }
     sb.build()
 }
