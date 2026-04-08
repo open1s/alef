@@ -479,7 +479,7 @@ fn gen_value_to_c(expr: &str, ty: &TypeRef, indent: &str) -> String {
         TypeRef::Primitive(p) => {
             // Bool needs cast to i32 for C ABI; other primitives may need deref if from Option
             if matches!(p, alef_core::ir::PrimitiveType::Bool) {
-                writeln!(out, "{indent}i32::from({expr})").unwrap();
+                writeln!(out, "{indent}{expr} as i32").unwrap();
             } else {
                 writeln!(out, "{indent}{expr}").unwrap();
             }
