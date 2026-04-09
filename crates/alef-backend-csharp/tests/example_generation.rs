@@ -148,6 +148,7 @@ fn test_generated_code_example() {
         dto: Default::default(),
         sync: None,
         test: None,
+        e2e: None,
     };
 
     let files = backend.generate_bindings(&api, &config).unwrap();

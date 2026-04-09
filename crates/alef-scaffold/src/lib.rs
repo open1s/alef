@@ -940,6 +940,7 @@ mod tests {
             dto: Default::default(),
             sync: None,
             test: None,
+            e2e: None,
         }
     }
 

@@ -152,6 +152,7 @@ fn test_basic_generation() {
         dto: Default::default(),
         sync: None,
         test: None,
+        e2e: None,
     };
 
     // Generate bindings
@@ -287,6 +288,7 @@ fn test_namespace_resolution() {
         dto: Default::default(),
         sync: None,
         test: None,
+        e2e: None,
     };
 
     let result = backend.generate_bindings(&api, &config);
@@ -353,6 +355,7 @@ fn test_generated_header() {
         dto: Default::default(),
         sync: None,
         test: None,
+        e2e: None,
     };
 
     let result = backend.generate_bindings(&api, &config);
@@ -486,6 +489,7 @@ fn test_type_mapping() {
         dto: Default::default(),
         sync: None,
         test: None,
+        e2e: None,
     };
 
     let result = backend.generate_bindings(&api, &config);
@@ -600,6 +604,7 @@ fn test_tuple_struct_fields_skipped() {
         dto: Default::default(),
         sync: None,
         test: None,
+        e2e: None,
     };
 
     let result = backend.generate_bindings(&api, &config);
@@ -707,6 +712,7 @@ fn test_mixed_struct_skips_tuple_fields_only() {
         dto: Default::default(),
         sync: None,
         test: None,
+        e2e: None,
     };
 
     let result = backend.generate_bindings(&api, &config);

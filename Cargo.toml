@@ -16,6 +16,7 @@ members = [
     "crates/alef-cli",
     "crates/alef-codegen",
     "crates/alef-core",
+    "crates/alef-e2e",
     "crates/alef-extract",
     "crates/alef-readme",
     "crates/alef-scaffold",
@@ -33,6 +34,7 @@ ahash = "0.8"
 alef-adapters = { version = "0.1.0", path = "crates/alef-adapters" }
 alef-codegen = { version = "0.1.0", path = "crates/alef-codegen" }
 alef-core = { version = "0.1.0", path = "crates/alef-core" }
+alef-e2e = { version = "0.1.0", path = "crates/alef-e2e" }
 alef-extract = { version = "0.1.0", path = "crates/alef-extract" }
 anyhow = "1"
 blake3 = "1"

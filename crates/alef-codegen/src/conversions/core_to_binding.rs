@@ -86,30 +86,47 @@ pub fn field_conversion_from_core(
     sanitized: bool,
     opaque_types: &AHashSet<String>,
 ) -> String {
-    // Sanitized fields: the binding type differs from core. Use format!("{:?}") to convert.
-    // When the binding type is Vec<String> (sanitized from Vec<Unknown>), map each element.
+    // Sanitized fields: the binding type differs from core (e.g. Box<str>→String, Cow<str>→String).
+    // Use .to_string() for String targets, proper iteration for Vec/Map, format!("{:?}") as last resort.
     if sanitized {
-        // Check if binding type is Vec<String> (inner was sanitized from Named→String)
+        // Map(String, String): sanitized from Map(Box<str>, Box<str>) etc.
+        if let TypeRef::Map(k, v) = ty {
+            if matches!(k.as_ref(), TypeRef::String) && matches!(v.as_ref(), TypeRef::String) {
+                if optional {
+                    return format!(
+                        "{name}: val.{name}.as_ref().map(|m| m.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())"
+                    );
+                }
+                return format!(
+                    "{name}: val.{name}.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()"
+                );
+            }
+        }
+        // Vec<String>: sanitized from Vec<Box<str>> etc.
         if let TypeRef::Vec(inner) = ty {
             if matches!(inner.as_ref(), TypeRef::String) {
                 if optional {
-                    return format!(
-                        "{name}: val.{name}.as_ref().map(|v| v.iter().map(|i| format!(\"{{:?}}\", i)).collect())"
-                    );
+                    return format!("{name}: val.{name}.as_ref().map(|v| v.iter().map(|i| i.to_string()).collect())");
                 }
-                return format!("{name}: val.{name}.iter().map(|v| format!(\"{{:?}}\", v)).collect()");
+                return format!("{name}: val.{name}.iter().map(|v| v.to_string()).collect()");
             }
         }
-        // Check if binding type is Optional<Vec<String>> (sanitized from Optional<Vec<Unknown>>)
+        // Optional<Vec<String>>: sanitized from Optional<Vec<Box<str>>> etc.
         if let TypeRef::Optional(opt_inner) = ty {
             if let TypeRef::Vec(vec_inner) = opt_inner.as_ref() {
                 if matches!(vec_inner.as_ref(), TypeRef::String) {
-                    return format!(
-                        "{name}: val.{name}.as_ref().map(|v| v.iter().map(|i| format!(\"{{:?}}\", i)).collect())"
-                    );
+                    return format!("{name}: val.{name}.as_ref().map(|v| v.iter().map(|i| i.to_string()).collect())");
                 }
             }
         }
+        // String: sanitized from Box<str>, Cow<str>, etc. — use .to_string()
+        if matches!(ty, TypeRef::String) {
+            if optional {
+                return format!("{name}: val.{name}.as_ref().map(|v| v.to_string())");
+            }
+            return format!("{name}: val.{name}.to_string()");
+        }
+        // Fallback for truly unknown sanitized types
         if optional {
             return format!("{name}: val.{name}.as_ref().map(|v| format!(\"{{:?}}\", v))");
         }
@@ -156,6 +173,24 @@ pub fn field_conversion_from_core(
                 format!("{name}: val.{name}.map(|v| {n} {{ inner: Arc::new(v) }})")
             } else {
                 format!("{name}: {n} {{ inner: Arc::new(val.{name}) }}")
+            }
+        }
+        // Json: core uses serde_json::Value, binding uses String — use .to_string()
+        TypeRef::Json => {
+            if optional {
+                format!("{name}: val.{name}.as_ref().map(|v| v.to_string())")
+            } else {
+                format!("{name}: val.{name}.to_string()")
+            }
+        }
+        TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Json) => {
+            format!("{name}: val.{name}.as_ref().map(|v| v.to_string())")
+        }
+        TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::Json) => {
+            if optional {
+                format!("{name}: val.{name}.as_ref().map(|v| v.iter().map(|i| i.to_string()).collect())")
+            } else {
+                format!("{name}: val.{name}.iter().map(|v| v.to_string()).collect()")
             }
         }
         // Everything else is symmetric

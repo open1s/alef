@@ -128,6 +128,7 @@ fn test_basic_generation() {
         dto: Default::default(),
         sync: None,
         test: None,
+        e2e: None,
     };
 
     // Generate bindings
@@ -255,6 +256,7 @@ fn test_package_default() {
         dto: Default::default(),
         sync: None,
         test: None,
+        e2e: None,
     };
 
     let result = backend.generate_bindings(&api, &config);
@@ -394,6 +396,7 @@ fn test_optional_field_defaults_in_builder() {
         dto: Default::default(),
         sync: None,
         test: None,
+        e2e: None,
     };
 
     // Generate bindings

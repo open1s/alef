@@ -1,0 +1,169 @@
+//! Language-specific string escaping for e2e test code generation.
+
+/// Escape a string for embedding in a Python string literal.
+pub fn escape_python(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+/// Escape a string for embedding in a Rust string literal.
+pub fn escape_rust(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+/// Compute the number of # needed for a Rust raw string literal.
+pub fn raw_string_hashes(s: &str) -> usize {
+    let mut max_hashes = 0;
+    let mut current = 0;
+    let mut after_quote = false;
+    for ch in s.chars() {
+        if ch == '"' {
+            after_quote = true;
+            current = 0;
+        } else if ch == '#' && after_quote {
+            current += 1;
+            max_hashes = max_hashes.max(current);
+        } else {
+            after_quote = false;
+            current = 0;
+        }
+    }
+    max_hashes + 1
+}
+
+/// Format a string as a Rust raw string literal (r#"..."#).
+pub fn rust_raw_string(s: &str) -> String {
+    let hashes = raw_string_hashes(s);
+    let h: String = "#".repeat(hashes);
+    format!("r{h}\"{s}\"{h}")
+}
+
+/// Escape a string for embedding in a JavaScript/TypeScript string literal.
+pub fn escape_js(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+        .replace('`', "\\`")
+        .replace('$', "\\$")
+}
+
+/// Format a string as a Go string literal (backtick or quoted).
+pub fn go_string_literal(s: &str) -> String {
+    if !s.contains('`') {
+        format!("`{s}`")
+    } else {
+        format!("\"{}\"", escape_go(s))
+    }
+}
+
+/// Escape a string for embedding in a Go double-quoted string.
+pub fn escape_go(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+/// Escape a string for embedding in a Java string literal.
+pub fn escape_java(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+/// Escape a string for embedding in a C# string literal.
+pub fn escape_csharp(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+/// Escape a string for embedding in a PHP string literal.
+pub fn escape_php(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('$', "\\$")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+/// Escape a string for embedding in a Ruby string literal.
+pub fn escape_ruby(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('#', "\\#")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+/// Escape a string for embedding in an Elixir string literal.
+pub fn escape_elixir(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('#', "\\#")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+/// Escape a string for embedding in an R string literal.
+pub fn escape_r(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+/// Escape a string for embedding in a C string literal.
+pub fn escape_c(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+/// Sanitize an identifier for use as a test function name.
+/// Replaces non-alphanumeric characters with underscores, strips leading digits.
+pub fn sanitize_ident(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            result.push(ch);
+        } else {
+            result.push('_');
+        }
+    }
+    // Strip leading digits
+    let trimmed = result.trim_start_matches(|c: char| c.is_ascii_digit());
+    if trimmed.is_empty() {
+        "_".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Convert a category name to a sanitized filename component.
+pub fn sanitize_filename(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .collect::<String>()
+        .to_lowercase()
+}

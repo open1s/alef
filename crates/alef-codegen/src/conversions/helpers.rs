@@ -163,7 +163,7 @@ pub(crate) fn is_field_convertible(
         | TypeRef::Path
         | TypeRef::Unit
         | TypeRef::Duration => true,
-        TypeRef::Json => false,
+        TypeRef::Json => true,
         TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_field_convertible(inner, convertible_enums, known_types),
         TypeRef::Map(k, v) => {
             is_field_convertible(k, convertible_enums, known_types)

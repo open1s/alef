@@ -116,7 +116,35 @@ pub fn gen_function(
         }
     } else if func.is_async {
         let core_call = format!("{core_fn_path}({call_args})");
-        let return_wrap = format!("{return_type}::from(result)");
+        // In async contexts (future_into_py, etc.), the compiler often can't infer the
+        // target type for .into(). Use explicit From::from() / collect::<Vec<T>>() instead.
+        let return_wrap = match &func.return_type {
+            TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
+                format!("{n} {{ inner: Arc::new(result) }}")
+            }
+            TypeRef::Named(_) => {
+                format!("{return_type}::from(result)")
+            }
+            TypeRef::Vec(inner) => match inner.as_ref() {
+                TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
+                    format!("result.into_iter().map(|v| {n} {{ inner: Arc::new(v) }}).collect::<Vec<_>>()")
+                }
+                TypeRef::Named(_) => {
+                    let inner_mapped = mapper.map_type(inner);
+                    format!("result.into_iter().map(|v| {inner_mapped}::from(v)).collect::<Vec<_>>()")
+                }
+                _ => "result".to_string(),
+            },
+            TypeRef::Unit => "result".to_string(),
+            _ => super::binding_helpers::wrap_return(
+                "result",
+                &func.return_type,
+                "",
+                opaque_types,
+                false,
+                func.returns_ref,
+            ),
+        };
         let async_body = gen_async_body(
             &core_call,
             cfg,

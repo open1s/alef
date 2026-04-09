@@ -256,6 +256,7 @@ fn print_generated_java_code() {
         dto: Default::default(),
         sync: None,
         test: None,
+        e2e: None,
     };
 
     let result = backend.generate_bindings(&api, &config).unwrap();

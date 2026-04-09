@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub mod dto;
+pub mod e2e;
 pub mod extras;
 pub mod languages;
 pub mod output;
@@ -12,6 +13,7 @@ pub use dto::{
     CsharpDtoStyle, DtoConfig, ElixirDtoStyle, GoDtoStyle, JavaDtoStyle, NodeDtoStyle, PhpDtoStyle, PythonDtoStyle,
     RDtoStyle, RubyDtoStyle,
 };
+pub use e2e::E2eConfig;
 pub use extras::{AdapterConfig, AdapterParam, AdapterPattern, Language};
 pub use languages::{
     CSharpConfig, CustomModulesConfig, CustomRegistration, CustomRegistrationsConfig, ElixirConfig, FfiConfig,
@@ -88,6 +90,9 @@ pub struct AlefConfig {
     /// Per-language DTO/type generation style (dataclass vs TypedDict, zod vs interface, etc.).
     #[serde(default)]
     pub dto: DtoConfig,
+    /// E2E test generation configuration.
+    #[serde(default)]
+    pub e2e: Option<E2eConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -212,6 +212,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "alef-e2e"
+version = "0.1.0"
+dependencies = [
+ "alef-core",
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "alef-extract"
 version = "0.1.0"
 dependencies = [

@@ -102,9 +102,17 @@ pub(super) fn gen_optionalized_field_to_core(name: &str, ty: &TypeRef, config: &
 /// Determine the field conversion expression for binding -> core.
 pub fn field_conversion_to_core(name: &str, ty: &TypeRef, optional: bool) -> String {
     match ty {
-        // Primitives, String, Bytes, Unit, Json -- direct assignment
-        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Unit | TypeRef::Json => {
+        // Primitives, String, Bytes, Unit -- direct assignment
+        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Unit => {
             format!("{name}: val.{name}")
+        }
+        // Json: binding uses String, core uses serde_json::Value — parse or default
+        TypeRef::Json => {
+            if optional {
+                format!("{name}: val.{name}.as_ref().and_then(|s| serde_json::from_str(s).ok())")
+            } else {
+                format!("{name}: serde_json::from_str(&val.{name}).unwrap_or_default()")
+            }
         }
         // Char: binding uses String, core uses char — convert first character
         TypeRef::Char => {
@@ -140,14 +148,24 @@ pub fn field_conversion_to_core(name: &str, ty: &TypeRef, optional: bool) -> Str
         }
         // Optional with inner
         TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Json => format!("{name}: val.{name}.as_ref().and_then(|s| serde_json::from_str(s).ok())"),
             TypeRef::Named(_) | TypeRef::Path => format!("{name}: val.{name}.map(Into::into)"),
             TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Named(_)) => {
                 format!("{name}: val.{name}.map(|v| v.into_iter().map(Into::into).collect())")
             }
             _ => format!("{name}: val.{name}"),
         },
-        // Vec of named types -- map each element
+        // Vec of named or Json types -- map each element
         TypeRef::Vec(inner) => match inner.as_ref() {
+            TypeRef::Json => {
+                if optional {
+                    format!(
+                        "{name}: val.{name}.map(|v| v.into_iter().filter_map(|s| serde_json::from_str(&s).ok()).collect())"
+                    )
+                } else {
+                    format!("{name}: val.{name}.into_iter().filter_map(|s| serde_json::from_str(&s).ok()).collect()")
+                }
+            }
             TypeRef::Named(_) => {
                 if optional {
                     format!("{name}: val.{name}.map(|v| v.into_iter().map(Into::into).collect())")
