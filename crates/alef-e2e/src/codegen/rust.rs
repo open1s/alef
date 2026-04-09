@@ -212,7 +212,9 @@ fn render_test_function(out: &mut String, fixture: &Fixture, e2e_config: &E2eCon
     let mut unwrapped_fields: Vec<String> = Vec::new();
     for assertion in &fixture.assertions {
         if let Some(f) = &assertion.field {
-            if !f.is_empty() && !unwrapped_fields.contains(f) {
+            // Only unwrap simple (non-dotted) field paths.
+            // Dotted paths (e.g., "metadata.title") require API-specific knowledge.
+            if !f.is_empty() && !f.contains('.') && !unwrapped_fields.contains(f) {
                 unwrapped_fields.push(f.clone());
             }
         }
@@ -228,6 +230,16 @@ fn render_test_function(out: &mut String, fixture: &Fixture, e2e_config: &E2eCon
     for assertion in &fixture.assertions {
         if assertion.assertion_type == "not_error" {
             // Already handled by .expect() above.
+            continue;
+        }
+        // Skip assertions with dotted field paths — these require API-specific
+        // nested struct navigation that the generic generator can't produce.
+        if assertion.field.as_ref().is_some_and(|f| f.contains('.')) {
+            let _ = writeln!(
+                out,
+                "    // TODO: unsupported nested field path: {}",
+                assertion.field.as_deref().unwrap_or("")
+            );
             continue;
         }
         render_assertion(out, assertion, result_var, dep_name, false);
