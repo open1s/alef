@@ -106,6 +106,7 @@ fn test_basic_generation() {
             error_style: "last_error".to_string(),
             header_name: None,
             lib_name: None,
+            visitor_callbacks: false,
         }),
         go: None,
         java: Some(JavaConfig {
@@ -233,6 +234,7 @@ fn test_package_default() {
             error_style: "last_error".to_string(),
             header_name: None,
             lib_name: None,
+            visitor_callbacks: false,
         }),
         go: None,
         java: None, // No explicit package
@@ -366,6 +368,7 @@ fn test_optional_field_defaults_in_builder() {
             error_style: "last_error".to_string(),
             header_name: None,
             lib_name: None,
+            visitor_callbacks: false,
         }),
         go: None,
         java: Some(JavaConfig {

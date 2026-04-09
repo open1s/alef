@@ -378,6 +378,13 @@ pub struct FfiConfig {
     /// Defaults to `{prefix}_ffi`.
     #[serde(default)]
     pub lib_name: Option<String>,
+    /// If true, generate visitor/callback FFI support:
+    /// a `#[repr(C)]` callbacks struct, an opaque `Visitor` handle that implements
+    /// the core visitor trait by calling the C function pointers, and
+    /// `{prefix}_visitor_create` / `{prefix}_visitor_free` /
+    /// `{prefix}_convert_with_visitor` exports.
+    #[serde(default)]
+    pub visitor_callbacks: bool,
 }
 
 fn default_error_style() -> String {

@@ -234,6 +234,7 @@ fn print_generated_java_code() {
             error_style: "last_error".to_string(),
             header_name: None,
             lib_name: None,
+            visitor_callbacks: false,
         }),
         go: None,
         java: Some(JavaConfig {

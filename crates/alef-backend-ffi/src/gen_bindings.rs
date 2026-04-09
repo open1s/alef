@@ -188,6 +188,12 @@ fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &AlefConfig) -> String {
     // Build adapter body map (consumed by generators via body substitution)
     let _adapter_bodies = alef_adapters::build_adapter_bodies(config, Language::Ffi).unwrap_or_default();
 
+    // Visitor/callback FFI support — generated when `[ffi] visitor_callbacks = true`.
+    // Note: the generated code uses std::rc::Rc fully qualified, so no extra import needed.
+    if config.ffi.as_ref().is_some_and(|f| f.visitor_callbacks) {
+        builder.add_item(&crate::gen_visitor::gen_visitor_bindings(prefix, &core_import));
+    }
+
     builder.build()
 }
 

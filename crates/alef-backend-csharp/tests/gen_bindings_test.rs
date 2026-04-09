@@ -130,6 +130,7 @@ fn test_basic_generation() {
             error_style: "last_error".to_string(),
             header_name: None,
             lib_name: None,
+            visitor_callbacks: false,
         }),
         go: None,
         java: None,
