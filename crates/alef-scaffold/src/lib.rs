@@ -100,8 +100,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 {core_import} = {{ path = "../../crates/{crate_name}" }}
-pyo3 = {{ version = "0.23", features = ["extension-module"] }}
-pyo3-async-runtimes = {{ version = "0.23", features = ["tokio-runtime"] }}
+pyo3 = {{ version = "0.28", features = ["extension-module"] }}
+pyo3-async-runtimes = {{ version = "0.28", features = ["tokio-runtime"] }}
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 tokio = {{ version = "1", features = ["full"] }}
@@ -323,7 +323,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 {core_import} = {{ path = "../../../../crates/{crate_name}" }}
-magnus = "0.7"
+magnus = "0.8"
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 tokio = {{ version = "1", features = ["full"] }}
@@ -408,7 +408,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 {core_import} = {{ path = "../../crates/{crate_name}" }}
-ext-php-rs = "0.13"
+ext-php-rs = "0.15"
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 tokio = {{ version = "1", features = ["full"] }}
@@ -482,7 +482,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 {core_import} = {{ path = "../../../../crates/{crate_name}" }}
-rustler = "0.36"
+rustler = "0.37"
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 tokio = {{ version = "1", features = ["full"] }}

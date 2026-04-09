@@ -209,12 +209,27 @@ fn render_test_function(out: &mut String, fixture: &Fixture, e2e_config: &E2eCon
 
     // Emit Option field unwrap bindings for any fields accessed in assertions.
     // This handles `Option<String>` fields by unwrapping them to `&str` locals.
+    // Collect fields that need string unwrapping (used in string-based assertions).
+    let string_assertion_types = [
+        "equals",
+        "contains",
+        "contains_all",
+        "contains_any",
+        "not_contains",
+        "starts_with",
+        "ends_with",
+        "min_length",
+        "max_length",
+        "matches_regex",
+    ];
     let mut unwrapped_fields: Vec<String> = Vec::new();
     for assertion in &fixture.assertions {
         if let Some(f) = &assertion.field {
-            // Only unwrap simple (non-dotted) field paths.
-            // Dotted paths (e.g., "metadata.title") require API-specific knowledge.
-            if !f.is_empty() && !f.contains('.') && !unwrapped_fields.contains(f) {
+            if !f.is_empty()
+                && !f.contains('.')
+                && string_assertion_types.contains(&assertion.assertion_type.as_str())
+                && !unwrapped_fields.contains(f)
+            {
                 unwrapped_fields.push(f.clone());
             }
         }
@@ -242,7 +257,7 @@ fn render_test_function(out: &mut String, fixture: &Fixture, e2e_config: &E2eCon
             );
             continue;
         }
-        render_assertion(out, assertion, result_var, dep_name, false);
+        render_assertion(out, assertion, result_var, dep_name, false, &unwrapped_fields);
     }
 
     let _ = writeln!(out, "}}");
@@ -365,6 +380,7 @@ fn render_assertion(
     result_var: &str,
     _dep_name: &str,
     is_error_context: bool,
+    unwrapped_fields: &[String],
 ) {
     // When a field is present, use the bare field name since we emit
     // `let {field} = result.{field}.as_deref().unwrap_or("");` bindings
@@ -430,13 +446,39 @@ fn render_assertion(
             }
         }
         "not_empty" => {
-            let _ = writeln!(
-                out,
-                "    assert!(!{field_access}.is_empty(), \"expected non-empty value\");"
-            );
+            if let Some(f) = &assertion.field {
+                if !unwrapped_fields.contains(f) {
+                    // Non-string field (e.g., Option<Struct>): use is_some()
+                    let _ = writeln!(
+                        out,
+                        "    assert!({result_var}.{f}.is_some(), \"expected {f} to be present\");"
+                    );
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "    assert!(!{field_access}.is_empty(), \"expected non-empty value\");"
+                    );
+                }
+            } else {
+                let _ = writeln!(
+                    out,
+                    "    assert!(!{field_access}.is_empty(), \"expected non-empty value\");"
+                );
+            }
         }
         "is_empty" => {
-            let _ = writeln!(out, "    assert!({field_access}.is_empty(), \"expected empty value\");");
+            if let Some(f) = &assertion.field {
+                if !unwrapped_fields.contains(f) {
+                    let _ = writeln!(
+                        out,
+                        "    assert!({result_var}.{f}.is_none(), \"expected {f} to be absent\");"
+                    );
+                } else {
+                    let _ = writeln!(out, "    assert!({field_access}.is_empty(), \"expected empty value\");");
+                }
+            } else {
+                let _ = writeln!(out, "    assert!({field_access}.is_empty(), \"expected empty value\");");
+            }
         }
         "starts_with" => {
             if let Some(val) = &assertion.value {
