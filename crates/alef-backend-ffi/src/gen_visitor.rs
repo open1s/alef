@@ -31,6 +31,410 @@ pub const VISIT_RESULT_PRESERVE_HTML: i32 = 2;
 pub const VISIT_RESULT_CUSTOM: i32 = 3;
 pub const VISIT_RESULT_ERROR: i32 = 4;
 
+// ---------------------------------------------------------------------------
+// Data-driven callback specifications
+// ---------------------------------------------------------------------------
+
+/// The kind of a single callback parameter (beyond the common ctx/user_data/out
+/// prefix that every callback shares).
+enum ParamKind {
+    /// Required `*const c_char` — converted from `&str` via `CString::new`.
+    Str(&'static str),
+    /// Optional `*const c_char` — converted from `Option<&str>` via `opt_str_to_c`.
+    OptStr(&'static str),
+    /// `i32` — converted from `bool` via `i32::from`.
+    Bool(&'static str),
+    /// `u32` — passed through directly.
+    U32(&'static str),
+    /// `usize` — passed through directly.
+    Usize(&'static str),
+    /// `*const *const c_char` + `usize` (cell_count) — special for table rows.
+    CellSlice(&'static str),
+}
+
+/// Specification for one visitor callback.
+struct CallbackSpec {
+    name: &'static str,
+    doc: &'static str,
+    params: &'static [ParamKind],
+}
+
+/// All 40 callback specifications, in **exact field order** for Go ABI compatibility.
+///
+/// CRITICAL: Do not reorder these entries. The field order in the generated
+/// `#[repr(C)]` struct must match the Go binding layout.
+const CALLBACKS: &[CallbackSpec] = &[
+    CallbackSpec {
+        name: "visit_text",
+        doc: "Visit text nodes.",
+        params: &[ParamKind::Str("text")],
+    },
+    CallbackSpec {
+        name: "visit_element_start",
+        doc: "Called before entering any element.",
+        params: &[],
+    },
+    CallbackSpec {
+        name: "visit_element_end",
+        doc: "Called after exiting any element; receives the default markdown output.",
+        params: &[ParamKind::Str("output")],
+    },
+    CallbackSpec {
+        name: "visit_link",
+        doc: "Visit anchor links `<a href=\"...\">`.\\n    ///\\n    /// `title` may be null.",
+        params: &[
+            ParamKind::Str("href"),
+            ParamKind::Str("text"),
+            ParamKind::OptStr("title"),
+        ],
+    },
+    CallbackSpec {
+        name: "visit_image",
+        doc: "Visit images `<img src=\"...\">`.\\n    ///\\n    /// `title` may be null.",
+        params: &[ParamKind::Str("src"), ParamKind::Str("alt"), ParamKind::OptStr("title")],
+    },
+    CallbackSpec {
+        name: "visit_heading",
+        doc: "Visit heading elements `<h1>`\\u{2013}`<h6>`.\\n    ///\\n    /// `id` may be null.",
+        params: &[ParamKind::U32("level"), ParamKind::Str("text"), ParamKind::OptStr("id")],
+    },
+    CallbackSpec {
+        name: "visit_code_block",
+        doc: "Visit code blocks `<pre><code>`.\\n    ///\\n    /// `lang` may be null.",
+        params: &[ParamKind::OptStr("lang"), ParamKind::Str("code")],
+    },
+    CallbackSpec {
+        name: "visit_code_inline",
+        doc: "Visit inline code `<code>`.",
+        params: &[ParamKind::Str("code")],
+    },
+    CallbackSpec {
+        name: "visit_list_item",
+        doc: "Visit list items `<li>`.",
+        params: &[
+            ParamKind::Bool("ordered"),
+            ParamKind::Str("marker"),
+            ParamKind::Str("text"),
+        ],
+    },
+    CallbackSpec {
+        name: "visit_list_start",
+        doc: "Called before processing a list `<ul>` or `<ol>`.",
+        params: &[ParamKind::Bool("ordered")],
+    },
+    CallbackSpec {
+        name: "visit_list_end",
+        doc: "Called after processing a list `</ul>` or `</ol>`.",
+        params: &[ParamKind::Bool("ordered"), ParamKind::Str("output")],
+    },
+    CallbackSpec {
+        name: "visit_table_start",
+        doc: "Called before processing a table `<table>`.",
+        params: &[],
+    },
+    CallbackSpec {
+        name: "visit_table_row",
+        doc: "Visit table rows `<tr>`.\\n    ///\\n    /// Cells are passed as a null-terminated array of null-terminated strings.",
+        params: &[ParamKind::CellSlice("cells"), ParamKind::Bool("is_header")],
+    },
+    CallbackSpec {
+        name: "visit_table_end",
+        doc: "Called after processing a table `</table>`.",
+        params: &[ParamKind::Str("output")],
+    },
+    CallbackSpec {
+        name: "visit_blockquote",
+        doc: "Visit blockquote elements `<blockquote>`.",
+        params: &[ParamKind::Str("content"), ParamKind::Usize("depth")],
+    },
+    CallbackSpec {
+        name: "visit_strong",
+        doc: "Visit strong/bold elements `<strong>`, `<b>`.",
+        params: &[ParamKind::Str("text")],
+    },
+    CallbackSpec {
+        name: "visit_emphasis",
+        doc: "Visit emphasis/italic elements `<em>`, `<i>`.",
+        params: &[ParamKind::Str("text")],
+    },
+    CallbackSpec {
+        name: "visit_strikethrough",
+        doc: "Visit strikethrough elements `<s>`, `<del>`, `<strike>`.",
+        params: &[ParamKind::Str("text")],
+    },
+    CallbackSpec {
+        name: "visit_underline",
+        doc: "Visit underline elements `<u>`, `<ins>`.",
+        params: &[ParamKind::Str("text")],
+    },
+    CallbackSpec {
+        name: "visit_subscript",
+        doc: "Visit subscript elements `<sub>`.",
+        params: &[ParamKind::Str("text")],
+    },
+    CallbackSpec {
+        name: "visit_superscript",
+        doc: "Visit superscript elements `<sup>`.",
+        params: &[ParamKind::Str("text")],
+    },
+    CallbackSpec {
+        name: "visit_mark",
+        doc: "Visit mark/highlight elements `<mark>`.",
+        params: &[ParamKind::Str("text")],
+    },
+    CallbackSpec {
+        name: "visit_line_break",
+        doc: "Visit line break elements `<br>`.",
+        params: &[],
+    },
+    CallbackSpec {
+        name: "visit_horizontal_rule",
+        doc: "Visit horizontal rule elements `<hr>`.",
+        params: &[],
+    },
+    CallbackSpec {
+        name: "visit_custom_element",
+        doc: "Visit custom/unknown elements.",
+        params: &[ParamKind::Str("tag_name"), ParamKind::Str("html")],
+    },
+    CallbackSpec {
+        name: "visit_definition_list_start",
+        doc: "Visit definition list `<dl>`.",
+        params: &[],
+    },
+    CallbackSpec {
+        name: "visit_definition_term",
+        doc: "Visit definition term `<dt>`.",
+        params: &[ParamKind::Str("text")],
+    },
+    CallbackSpec {
+        name: "visit_definition_description",
+        doc: "Visit definition description `<dd>`.",
+        params: &[ParamKind::Str("text")],
+    },
+    CallbackSpec {
+        name: "visit_definition_list_end",
+        doc: "Called after processing a definition list `</dl>`.",
+        params: &[ParamKind::Str("output")],
+    },
+    CallbackSpec {
+        name: "visit_form",
+        doc: "Visit form elements `<form>`.\\n    ///\\n    /// `action` and `method` may be null.",
+        params: &[ParamKind::OptStr("action"), ParamKind::OptStr("method")],
+    },
+    CallbackSpec {
+        name: "visit_input",
+        doc: "Visit input elements `<input>`.\\n    ///\\n    /// `name` and `value` may be null.",
+        params: &[
+            ParamKind::Str("input_type"),
+            ParamKind::OptStr("name"),
+            ParamKind::OptStr("value"),
+        ],
+    },
+    CallbackSpec {
+        name: "visit_button",
+        doc: "Visit button elements `<button>`.",
+        params: &[ParamKind::Str("text")],
+    },
+    CallbackSpec {
+        name: "visit_audio",
+        doc: "Visit audio elements `<audio>`.\\n    ///\\n    /// `src` may be null.",
+        params: &[ParamKind::OptStr("src")],
+    },
+    CallbackSpec {
+        name: "visit_video",
+        doc: "Visit video elements `<video>`.\\n    ///\\n    /// `src` may be null.",
+        params: &[ParamKind::OptStr("src")],
+    },
+    CallbackSpec {
+        name: "visit_iframe",
+        doc: "Visit iframe elements `<iframe>`.\\n    ///\\n    /// `src` may be null.",
+        params: &[ParamKind::OptStr("src")],
+    },
+    CallbackSpec {
+        name: "visit_details",
+        doc: "Visit details elements `<details>`.\\n    ///\\n    /// `open` is non-zero when the `open` attribute is present.",
+        params: &[ParamKind::Bool("open")],
+    },
+    CallbackSpec {
+        name: "visit_summary",
+        doc: "Visit summary elements `<summary>`.",
+        params: &[ParamKind::Str("text")],
+    },
+    CallbackSpec {
+        name: "visit_figure_start",
+        doc: "Called before processing a figure `<figure>`.",
+        params: &[],
+    },
+    CallbackSpec {
+        name: "visit_figcaption",
+        doc: "Visit figcaption elements `<figcaption>`.",
+        params: &[ParamKind::Str("text")],
+    },
+    CallbackSpec {
+        name: "visit_figure_end",
+        doc: "Called after processing a figure `</figure>`.",
+        params: &[ParamKind::Str("output")],
+    },
+];
+
+// ---------------------------------------------------------------------------
+// Code-generation helpers — each produces one section of the output
+// ---------------------------------------------------------------------------
+
+/// Build the C `extern "C" fn(...)` signature parameters for one callback.
+fn c_param_list(spec: &CallbackSpec, pascal_prefix: &str) -> String {
+    let mut parts = vec![
+        format!("ctx: *const {pascal_prefix}NodeContext"),
+        "user_data: *mut std::ffi::c_void".to_string(),
+    ];
+    for p in spec.params {
+        match p {
+            ParamKind::Str(n) | ParamKind::OptStr(n) => {
+                parts.push(format!("{n}: *const std::ffi::c_char"));
+            }
+            ParamKind::Bool(n) => parts.push(format!("{n}: i32")),
+            ParamKind::U32(n) => parts.push(format!("{n}: u32")),
+            ParamKind::Usize(n) => parts.push(format!("{n}: usize")),
+            ParamKind::CellSlice(n) => {
+                parts.push(format!("{n}: *const *const std::ffi::c_char"));
+                parts.push("cell_count: usize".to_string());
+            }
+        }
+    }
+    parts.push("out_custom: *mut *mut std::ffi::c_char".to_string());
+    parts.push("out_len: *mut usize".to_string());
+    parts.join(",\n            ")
+}
+
+/// Generate all `Option<unsafe extern "C" fn(...)>` struct fields.
+fn gen_struct_fields(pascal_prefix: &str) -> String {
+    let mut out = String::new();
+    for spec in CALLBACKS {
+        out.push_str(&format!(
+            "\n    /// {doc}\n    pub {name}: Option<\n        unsafe extern \"C\" fn(\n            {params}\n        ) -> i32,\n    >,\n",
+            doc = spec.doc,
+            name = spec.name,
+            params = c_param_list(spec, pascal_prefix),
+        ));
+    }
+    out
+}
+
+/// Build the Rust trait parameter list for a callback (the `&str`, `bool`, etc. side).
+fn rust_param_list(spec: &CallbackSpec, core_import: &str) -> String {
+    let mut parts = vec![
+        "&mut self".to_string(),
+        format!("ctx: &{core_import}::visitor::NodeContext"),
+    ];
+    for p in spec.params {
+        match p {
+            ParamKind::Str(n) => parts.push(format!("{n}: &str")),
+            ParamKind::OptStr(n) => parts.push(format!("{n}: Option<&str>")),
+            ParamKind::Bool(n) => parts.push(format!("{n}: bool")),
+            ParamKind::U32(n) => parts.push(format!("{n}: u32")),
+            ParamKind::Usize(n) => parts.push(format!("{n}: usize")),
+            ParamKind::CellSlice(n) => parts.push(format!("{n}: &[String]")),
+        }
+    }
+    parts.join(", ")
+}
+
+/// Generate the body of one `impl HtmlVisitor` method.
+///
+/// Produces local CString bindings, the `call_with_ctx` invocation, and the
+/// callback argument forwarding.
+fn gen_impl_body(spec: &CallbackSpec, core_import: &str) -> String {
+    let mut bindings = String::new();
+    let mut cb_args = Vec::new();
+
+    for p in spec.params {
+        match p {
+            ParamKind::Str(n) => {
+                bindings.push_str(&format!(
+                    "        let {n}_cs = match std::ffi::CString::new({n}) {{\n            Ok(s) => s,\n            Err(_) => return {core_import}::visitor::VisitResult::Continue,\n        }};\n"
+                ));
+                cb_args.push(format!("{n}_cs.as_ptr()"));
+            }
+            ParamKind::OptStr(n) => {
+                bindings.push_str(&format!("        let ({n}_ptr, _{n}_cs) = opt_str_to_c({n});\n"));
+                cb_args.push(format!("{n}_ptr"));
+            }
+            ParamKind::Bool(n) => {
+                bindings.push_str(&format!("        let {n}_i = i32::from({n});\n"));
+                cb_args.push(format!("{n}_i"));
+            }
+            ParamKind::U32(n) | ParamKind::Usize(n) => {
+                cb_args.push((*n).to_string());
+            }
+            ParamKind::CellSlice(n) => {
+                bindings.push_str(&format!(
+                    "        let {n}_cstrings: Vec<std::ffi::CString> = {n}\n            .iter()\n            .filter_map(|s| std::ffi::CString::new(s.as_str()).ok())\n            .collect();\n        let {n}_ptrs: Vec<*const std::ffi::c_char> =\n            {n}_cstrings.iter().map(|cs| cs.as_ptr()).collect();\n        let cell_count = {n}_ptrs.len();\n"
+                ));
+                cb_args.push(format!("{n}_ptrs.as_ptr()"));
+                cb_args.push("cell_count".to_string());
+            }
+        }
+    }
+
+    let args_str = if cb_args.is_empty() {
+        "out_custom, out_len".to_string()
+    } else {
+        format!("{}, out_custom, out_len", cb_args.join(", "))
+    };
+
+    format!(
+        "        let Some(cb) = self.callbacks.{name} else {{\n            return {core_import}::visitor::VisitResult::Continue;\n        }};\n        let user_data = self.callbacks.user_data;\n{bindings}        // SAFETY: cb is a valid function pointer; all temporaries live for this call.\n        unsafe {{\n            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{\n                cb(c_ctx, user_data, {args_str})\n            }})\n        }}",
+        name = spec.name,
+    )
+}
+
+/// Generate all `impl HtmlVisitor` methods.
+fn gen_impl_methods(pascal_prefix: &str, core_import: &str) -> String {
+    let mut out = String::new();
+    for spec in CALLBACKS {
+        out.push_str(&format!(
+            "\n    fn {name}(\n        {params}\n    ) -> {core_import}::visitor::VisitResult {{\n{body}\n    }}\n",
+            name = spec.name,
+            params = rust_param_list(spec, core_import),
+            body = gen_impl_body(spec, core_import),
+        ));
+    }
+    // Close the impl block — caller opens it.
+    let _ = pascal_prefix; // used by caller
+    out
+}
+
+/// Build the forwarding argument list for `VisitorRef` delegation.
+fn visitor_ref_args(spec: &CallbackSpec) -> String {
+    let mut args = vec!["ctx".to_string()];
+    for p in spec.params {
+        match p {
+            ParamKind::Str(n)
+            | ParamKind::OptStr(n)
+            | ParamKind::Bool(n)
+            | ParamKind::U32(n)
+            | ParamKind::Usize(n)
+            | ParamKind::CellSlice(n) => args.push((*n).to_string()),
+        }
+    }
+    args.join(", ")
+}
+
+/// Generate all `VisitorRef` forwarding methods.
+fn gen_visitor_ref_methods(core_import: &str) -> String {
+    let mut out = String::new();
+    for spec in CALLBACKS {
+        let params = rust_param_list(spec, core_import);
+        let args = visitor_ref_args(spec);
+        out.push_str(&format!(
+            "            fn {name}({params}) -> {core_import}::visitor::VisitResult {{\n                unsafe {{ (*self.0).{name}({args}) }}\n            }}\n",
+            name = spec.name,
+        ));
+    }
+    out
+}
+
 /// Generate the visitor FFI bindings block for `lib.rs`.
 ///
 /// # Parameters
@@ -39,6 +443,10 @@ pub const VISIT_RESULT_ERROR: i32 = 4;
 /// - `core_import`: the Rust `use` path for the core crate (e.g. `"html_to_markdown_rs"`).
 pub fn gen_visitor_bindings(prefix: &str, core_import: &str) -> String {
     let pascal_prefix = prefix.to_pascal_case();
+
+    let struct_fields = gen_struct_fields(&pascal_prefix);
+    let impl_methods = gen_impl_methods(&pascal_prefix, core_import);
+    let visitor_ref_methods = gen_visitor_ref_methods(core_import);
 
     format!(
         r#"// ---------------------------------------------------------------------------
@@ -107,550 +515,7 @@ pub struct {pascal_prefix}NodeContext {{
 pub struct {pascal_prefix}VisitorCallbacks {{
     /// Arbitrary caller context forwarded to every callback.
     pub user_data: *mut std::ffi::c_void,
-
-    /// Visit text nodes.
-    ///
-    /// Signature: `fn(ctx, user_data, text, out_custom, out_len) -> i32`
-    pub visit_text: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            text: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Called before entering any element.
-    ///
-    /// Signature: `fn(ctx, user_data, out_custom, out_len) -> i32`
-    pub visit_element_start: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Called after exiting any element; receives the default markdown output.
-    ///
-    /// Signature: `fn(ctx, user_data, output, out_custom, out_len) -> i32`
-    pub visit_element_end: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            output: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit anchor links `<a href="...">`.
-    ///
-    /// Signature: `fn(ctx, user_data, href, text, title, out_custom, out_len) -> i32`
-    /// `title` may be null.
-    pub visit_link: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            href: *const std::ffi::c_char,
-            text: *const std::ffi::c_char,
-            title: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit images `<img src="...">`.
-    ///
-    /// Signature: `fn(ctx, user_data, src, alt, title, out_custom, out_len) -> i32`
-    /// `title` may be null.
-    pub visit_image: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            src: *const std::ffi::c_char,
-            alt: *const std::ffi::c_char,
-            title: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit heading elements `<h1>`–`<h6>`.
-    ///
-    /// Signature: `fn(ctx, user_data, level, text, id, out_custom, out_len) -> i32`
-    /// `id` may be null.
-    pub visit_heading: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            level: u32,
-            text: *const std::ffi::c_char,
-            id: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit code blocks `<pre><code>`.
-    ///
-    /// Signature: `fn(ctx, user_data, lang, code, out_custom, out_len) -> i32`
-    /// `lang` may be null.
-    pub visit_code_block: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            lang: *const std::ffi::c_char,
-            code: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit inline code `<code>`.
-    ///
-    /// Signature: `fn(ctx, user_data, code, out_custom, out_len) -> i32`
-    pub visit_code_inline: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            code: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit list items `<li>`.
-    ///
-    /// Signature: `fn(ctx, user_data, ordered, marker, text, out_custom, out_len) -> i32`
-    pub visit_list_item: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            ordered: i32,
-            marker: *const std::ffi::c_char,
-            text: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Called before processing a list `<ul>` or `<ol>`.
-    ///
-    /// Signature: `fn(ctx, user_data, ordered, out_custom, out_len) -> i32`
-    pub visit_list_start: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            ordered: i32,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Called after processing a list `</ul>` or `</ol>`.
-    ///
-    /// Signature: `fn(ctx, user_data, ordered, output, out_custom, out_len) -> i32`
-    pub visit_list_end: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            ordered: i32,
-            output: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Called before processing a table `<table>`.
-    ///
-    /// Signature: `fn(ctx, user_data, out_custom, out_len) -> i32`
-    pub visit_table_start: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit table rows `<tr>`.
-    ///
-    /// Cells are passed as a null-terminated array of null-terminated strings.
-    ///
-    /// Signature: `fn(ctx, user_data, cells, cell_count, is_header, out_custom, out_len) -> i32`
-    pub visit_table_row: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            cells: *const *const std::ffi::c_char,
-            cell_count: usize,
-            is_header: i32,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Called after processing a table `</table>`.
-    ///
-    /// Signature: `fn(ctx, user_data, output, out_custom, out_len) -> i32`
-    pub visit_table_end: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            output: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit blockquote elements `<blockquote>`.
-    ///
-    /// Signature: `fn(ctx, user_data, content, depth, out_custom, out_len) -> i32`
-    pub visit_blockquote: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            content: *const std::ffi::c_char,
-            depth: usize,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit strong/bold elements `<strong>`, `<b>`.
-    ///
-    /// Signature: `fn(ctx, user_data, text, out_custom, out_len) -> i32`
-    pub visit_strong: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            text: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit emphasis/italic elements `<em>`, `<i>`.
-    ///
-    /// Signature: `fn(ctx, user_data, text, out_custom, out_len) -> i32`
-    pub visit_emphasis: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            text: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit strikethrough elements `<s>`, `<del>`, `<strike>`.
-    ///
-    /// Signature: `fn(ctx, user_data, text, out_custom, out_len) -> i32`
-    pub visit_strikethrough: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            text: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit underline elements `<u>`, `<ins>`.
-    ///
-    /// Signature: `fn(ctx, user_data, text, out_custom, out_len) -> i32`
-    pub visit_underline: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            text: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit subscript elements `<sub>`.
-    ///
-    /// Signature: `fn(ctx, user_data, text, out_custom, out_len) -> i32`
-    pub visit_subscript: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            text: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit superscript elements `<sup>`.
-    ///
-    /// Signature: `fn(ctx, user_data, text, out_custom, out_len) -> i32`
-    pub visit_superscript: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            text: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit mark/highlight elements `<mark>`.
-    ///
-    /// Signature: `fn(ctx, user_data, text, out_custom, out_len) -> i32`
-    pub visit_mark: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            text: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit line break elements `<br>`.
-    ///
-    /// Signature: `fn(ctx, user_data, out_custom, out_len) -> i32`
-    pub visit_line_break: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit horizontal rule elements `<hr>`.
-    ///
-    /// Signature: `fn(ctx, user_data, out_custom, out_len) -> i32`
-    pub visit_horizontal_rule: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit custom/unknown elements.
-    ///
-    /// Signature: `fn(ctx, user_data, tag_name, html, out_custom, out_len) -> i32`
-    pub visit_custom_element: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            tag_name: *const std::ffi::c_char,
-            html: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit definition list `<dl>`.
-    ///
-    /// Signature: `fn(ctx, user_data, out_custom, out_len) -> i32`
-    pub visit_definition_list_start: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit definition term `<dt>`.
-    ///
-    /// Signature: `fn(ctx, user_data, text, out_custom, out_len) -> i32`
-    pub visit_definition_term: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            text: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit definition description `<dd>`.
-    ///
-    /// Signature: `fn(ctx, user_data, text, out_custom, out_len) -> i32`
-    pub visit_definition_description: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            text: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Called after processing a definition list `</dl>`.
-    ///
-    /// Signature: `fn(ctx, user_data, output, out_custom, out_len) -> i32`
-    pub visit_definition_list_end: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            output: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit form elements `<form>`.
-    ///
-    /// Signature: `fn(ctx, user_data, action, method, out_custom, out_len) -> i32`
-    /// `action` and `method` may be null.
-    pub visit_form: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            action: *const std::ffi::c_char,
-            method: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit input elements `<input>`.
-    ///
-    /// Signature: `fn(ctx, user_data, input_type, name, value, out_custom, out_len) -> i32`
-    /// `name` and `value` may be null.
-    pub visit_input: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            input_type: *const std::ffi::c_char,
-            name: *const std::ffi::c_char,
-            value: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit button elements `<button>`.
-    ///
-    /// Signature: `fn(ctx, user_data, text, out_custom, out_len) -> i32`
-    pub visit_button: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            text: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit audio elements `<audio>`.
-    ///
-    /// Signature: `fn(ctx, user_data, src, out_custom, out_len) -> i32`
-    /// `src` may be null.
-    pub visit_audio: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            src: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit video elements `<video>`.
-    ///
-    /// Signature: `fn(ctx, user_data, src, out_custom, out_len) -> i32`
-    /// `src` may be null.
-    pub visit_video: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            src: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit iframe elements `<iframe>`.
-    ///
-    /// Signature: `fn(ctx, user_data, src, out_custom, out_len) -> i32`
-    /// `src` may be null.
-    pub visit_iframe: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            src: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit details elements `<details>`.
-    ///
-    /// Signature: `fn(ctx, user_data, open, out_custom, out_len) -> i32`
-    /// `open` is non-zero when the `open` attribute is present.
-    pub visit_details: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            open: i32,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit summary elements `<summary>`.
-    ///
-    /// Signature: `fn(ctx, user_data, text, out_custom, out_len) -> i32`
-    pub visit_summary: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            text: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Called before processing a figure `<figure>`.
-    ///
-    /// Signature: `fn(ctx, user_data, out_custom, out_len) -> i32`
-    pub visit_figure_start: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Visit figcaption elements `<figcaption>`.
-    ///
-    /// Signature: `fn(ctx, user_data, text, out_custom, out_len) -> i32`
-    pub visit_figcaption: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            text: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-
-    /// Called after processing a figure `</figure>`.
-    ///
-    /// Signature: `fn(ctx, user_data, output, out_custom, out_len) -> i32`
-    pub visit_figure_end: Option<
-        unsafe extern "C" fn(
-            ctx: *const {pascal_prefix}NodeContext,
-            user_data: *mut std::ffi::c_void,
-            output: *const std::ffi::c_char,
-            out_custom: *mut *mut std::ffi::c_char,
-            out_len: *mut usize,
-        ) -> i32,
-    >,
-}}
+{struct_fields}}}
 
 // SAFETY: The `user_data` pointer is the caller's responsibility. We require
 // callers to uphold thread-safety themselves (i.e. not share a visitor across
@@ -768,844 +633,7 @@ fn opt_str_to_c(s: Option<&str>) -> (*const std::ffi::c_char, Option<std::ffi::C
 }}
 
 impl {core_import}::visitor::HtmlVisitor for {pascal_prefix}Visitor {{
-    fn visit_text(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        text: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_text else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let text_cstring = match std::ffi::CString::new(text) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is a valid function pointer; text_cstring lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, text_cstring.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_element_start(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_element_start else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        // SAFETY: cb is a valid function pointer; ctx lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_element_end(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        output: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_element_end else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let output_cstring = match std::ffi::CString::new(output) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is a valid function pointer; output_cstring lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, output_cstring.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_link(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        href: &str,
-        text: &str,
-        title: Option<&str>,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_link else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let href_cs = match std::ffi::CString::new(href) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        let text_cs = match std::ffi::CString::new(text) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        let (title_ptr, _title_cs) = opt_str_to_c(title);
-        // SAFETY: cb is valid; all CStrings live for the duration of this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, href_cs.as_ptr(), text_cs.as_ptr(), title_ptr, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_image(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        src: &str,
-        alt: &str,
-        title: Option<&str>,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_image else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let src_cs = match std::ffi::CString::new(src) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        let alt_cs = match std::ffi::CString::new(alt) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        let (title_ptr, _title_cs) = opt_str_to_c(title);
-        // SAFETY: cb is valid; all CStrings live for the duration of this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, src_cs.as_ptr(), alt_cs.as_ptr(), title_ptr, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_heading(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        level: u32,
-        text: &str,
-        id: Option<&str>,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_heading else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let text_cs = match std::ffi::CString::new(text) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        let (id_ptr, _id_cs) = opt_str_to_c(id);
-        // SAFETY: cb is valid; all CStrings live for the duration of this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, level, text_cs.as_ptr(), id_ptr, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_code_block(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        lang: Option<&str>,
-        code: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_code_block else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let (lang_ptr, _lang_cs) = opt_str_to_c(lang);
-        let code_cs = match std::ffi::CString::new(code) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; all CStrings live for the duration of this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, lang_ptr, code_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_code_inline(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        code: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_code_inline else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let code_cs = match std::ffi::CString::new(code) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; code_cs lives for the duration of this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, code_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_list_item(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        ordered: bool,
-        marker: &str,
-        text: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_list_item else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let marker_cs = match std::ffi::CString::new(marker) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        let text_cs = match std::ffi::CString::new(text) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        let ordered_i = i32::from(ordered);
-        // SAFETY: cb is valid; all CStrings live for the duration of this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, ordered_i, marker_cs.as_ptr(), text_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_list_start(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        ordered: bool,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_list_start else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let ordered_i = i32::from(ordered);
-        // SAFETY: cb is valid; ctx lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, ordered_i, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_list_end(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        ordered: bool,
-        output: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_list_end else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let output_cs = match std::ffi::CString::new(output) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        let ordered_i = i32::from(ordered);
-        // SAFETY: cb is valid; output_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, ordered_i, output_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_table_start(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_table_start else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        // SAFETY: cb is valid; ctx lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_table_row(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        cells: &[String],
-        is_header: bool,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_table_row else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        // Build a temporary array of CString pointers for the cells.
-        let cell_cstrings: Vec<std::ffi::CString> = cells
-            .iter()
-            .filter_map(|s| std::ffi::CString::new(s.as_str()).ok())
-            .collect();
-        let cell_ptrs: Vec<*const std::ffi::c_char> =
-            cell_cstrings.iter().map(|cs| cs.as_ptr()).collect();
-        let cell_count = cell_ptrs.len();
-        let is_header_i = i32::from(is_header);
-        // SAFETY: cb is valid; cell_cstrings and cell_ptrs live for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, cell_ptrs.as_ptr(), cell_count, is_header_i, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_table_end(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        output: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_table_end else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let output_cs = match std::ffi::CString::new(output) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; output_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, output_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_blockquote(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        content: &str,
-        depth: usize,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_blockquote else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let content_cs = match std::ffi::CString::new(content) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; content_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, content_cs.as_ptr(), depth, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_strong(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        text: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_strong else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let text_cs = match std::ffi::CString::new(text) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; text_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, text_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_emphasis(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        text: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_emphasis else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let text_cs = match std::ffi::CString::new(text) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; text_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, text_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_strikethrough(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        text: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_strikethrough else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let text_cs = match std::ffi::CString::new(text) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; text_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, text_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_underline(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        text: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_underline else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let text_cs = match std::ffi::CString::new(text) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; text_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, text_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_subscript(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        text: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_subscript else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let text_cs = match std::ffi::CString::new(text) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; text_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, text_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_superscript(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        text: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_superscript else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let text_cs = match std::ffi::CString::new(text) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; text_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, text_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_mark(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        text: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_mark else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let text_cs = match std::ffi::CString::new(text) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; text_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, text_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_line_break(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_line_break else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        // SAFETY: cb is valid; ctx lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_horizontal_rule(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_horizontal_rule else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        // SAFETY: cb is valid; ctx lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_custom_element(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        tag_name: &str,
-        html: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_custom_element else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let tag_cs = match std::ffi::CString::new(tag_name) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        let html_cs = match std::ffi::CString::new(html) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; all CStrings live for the duration of this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, tag_cs.as_ptr(), html_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_definition_list_start(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_definition_list_start else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        // SAFETY: cb is valid; ctx lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_definition_term(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        text: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_definition_term else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let text_cs = match std::ffi::CString::new(text) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; text_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, text_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_definition_description(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        text: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_definition_description else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let text_cs = match std::ffi::CString::new(text) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; text_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, text_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_definition_list_end(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        output: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_definition_list_end else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let output_cs = match std::ffi::CString::new(output) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; output_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, output_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_form(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        action: Option<&str>,
-        method: Option<&str>,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_form else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let (action_ptr, _action_cs) = opt_str_to_c(action);
-        let (method_ptr, _method_cs) = opt_str_to_c(method);
-        // SAFETY: cb is valid; all CStrings live for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, action_ptr, method_ptr, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_input(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        input_type: &str,
-        name: Option<&str>,
-        value: Option<&str>,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_input else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let type_cs = match std::ffi::CString::new(input_type) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        let (name_ptr, _name_cs) = opt_str_to_c(name);
-        let (value_ptr, _value_cs) = opt_str_to_c(value);
-        // SAFETY: cb is valid; all CStrings live for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, type_cs.as_ptr(), name_ptr, value_ptr, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_button(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        text: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_button else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let text_cs = match std::ffi::CString::new(text) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; text_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, text_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_audio(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        src: Option<&str>,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_audio else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let (src_ptr, _src_cs) = opt_str_to_c(src);
-        // SAFETY: cb is valid; _src_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, src_ptr, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_video(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        src: Option<&str>,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_video else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let (src_ptr, _src_cs) = opt_str_to_c(src);
-        // SAFETY: cb is valid; _src_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, src_ptr, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_iframe(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        src: Option<&str>,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_iframe else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let (src_ptr, _src_cs) = opt_str_to_c(src);
-        // SAFETY: cb is valid; _src_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, src_ptr, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_details(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        open: bool,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_details else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let open_i = i32::from(open);
-        // SAFETY: cb is valid; ctx lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, open_i, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_summary(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        text: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_summary else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let text_cs = match std::ffi::CString::new(text) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; text_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, text_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_figure_start(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_figure_start else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        // SAFETY: cb is valid; ctx lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_figcaption(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        text: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_figcaption else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let text_cs = match std::ffi::CString::new(text) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; text_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, text_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-
-    fn visit_figure_end(
-        &mut self,
-        ctx: &{core_import}::visitor::NodeContext,
-        output: &str,
-    ) -> {core_import}::visitor::VisitResult {{
-        let Some(cb) = self.callbacks.visit_figure_end else {{
-            return {core_import}::visitor::VisitResult::Continue;
-        }};
-        let user_data = self.callbacks.user_data;
-        let output_cs = match std::ffi::CString::new(output) {{
-            Ok(s) => s,
-            Err(_) => return {core_import}::visitor::VisitResult::Continue,
-        }};
-        // SAFETY: cb is valid; output_cs lives for this call.
-        unsafe {{
-            call_with_ctx(ctx, |c_ctx, out_custom, out_len| {{
-                cb(c_ctx, user_data, output_cs.as_ptr(), out_custom, out_len)
-            }})
-        }}
-    }}
-}}
+{impl_methods}}}
 
 /// Create a new visitor handle from a callbacks struct.
 ///
@@ -1718,127 +746,7 @@ pub unsafe extern "C" fn {prefix}_convert_with_visitor(
             }}
         }}
         impl {core_import}::visitor::HtmlVisitor for VisitorRef {{
-            fn visit_text(&mut self, ctx: &{core_import}::visitor::NodeContext, text: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_text(ctx, text) }}
-            }}
-            fn visit_element_start(&mut self, ctx: &{core_import}::visitor::NodeContext) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_element_start(ctx) }}
-            }}
-            fn visit_element_end(&mut self, ctx: &{core_import}::visitor::NodeContext, output: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_element_end(ctx, output) }}
-            }}
-            fn visit_link(&mut self, ctx: &{core_import}::visitor::NodeContext, href: &str, text: &str, title: Option<&str>) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_link(ctx, href, text, title) }}
-            }}
-            fn visit_image(&mut self, ctx: &{core_import}::visitor::NodeContext, src: &str, alt: &str, title: Option<&str>) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_image(ctx, src, alt, title) }}
-            }}
-            fn visit_heading(&mut self, ctx: &{core_import}::visitor::NodeContext, level: u32, text: &str, id: Option<&str>) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_heading(ctx, level, text, id) }}
-            }}
-            fn visit_code_block(&mut self, ctx: &{core_import}::visitor::NodeContext, lang: Option<&str>, code: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_code_block(ctx, lang, code) }}
-            }}
-            fn visit_code_inline(&mut self, ctx: &{core_import}::visitor::NodeContext, code: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_code_inline(ctx, code) }}
-            }}
-            fn visit_list_item(&mut self, ctx: &{core_import}::visitor::NodeContext, ordered: bool, marker: &str, text: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_list_item(ctx, ordered, marker, text) }}
-            }}
-            fn visit_list_start(&mut self, ctx: &{core_import}::visitor::NodeContext, ordered: bool) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_list_start(ctx, ordered) }}
-            }}
-            fn visit_list_end(&mut self, ctx: &{core_import}::visitor::NodeContext, ordered: bool, output: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_list_end(ctx, ordered, output) }}
-            }}
-            fn visit_table_start(&mut self, ctx: &{core_import}::visitor::NodeContext) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_table_start(ctx) }}
-            }}
-            fn visit_table_row(&mut self, ctx: &{core_import}::visitor::NodeContext, cells: &[String], is_header: bool) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_table_row(ctx, cells, is_header) }}
-            }}
-            fn visit_table_end(&mut self, ctx: &{core_import}::visitor::NodeContext, output: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_table_end(ctx, output) }}
-            }}
-            fn visit_blockquote(&mut self, ctx: &{core_import}::visitor::NodeContext, content: &str, depth: usize) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_blockquote(ctx, content, depth) }}
-            }}
-            fn visit_strong(&mut self, ctx: &{core_import}::visitor::NodeContext, text: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_strong(ctx, text) }}
-            }}
-            fn visit_emphasis(&mut self, ctx: &{core_import}::visitor::NodeContext, text: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_emphasis(ctx, text) }}
-            }}
-            fn visit_strikethrough(&mut self, ctx: &{core_import}::visitor::NodeContext, text: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_strikethrough(ctx, text) }}
-            }}
-            fn visit_underline(&mut self, ctx: &{core_import}::visitor::NodeContext, text: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_underline(ctx, text) }}
-            }}
-            fn visit_subscript(&mut self, ctx: &{core_import}::visitor::NodeContext, text: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_subscript(ctx, text) }}
-            }}
-            fn visit_superscript(&mut self, ctx: &{core_import}::visitor::NodeContext, text: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_superscript(ctx, text) }}
-            }}
-            fn visit_mark(&mut self, ctx: &{core_import}::visitor::NodeContext, text: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_mark(ctx, text) }}
-            }}
-            fn visit_line_break(&mut self, ctx: &{core_import}::visitor::NodeContext) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_line_break(ctx) }}
-            }}
-            fn visit_horizontal_rule(&mut self, ctx: &{core_import}::visitor::NodeContext) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_horizontal_rule(ctx) }}
-            }}
-            fn visit_custom_element(&mut self, ctx: &{core_import}::visitor::NodeContext, tag_name: &str, html: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_custom_element(ctx, tag_name, html) }}
-            }}
-            fn visit_definition_list_start(&mut self, ctx: &{core_import}::visitor::NodeContext) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_definition_list_start(ctx) }}
-            }}
-            fn visit_definition_term(&mut self, ctx: &{core_import}::visitor::NodeContext, text: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_definition_term(ctx, text) }}
-            }}
-            fn visit_definition_description(&mut self, ctx: &{core_import}::visitor::NodeContext, text: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_definition_description(ctx, text) }}
-            }}
-            fn visit_definition_list_end(&mut self, ctx: &{core_import}::visitor::NodeContext, output: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_definition_list_end(ctx, output) }}
-            }}
-            fn visit_form(&mut self, ctx: &{core_import}::visitor::NodeContext, action: Option<&str>, method: Option<&str>) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_form(ctx, action, method) }}
-            }}
-            fn visit_input(&mut self, ctx: &{core_import}::visitor::NodeContext, input_type: &str, name: Option<&str>, value: Option<&str>) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_input(ctx, input_type, name, value) }}
-            }}
-            fn visit_button(&mut self, ctx: &{core_import}::visitor::NodeContext, text: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_button(ctx, text) }}
-            }}
-            fn visit_audio(&mut self, ctx: &{core_import}::visitor::NodeContext, src: Option<&str>) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_audio(ctx, src) }}
-            }}
-            fn visit_video(&mut self, ctx: &{core_import}::visitor::NodeContext, src: Option<&str>) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_video(ctx, src) }}
-            }}
-            fn visit_iframe(&mut self, ctx: &{core_import}::visitor::NodeContext, src: Option<&str>) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_iframe(ctx, src) }}
-            }}
-            fn visit_details(&mut self, ctx: &{core_import}::visitor::NodeContext, open: bool) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_details(ctx, open) }}
-            }}
-            fn visit_summary(&mut self, ctx: &{core_import}::visitor::NodeContext, text: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_summary(ctx, text) }}
-            }}
-            fn visit_figure_start(&mut self, ctx: &{core_import}::visitor::NodeContext) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_figure_start(ctx) }}
-            }}
-            fn visit_figcaption(&mut self, ctx: &{core_import}::visitor::NodeContext, text: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_figcaption(ctx, text) }}
-            }}
-            fn visit_figure_end(&mut self, ctx: &{core_import}::visitor::NodeContext, output: &str) -> {core_import}::visitor::VisitResult {{
-                unsafe {{ (*self.0).visit_figure_end(ctx, output) }}
-            }}
-        }}
+{visitor_ref_methods}        }}
         let _ = ffi_visitor; // suppress unused warning
         Some(std::rc::Rc::new(std::cell::RefCell::new(VisitorRef(visitor))))
     }};
@@ -1864,5 +772,8 @@ pub unsafe extern "C" fn {prefix}_convert_with_visitor(
         prefix = prefix,
         pascal_prefix = pascal_prefix,
         core_import = core_import,
+        struct_fields = struct_fields,
+        impl_methods = impl_methods,
+        visitor_ref_methods = visitor_ref_methods,
     )
 }

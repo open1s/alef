@@ -833,10 +833,24 @@ fn cargo_toml_has_serde(path: &std::path::Path) -> bool {
     has_serde_json && has_serde_dep
 }
 
+/// A single text replacement rule for version sync.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextReplacement {
+    /// Glob pattern for files to process.
+    pub path: String,
+    /// Regex pattern to search for (may contain `{version}` placeholder).
+    pub search: String,
+    /// Replacement string (may contain `{version}` placeholder).
+    pub replace: String,
+}
+
 /// Configuration for the `sync-versions` command.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SyncConfig {
     /// Extra file paths to update version in (glob patterns).
     #[serde(default)]
     pub extra_paths: Vec<String>,
+    /// Arbitrary text replacements applied during version sync.
+    #[serde(default)]
+    pub text_replacements: Vec<TextReplacement>,
 }
