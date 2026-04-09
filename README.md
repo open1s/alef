@@ -1,253 +1,225 @@
-# alef
+<div align="center">
 
-<div align="center" style="display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 20px 0;">
-  <a href="https://crates.io/crates/alef-cli">
-    <img src="https://img.shields.io/crates/v/alef-cli?label=crates.io&color=007ec6" alt="crates.io">
-  </a>
-  <a href="https://github.com/kreuzberg-dev/alef/releases">
-    <img src="https://img.shields.io/github/v/release/kreuzberg-dev/alef?label=Release&color=007ec6" alt="Release">
-  </a>
-  <a href="https://github.com/kreuzberg-dev/alef/actions">
-    <img src="https://img.shields.io/github/actions/workflow/status/kreuzberg-dev/alef/ci.yml?label=CI&color=007ec6" alt="CI">
-  </a>
-  <a href="https://github.com/kreuzberg-dev/alef/blob/main/LICENSE">
-    <img src="https://img.shields.io/badge/License-MIT-007ec6" alt="License">
-  </a>
-  <a href="https://docs.rs/alef-cli">
-    <img src="https://img.shields.io/badge/docs.rs-alef-007ec6" alt="docs.rs">
-  </a>
+<img width="100%" alt="kreuzberg.dev banner" src="https://github.com/user-attachments/assets/1b6c6ad7-3b6d-4171-b1c9-f2026cc9deb8" />
+
+<div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 16px;">
+
+<a href="https://crates.io/crates/alef-cli">
+  <img src="https://img.shields.io/crates/v/alef-cli?label=crates.io&color=007ec6" alt="crates.io">
+</a>
+<a href="https://github.com/kreuzberg-dev/alef/releases">
+  <img src="https://img.shields.io/github/v/release/kreuzberg-dev/alef?label=Release&color=007ec6" alt="Release">
+</a>
+<a href="https://github.com/kreuzberg-dev/alef/actions/workflows/ci.yml">
+  <img src="https://img.shields.io/github/actions/workflow/status/kreuzberg-dev/alef/ci.yml?label=CI&color=007ec6" alt="CI">
+</a>
+<a href="https://github.com/kreuzberg-dev/alef/blob/main/LICENSE">
+  <img src="https://img.shields.io/badge/License-MIT-007ec6" alt="License">
+</a>
+
 </div>
 
-<img width="3384" height="573" alt="kreuzberg.dev banner" src="https://github.com/user-attachments/assets/1b6c6ad7-3b6d-4171-b1c9-f2026cc9deb8" />
+<br>
 
-<div align="center" style="margin-top: 20px;">
-  <a href="https://discord.gg/xt9WY3GnKR">
-      <img height="22" src="https://img.shields.io/badge/Discord-Join%20our%20community-7289da?logo=discord&logoColor=white" alt="Discord">
-  </a>
+<a href="https://discord.gg/xt9WY3GnKR">
+  <img height="22" src="https://img.shields.io/badge/Discord-Join%20our%20community-7289da?logo=discord&logoColor=white" alt="Discord">
+</a>
+
 </div>
 
-Polyglot binding generator for Rust. One config file, ten languages, lint-clean output.
+# Alef
+
+**Opinionated polyglot binding generator for Rust libraries.**
+
+Alef generates production-quality, fully-typed, lint-clean bindings for **11 languages** from a single Rust crate and a TOML config file. One command to generate. One command to build. One command to test.
 
 ## Supported Languages
 
-| Language | Framework | Output |
-|----------|-----------|--------|
-| Python | PyO3 | Binding crate + `.pyi` stubs |
-| Node.js | NAPI-RS | Binding crate + `.d.ts` types |
-| Ruby | Magnus | Binding crate |
-| PHP | ext-php-rs | Binding crate |
-| Elixir | Rustler | NIF binding crate |
-| WebAssembly | wasm-bindgen | Binding crate |
-| C (FFI) | cbindgen | `extern "C"` functions + `.h` header |
-| Go | cgo | Go package wrapping C FFI |
-| Java | Panama FFM (JDK 21+) | Records + FFI bridge |
-| C# | P/Invoke (.NET 8+) | Classes + FFI bridge |
-
-## Install
-
-```bash
-cargo install alef-cli
-```
-
-Or via Homebrew:
-
-```bash
-brew install kreuzberg-dev/tap/alef
-```
+| Language | Framework | Package Format | Test Framework |
+|----------|-----------|----------------|----------------|
+| Python | PyO3 | PyPI (.whl) | pytest |
+| TypeScript/Node.js | NAPI-RS | npm | vitest |
+| WebAssembly | wasm-bindgen | npm | vitest |
+| Ruby | Magnus | RubyGems (.gem) | RSpec |
+| PHP | ext-php-rs | Composer | PHPUnit |
+| Go | cgo + FFI | Go modules | go test |
+| Java | Panama FFM | Maven (.jar) | JUnit |
+| C# | P/Invoke | NuGet (.nupkg) | xUnit |
+| Elixir | Rustler NIF | Hex | ExUnit |
+| R | extendr | CRAN | testthat |
+| C | cbindgen | Header (.h) | -- |
 
 ## Quick Start
 
-Create `alef.toml` in your Rust workspace root:
-
-```toml
-languages = ["python", "node", "ffi", "go"]
-
-[crate]
-name = "my-lib"
-sources = ["crates/my-lib/src/lib.rs"]
-version_from = "Cargo.toml"
-
-[include]
-types = ["Config", "Result"]
-functions = ["process"]
-
-[output]
-python = "crates/my-lib-py/src/"
-node = "crates/my-lib-node/src/"
-ffi = "crates/my-lib-ffi/src/"
-
-[python]
-module_name = "_my_lib"
-
-[ffi]
-prefix = "my_lib"
-
-[go]
-module = "github.com/my-org/my-lib-go"
-```
-
-Generate bindings:
+### Install
 
 ```bash
-alef generate
+# From crates.io
+cargo install alef-cli
+
+# Or via Homebrew
+brew install kreuzberg-dev/tap/alef
+
+# Or from source
+git clone https://github.com/kreuzberg-dev/alef.git
+cd alef && cargo install --path crates/alef-cli
 ```
 
-Build everything:
+### Initialize
 
 ```bash
-cargo build -p my-lib-py -p my-lib-node -p my-lib-ffi
+cd your-rust-crate
+alef init --lang python,node,ruby,go
 ```
 
-## In Production
+This creates `alef.toml` with your crate's configuration.
 
-alef generates bindings for:
+### Generate Bindings
 
-| Project | Languages | Types | Description |
-|---------|-----------|-------|-------------|
-| [kreuzberg](https://github.com/kreuzberg-dev/kreuzberg) | 10 | 50+ | Document extraction |
-| [html-to-markdown](https://github.com/kreuzberg-dev/html-to-markdown) | 10 | 22 | HTML to Markdown converter |
-| [liter-llm](https://github.com/kreuzberg-dev/liter-llm) | 10 | 30+ | LLM client library |
-| [spikard](https://github.com/kreuzberg-dev/spikard) | 5 | 15+ | Web framework |
-
-## How It Works
-
-```text
-alef.toml + Rust source
-        |
-        v
-   alef extract          syn parses pub types, functions, enums
-        |
-        v
-   IR (ApiSurface)          cached as JSON in .alef/
-        |
-        v
-   alef generate         per-language backend emits code
-        |
-        +-> crates/{name}-py/src/lib.rs       PyO3 bindings
-        +-> crates/{name}-node/src/lib.rs     NAPI-RS bindings
-        +-> crates/{name}-ffi/src/lib.rs      C FFI + header
-        +-> packages/go/binding.go            cgo wrapper
-        +-> packages/java/src/                Panama FFM records
-        +-> packages/csharp/                  P/Invoke classes
-        +-> ...
+```bash
+alef generate              # Generate all configured languages
+alef generate --lang node  # Generate for specific language
+alef generate --clean      # Regenerate everything (ignore cache)
 ```
 
-Generated Rust code is automatically formatted with `rustfmt` and passes `cargo clippy -D warnings` with zero file-level suppressions.
+### Build
+
+```bash
+alef build                 # Build all languages
+alef build --lang node     # Build Node.js (runs napi build + patches .d.ts)
+alef build --release       # Release profile
+```
+
+### Test
+
+```bash
+alef test                  # Run all language tests
+alef test --e2e            # Include e2e tests
+alef test --lang python,go # Specific languages
+```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `alef generate` | Generate bindings for all configured languages |
-| `alef generate --lang python,node` | Generate specific languages only |
-| `alef generate --clean` | Regenerate ignoring cache |
-| `alef stubs` | Generate type stubs (`.pyi`, `.rbs`) |
-| `alef scaffold` | Generate package metadata |
+| `alef init` | Initialize `alef.toml` for your crate |
+| `alef extract` | Extract API surface from Rust source into IR JSON |
+| `alef generate` | Generate language bindings from IR |
+| `alef stubs` | Generate type stubs (.pyi, .rbs, .d.ts) |
+| `alef scaffold` | Generate package manifests (pyproject.toml, package.json, etc.) |
 | `alef readme` | Generate per-language README files |
-| `alef sync-versions` | Sync version to all manifests |
-| `alef verify --exit-code` | CI: fail if bindings are stale |
-| `alef diff` | Show what would change without writing |
+| `alef build` | Build bindings with native tools (maturin, napi, wasm-pack, etc.) |
+| `alef test` | Run per-language test suites |
 | `alef lint` | Run configured linters on generated output |
-| `alef all` | Run everything (generate + stubs + scaffold + readme) |
-| `alef init` | Create `alef.toml` interactively |
+| `alef sync-versions` | Sync version from Cargo.toml to all manifests |
+| `alef verify` | Check if bindings are up-to-date |
+| `alef diff` | Show what would change without writing |
+| `alef all` | Run full pipeline: generate + stubs + scaffold + readme + sync |
+| `alef cache` | Manage build cache |
 
-## Configuration Reference
+## Configuration
 
-### Include and Exclude
-
-Control which types, functions, and methods are exposed to bindings:
-
-```toml
-[include]
-types = ["Config", "Result", "Error"]
-functions = ["process", "validate"]
-
-[exclude]
-types = ["InternalHelper"]
-methods = ["Config.apply_update", "Config.from_update"]
-```
-
-### Language-Specific Options
+Alef is configured via `alef.toml` in your project root:
 
 ```toml
+[crate]
+name = "my-library"
+sources = [
+  "crates/my-library/src/lib.rs",
+  "crates/my-library/src/types.rs",
+]
+
+languages = ["python", "node", "ruby", "go", "java", "csharp", "elixir", "wasm", "ffi"]
+
+[output]
+python = "crates/my-library-py/src/"
+node = "crates/my-library-node/src/"
+ffi = "crates/my-library-ffi/src/"
+
 [python]
-module_name = "_my_lib"
-
-[python.stubs]
-output = "packages/python/my_lib/"
+module_name = "my_library"
 
 [node]
-package_name = "@my-org/my-lib"
+package_name = "@myorg/my-library"
 
 [ffi]
-prefix = "my_lib"
-header_name = "my_lib.h"
-lib_name = "my_lib_ffi"
+prefix = "ml"
+header_name = "my_library.h"
 
-[go]
-module = "github.com/my-org/my-lib-go"
-package_name = "mylib"
+[dto]
+python = "dataclass"
+python_output = "typeddict"
+node = "interface"
 
-[java]
-package = "dev.myorg.mylib"
+[test.python]
+command = "pytest packages/python/tests/"
+e2e = "cd e2e/python && pytest"
 
-[csharp]
-namespace = "MyLib"
-
-[elixir]
-app_name = "my_lib"
+[test.node]
+command = "npx vitest run"
 ```
 
-### Output Directories
+## Features
 
-```toml
-[output]
-python = "crates/my-lib-py/src/"
-node = "crates/my-lib-node/src/"
-ruby = "packages/ruby/ext/my_lib_rb/src/"
-php = "crates/my-lib-php/src/"
-ffi = "crates/my-lib-ffi/src/"
-elixir = "packages/elixir/native/my_lib_nif/src/"
-wasm = "crates/my-lib-wasm/src/"
+### Configurable DTO Styles
+
+Choose how types are represented in each language:
+
+| Language | Options |
+|----------|---------|
+| Python | `dataclass`, `typeddict`, `pydantic`, `msgspec` |
+| TypeScript | `interface`, `zod` |
+| Ruby | `struct`, `dry-struct`, `data` |
+| PHP | `readonly-class`, `array` |
+
+### Visitor FFI
+
+Full 40-method visitor callback support via C FFI, enabling visitor patterns in Go, Java, C#, and other FFI-based languages.
+
+### Version Sync
+
+```bash
+alef sync-versions              # Sync from Cargo.toml
+alef sync-versions --bump patch # Bump + sync + refresh headers
 ```
 
-## Caching
+Supports text replacements for C headers, pkg-config files, READMEs, and custom patterns via `[sync]` config.
 
-alef caches the extracted IR and per-language output hashes in `.alef/` (add to `.gitignore`). Only backends whose inputs changed are regenerated. Use `--clean` to bypass.
+### Build Orchestration
 
-## CI Integration
+Wraps language-specific build tools with post-processing:
 
-Verify bindings are up to date in CI:
+| Language | Tool | Post-Processing |
+|----------|------|-----------------|
+| Python | maturin | -- |
+| Node.js | napi-rs | Patches `.d.ts` (const enum to enum for verbatimModuleSyntax) |
+| WASM | wasm-pack | -- |
+| Go/Java/C# | cargo (FFI) | Generates C header via cbindgen |
 
-```yaml
-- run: alef verify --exit-code
+## Architecture
+
+```text
+alef.toml --> Extract IR --> Generate Bindings --> Build --> Test
+                 |                  |
+            API Surface       11 Language Backends
+            (types, fns,      (PyO3, NAPI, Magnus,
+             enums, errors)    ext-php-rs, wasm-bindgen,
+                               cbindgen, Rustler, extendr,
+                               Panama FFM, P/Invoke, cgo)
 ```
 
-Or as a pre-commit hook:
+**Crate structure:**
 
-```yaml
-# .pre-commit-config.yaml
-- repo: local
-  hooks:
-    - id: alef-verify
-      name: alef verify
-      entry: alef verify --exit-code
-      language: system
-      pass_filenames: false
-```
-
-## Key Design Decisions
-
-- **Shared codegen** — all backends use `ConversionConfig` for type prefixes, casts, enums, Maps
-- **Lint-clean** — passes clippy, Checkstyle, golangci-lint, dotnet format
-- **Newtype transparency** — single-field tuple structs are resolved to their inner type
-- **Auto-formatting** — generated Rust files are formatted with `rustfmt` after generation
-- **Incremental** — only regenerates backends whose inputs changed
+- `alef-core` -- IR types, config schema, Backend trait
+- `alef-extract` -- Rust source to IR extraction via `syn`
+- `alef-codegen` -- Shared code generation utilities
+- `alef-backend-*` -- 11 language-specific backends
+- `alef-cli` -- CLI binary with all commands
 
 ## Contributing
 
-Contributions welcome! Please open an issue or pull request for development setup and guidelines.
+Contributions welcome! Please open an issue or PR on [GitHub](https://github.com/kreuzberg-dev/alef).
 
 ## License
 
-MIT
+[MIT](LICENSE) -- Copyright (c) 2025-2026 Kreuzberg, Inc.
