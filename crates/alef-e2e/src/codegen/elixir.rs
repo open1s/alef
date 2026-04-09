@@ -177,10 +177,7 @@ fn render_test_case(
 
     let _ = writeln!(out, "  describe \"{test_name}\" do");
     let _ = writeln!(out, "    test \"{description}\" do");
-    let _ = writeln!(
-        out,
-        "      {result_var} = {module_path}.{function_name}({args_str})"
-    );
+    let _ = writeln!(out, "      {result_var} = {module_path}.{function_name}({args_str})");
 
     for assertion in &fixture.assertions {
         render_assertion(out, assertion, result_var);
@@ -239,10 +236,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str) {
         "not_contains" => {
             if let Some(expected) = &assertion.value {
                 let elixir_val = json_to_elixir(expected);
-                let _ = writeln!(
-                    out,
-                    "      refute String.contains?({field_expr}, {elixir_val})"
-                );
+                let _ = writeln!(out, "      refute String.contains?({field_expr}, {elixir_val})");
             }
         }
         "not_empty" => {
@@ -254,38 +248,26 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str) {
         "starts_with" => {
             if let Some(expected) = &assertion.value {
                 let elixir_val = json_to_elixir(expected);
-                let _ = writeln!(
-                    out,
-                    "      assert String.starts_with?({field_expr}, {elixir_val})"
-                );
+                let _ = writeln!(out, "      assert String.starts_with?({field_expr}, {elixir_val})");
             }
         }
         "ends_with" => {
             if let Some(expected) = &assertion.value {
                 let elixir_val = json_to_elixir(expected);
-                let _ = writeln!(
-                    out,
-                    "      assert String.ends_with?({field_expr}, {elixir_val})"
-                );
+                let _ = writeln!(out, "      assert String.ends_with?({field_expr}, {elixir_val})");
             }
         }
         "min_length" => {
             if let Some(val) = &assertion.value {
                 if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "      assert String.length({field_expr}) >= {n}"
-                    );
+                    let _ = writeln!(out, "      assert String.length({field_expr}) >= {n}");
                 }
             }
         }
         "max_length" => {
             if let Some(val) = &assertion.value {
                 if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "      assert String.length({field_expr}) <= {n}"
-                    );
+                    let _ = writeln!(out, "      assert String.length({field_expr}) <= {n}");
                 }
             }
         }

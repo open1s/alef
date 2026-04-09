@@ -161,6 +161,7 @@ fn render_test_function(out: &mut String, fixture: &Fixture, e2e_config: &E2eCon
     let fn_name = sanitize_ident(&fixture.id);
     let description = &fixture.description;
     let function_name = resolve_function_name(e2e_config);
+    let module = resolve_module(e2e_config, dep_name);
     let result_var = &e2e_config.call.result_var;
 
     let _ = writeln!(out, "#[test]");
@@ -175,8 +176,10 @@ fn render_test_function(out: &mut String, fixture: &Fixture, e2e_config: &E2eCon
     for arg in &e2e_config.call.args {
         let value = resolve_field(&fixture.input, &arg.field);
         let var_name = &arg.name;
-        let (binding, expr) = render_rust_arg(var_name, value, &arg.arg_type, arg.optional);
-        let _ = writeln!(out, "    {binding}");
+        let (bindings, expr) = render_rust_arg(var_name, value, &arg.arg_type, arg.optional, &module);
+        for binding in &bindings {
+            let _ = writeln!(out, "    {binding}");
+        }
         arg_exprs.push(expr);
     }
 
@@ -204,6 +207,23 @@ fn render_test_function(out: &mut String, fixture: &Fixture, e2e_config: &E2eCon
         let _ = writeln!(out, "    let {result_var} = {function_name}({args_str});");
     }
 
+    // Emit Option field unwrap bindings for any fields accessed in assertions.
+    // This handles `Option<String>` fields by unwrapping them to `&str` locals.
+    let mut unwrapped_fields: Vec<String> = Vec::new();
+    for assertion in &fixture.assertions {
+        if let Some(f) = &assertion.field {
+            if !f.is_empty() && !unwrapped_fields.contains(f) {
+                unwrapped_fields.push(f.clone());
+            }
+        }
+    }
+    for field in &unwrapped_fields {
+        let _ = writeln!(
+            out,
+            "    let {field} = {result_var}.{field}.as_deref().unwrap_or(\"\");"
+        );
+    }
+
     // Render assertions.
     for assertion in &fixture.assertions {
         if assertion.assertion_type == "not_error" {
@@ -228,14 +248,77 @@ fn resolve_field<'a>(input: &'a serde_json::Value, field_path: &str) -> &'a serd
     current
 }
 
-fn render_rust_arg(name: &str, value: &serde_json::Value, arg_type: &str, optional: bool) -> (String, String) {
+fn render_rust_arg(
+    name: &str,
+    value: &serde_json::Value,
+    arg_type: &str,
+    optional: bool,
+    module: &str,
+) -> (Vec<String>, String) {
+    if arg_type == "json_object" {
+        return render_json_object_arg(name, value, optional, module);
+    }
     let literal = json_to_rust_literal(value, arg_type);
     if optional && value.is_null() {
-        (format!("let {name} = None;"), name.to_string())
+        (vec![format!("let {name} = None;")], name.to_string())
     } else if optional {
-        (format!("let {name} = Some({literal});"), name.to_string())
+        (vec![format!("let {name} = Some({literal});")], name.to_string())
     } else {
-        (format!("let {name} = {literal};"), name.to_string())
+        (vec![format!("let {name} = {literal};")], name.to_string())
+    }
+}
+
+/// Render a `json_object` argument: serialize the fixture JSON as a `serde_json::json!` literal
+/// and deserialize it through serde at runtime. Type inference from the function signature
+/// determines the concrete type, keeping the generator generic.
+fn render_json_object_arg(
+    name: &str,
+    value: &serde_json::Value,
+    optional: bool,
+    _module: &str,
+) -> (Vec<String>, String) {
+    if value.is_null() && optional {
+        return (vec![format!("let {name} = None;")], name.to_string());
+    }
+
+    // Build the json! macro invocation from the fixture object.
+    let json_literal = json_value_to_macro_literal(value);
+    let mut lines = Vec::new();
+    lines.push(format!("let {name}_json = serde_json::json!({json_literal});"));
+    // Deserialize to a concrete type inferred from the function signature.
+    let deser_expr = format!("serde_json::from_value({name}_json).unwrap()");
+    if optional {
+        lines.push(format!("let {name} = Some({deser_expr});"));
+    } else {
+        lines.push(format!("let {name} = {deser_expr};"));
+    }
+    (lines, name.to_string())
+}
+
+/// Convert a `serde_json::Value` into a string suitable for the `serde_json::json!()` macro.
+fn json_value_to_macro_literal(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => format!("{b}"),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => {
+            let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("\"{escaped}\"")
+        }
+        serde_json::Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(json_value_to_macro_literal).collect();
+            format!("[{}]", items.join(", "))
+        }
+        serde_json::Value::Object(obj) => {
+            let entries: Vec<String> = obj
+                .iter()
+                .map(|(k, v)| {
+                    let escaped_key = k.replace('\\', "\\\\").replace('"', "\\\"");
+                    format!("\"{escaped_key}\": {}", json_value_to_macro_literal(v))
+                })
+                .collect();
+            format!("{{{}}}", entries.join(", "))
+        }
     }
 }
 
@@ -271,8 +354,11 @@ fn render_assertion(
     _dep_name: &str,
     is_error_context: bool,
 ) {
+    // When a field is present, use the bare field name since we emit
+    // `let {field} = result.{field}.as_deref().unwrap_or("");` bindings
+    // before assertions (handles Option<String> fields).
     let field_access = match &assertion.field {
-        Some(f) if !f.is_empty() => format!("{result_var}.{f}"),
+        Some(f) if !f.is_empty() => f.clone(),
         _ => result_var.to_string(),
     };
 

@@ -42,16 +42,13 @@ impl E2eCodegen for PhpCodegen {
             .and_then(|o| o.class.as_ref())
             .cloned()
             .unwrap_or_else(|| alef_config.crate_config.name.to_upper_camel_case());
-        let namespace = overrides
-            .and_then(|o| o.module.as_ref())
-            .cloned()
-            .unwrap_or_else(|| {
-                if call.module.is_empty() {
-                    "Kreuzberg".to_string()
-                } else {
-                    call.module.to_upper_camel_case()
-                }
-            });
+        let namespace = overrides.and_then(|o| o.module.as_ref()).cloned().unwrap_or_else(|| {
+            if call.module.is_empty() {
+                "Kreuzberg".to_string()
+            } else {
+                call.module.to_upper_camel_case()
+            }
+        });
         let result_var = &call.result_var;
 
         // Resolve package config.
@@ -270,10 +267,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str) {
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let php_val = json_to_php(expected);
-                let _ = writeln!(
-                    out,
-                    "        $this->assertEquals({php_val}, trim({field_expr}));"
-                );
+                let _ = writeln!(out, "        $this->assertEquals({php_val}, trim({field_expr}));");
             }
         }
         "contains" => {
@@ -314,19 +308,13 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str) {
         "starts_with" => {
             if let Some(expected) = &assertion.value {
                 let php_val = json_to_php(expected);
-                let _ = writeln!(
-                    out,
-                    "        $this->assertStringStartsWith({php_val}, {field_expr});"
-                );
+                let _ = writeln!(out, "        $this->assertStringStartsWith({php_val}, {field_expr});");
             }
         }
         "ends_with" => {
             if let Some(expected) = &assertion.value {
                 let php_val = json_to_php(expected);
-                let _ = writeln!(
-                    out,
-                    "        $this->assertStringEndsWith({php_val}, {field_expr});"
-                );
+                let _ = writeln!(out, "        $this->assertStringEndsWith({php_val}, {field_expr});");
             }
         }
         "min_length" => {
@@ -342,10 +330,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str) {
         "max_length" => {
             if let Some(val) = &assertion.value {
                 if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "        $this->assertLessThanOrEqual({n}, strlen({field_expr}));"
-                    );
+                    let _ = writeln!(out, "        $this->assertLessThanOrEqual({n}, strlen({field_expr}));");
                 }
             }
         }

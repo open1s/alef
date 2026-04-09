@@ -37,7 +37,7 @@ impl Backend for RustlerBackend {
         let core_import = config.core_import();
 
         let mut builder = RustFileBuilder::new().with_generated_header();
-        builder.add_import("rustler::{Env, Term, NifResult, ResourceArc}");
+        builder.add_import("rustler::ResourceArc");
 
         // Import traits needed for trait method dispatch
         for trait_path in generators::collect_trait_imports(api) {
@@ -594,10 +594,7 @@ fn gen_nif_method(
             )
         } else {
             // Static method on non-opaque: call directly on core type
-            format!(
-                "{core_import}::{}::{}({})",
-                struct_name, method.name, call_args
-            )
+            format!("{core_import}::{}::{}({})", struct_name, method.name, call_args)
         };
         if method.error_type.is_some() {
             let wrap = gen_rustler_wrap_return(
@@ -677,10 +674,7 @@ fn gen_nif_async_method(
             )
         } else {
             // Static method on non-opaque: call directly on core type
-            format!(
-                "{core_import}::{}::{}({})",
-                struct_name, method.name, call_args
-            )
+            format!("{core_import}::{}::{}({})", struct_name, method.name, call_args)
         };
         let result_wrap = gen_rustler_wrap_return(
             "result",

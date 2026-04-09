@@ -159,19 +159,13 @@ fn render_test_case(
     let args_str = build_args_string(&fixture.input, args);
 
     if expects_error {
-        let _ = writeln!(
-            out,
-            "test_that(\"{test_name}: {description}\", {{"
-        );
+        let _ = writeln!(out, "test_that(\"{test_name}: {description}\", {{");
         let _ = writeln!(out, "  expect_error({function_name}({args_str}))");
         let _ = writeln!(out, "}})");
         return;
     }
 
-    let _ = writeln!(
-        out,
-        "test_that(\"{test_name}: {description}\", {{"
-    );
+    let _ = writeln!(out, "test_that(\"{test_name}: {description}\", {{");
     let _ = writeln!(out, "  {result_var} <- {function_name}({args_str})");
 
     for assertion in &fixture.assertions {
@@ -230,10 +224,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str) {
         "not_contains" => {
             if let Some(expected) = &assertion.value {
                 let r_val = json_to_r(expected);
-                let _ = writeln!(
-                    out,
-                    "  expect_false(grepl({r_val}, {field_expr}, fixed = TRUE))"
-                );
+                let _ = writeln!(out, "  expect_false(grepl({r_val}, {field_expr}, fixed = TRUE))");
             }
         }
         "not_empty" => {

@@ -37,10 +37,7 @@ impl E2eCodegen for CCodegen {
             .cloned()
             .unwrap_or_else(|| call.function.clone());
         let result_var = &call.result_var;
-        let prefix = overrides
-            .and_then(|o| o.prefix.as_ref())
-            .cloned()
-            .unwrap_or_default();
+        let prefix = overrides.and_then(|o| o.prefix.as_ref()).cloned().unwrap_or_default();
         let header = overrides
             .and_then(|o| o.header.as_ref())
             .cloned()
@@ -70,11 +67,7 @@ impl E2eCodegen for CCodegen {
                     .iter()
                     .filter(|f| f.skip.as_ref().is_none_or(|s| !s.should_skip(lang)))
                     .collect();
-                if active.is_empty() {
-                    None
-                } else {
-                    Some((group, active))
-                }
+                if active.is_empty() { None } else { Some((group, active)) }
             })
             .collect();
 
@@ -130,22 +123,14 @@ impl E2eCodegen for CCodegen {
     }
 }
 
-fn render_makefile(
-    categories: &[String],
-    include_path: &str,
-    lib_path: &str,
-    lib_name: &str,
-) -> String {
+fn render_makefile(categories: &[String], include_path: &str, lib_path: &str, lib_name: &str) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "CC = gcc");
     let _ = writeln!(out, "CFLAGS = -Wall -Wextra -I{include_path}");
     let _ = writeln!(out, "LDFLAGS = -L{lib_path} -l{lib_name}");
     let _ = writeln!(out);
 
-    let src_files: Vec<String> = categories
-        .iter()
-        .map(|c| format!("test_{c}.c"))
-        .collect();
+    let src_files: Vec<String> = categories.iter().map(|c| format!("test_{c}.c")).collect();
     let srcs = src_files.join(" ");
 
     let _ = writeln!(out, "SRCS = main.c {srcs}");
@@ -270,26 +255,14 @@ fn render_test_function(
     let _ = writeln!(out, "    /* {description} */");
 
     if expects_error {
-        let _ = writeln!(
-            out,
-            "    const char* {result_var} = {prefixed_fn}({args_str});"
-        );
-        let _ = writeln!(
-            out,
-            "    assert({result_var} == NULL && \"expected call to fail\");"
-        );
+        let _ = writeln!(out, "    const char* {result_var} = {prefixed_fn}({args_str});");
+        let _ = writeln!(out, "    assert({result_var} == NULL && \"expected call to fail\");");
         let _ = writeln!(out, "}}");
         return;
     }
 
-    let _ = writeln!(
-        out,
-        "    const char* {result_var} = {prefixed_fn}({args_str});"
-    );
-    let _ = writeln!(
-        out,
-        "    assert({result_var} != NULL && \"expected call to succeed\");"
-    );
+    let _ = writeln!(out, "    const char* {result_var} = {prefixed_fn}({args_str});");
+    let _ = writeln!(out, "    assert({result_var} != NULL && \"expected call to succeed\");");
 
     for assertion in &fixture.assertions {
         render_assertion(out, assertion, result_var);
@@ -386,10 +359,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str) {
         "ends_with" => {
             if let Some(expected) = &assertion.value {
                 let c_val = json_to_c(expected);
-                let _ = writeln!(
-                    out,
-                    "    assert(strlen({field_expr}) >= strlen({c_val}) && "
-                );
+                let _ = writeln!(out, "    assert(strlen({field_expr}) >= strlen({c_val}) && ");
                 let _ = writeln!(
                     out,
                     "           strcmp({field_expr} + strlen({field_expr}) - strlen({c_val}), {c_val}) == 0 && \"expected to end with\");"

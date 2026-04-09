@@ -892,7 +892,10 @@ fn gen_function(func: &FunctionDef, mapper: &WasmMapper, core_import: &str, opaq
         let return_expr = match &func.return_type {
             TypeRef::Vec(inner) => match inner.as_ref() {
                 TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
-                    format!("result.into_iter().map(|v| {} {{ inner: Arc::new(v) }}).collect::<Vec<_>>()", mapper.map_type(inner))
+                    format!(
+                        "result.into_iter().map(|v| {} {{ inner: Arc::new(v) }}).collect::<Vec<_>>()",
+                        mapper.map_type(inner)
+                    )
                 }
                 TypeRef::Named(_) => {
                     let inner_mapped = mapper.map_type(inner);

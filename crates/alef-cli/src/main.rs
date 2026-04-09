@@ -370,10 +370,7 @@ fn main() -> Result<()> {
         }
         Commands::E2e { action } => {
             let config = load_config(config_path)?;
-            let e2e_config = config
-                .e2e
-                .as_ref()
-                .context("no [e2e] section in alef.toml")?;
+            let e2e_config = config.e2e.as_ref().context("no [e2e] section in alef.toml")?;
             match action {
                 E2eAction::Generate { lang } => {
                     let languages = lang.as_deref();

@@ -364,6 +364,22 @@ pub(crate) fn gen_enum_tainted_from_binding_to_core(
             let conversion =
                 gen_string_to_enum_expr(&format!("val.{name}"), &enum_name, field.optional, enums, core_import);
             writeln!(out, "            {name}: {conversion},").ok();
+        } else if let Some(enum_name) = get_vec_enum_named(&field.ty, enum_names) {
+            // Vec<Enum-Named> field: element-wise string->enum parsing
+            let elem_conversion = gen_string_to_enum_expr("s", &enum_name, false, enums, core_import);
+            if field.optional {
+                writeln!(
+                    out,
+                    "            {name}: val.{name}.map(|v| v.into_iter().map(|s| {elem_conversion}).collect()),"
+                )
+                .ok();
+            } else {
+                writeln!(
+                    out,
+                    "            {name}: val.{name}.into_iter().map(|s| {elem_conversion}).collect(),"
+                )
+                .ok();
+            }
         } else {
             // Non-enum field (may reference other tainted types, which have their own From)
             let conversion =
@@ -378,10 +394,21 @@ pub(crate) fn gen_enum_tainted_from_binding_to_core(
 }
 
 /// If the TypeRef is a Named type referencing an enum, return the enum name.
+/// Handles Named(enum) and Optional(Named(enum)).
 fn get_direct_enum_named(ty: &TypeRef, enum_names: &AHashSet<String>) -> Option<String> {
     match ty {
         TypeRef::Named(name) if enum_names.contains(name.as_str()) => Some(name.clone()),
         TypeRef::Optional(inner) => get_direct_enum_named(inner, enum_names),
+        _ => None,
+    }
+}
+
+/// If the TypeRef is a Vec<Named(enum)>, return the enum name.
+/// Handles Vec(Named(enum)) and Optional(Vec(Named(enum))).
+fn get_vec_enum_named(ty: &TypeRef, enum_names: &AHashSet<String>) -> Option<String> {
+    match ty {
+        TypeRef::Vec(inner) => get_direct_enum_named(inner, enum_names),
+        TypeRef::Optional(inner) => get_vec_enum_named(inner, enum_names),
         _ => None,
     }
 }

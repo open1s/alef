@@ -40,9 +40,7 @@ impl E2eCodegen for RubyCodegen {
             .and_then(|o| o.function.as_ref())
             .cloned()
             .unwrap_or_else(|| call.function.clone());
-        let class_name = overrides
-            .and_then(|o| o.class.as_ref())
-            .cloned();
+        let class_name = overrides.and_then(|o| o.class.as_ref()).cloned();
         let result_var = &call.result_var;
 
         // Resolve package config.
@@ -261,20 +259,14 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str) {
         "min_length" => {
             if let Some(val) = &assertion.value {
                 if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "    expect({field_expr}.length).to be >= {n}"
-                    );
+                    let _ = writeln!(out, "    expect({field_expr}.length).to be >= {n}");
                 }
             }
         }
         "max_length" => {
             if let Some(val) = &assertion.value {
                 if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "    expect({field_expr}.length).to be <= {n}"
-                    );
+                    let _ = writeln!(out, "    expect({field_expr}.length).to be <= {n}");
                 }
             }
         }

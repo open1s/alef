@@ -219,9 +219,7 @@ pub fn field_conversion_from_core_cfg(
                             "{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())"
                         );
                     }
-                    return format!(
-                        "{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)"
-                    );
+                    return format!("{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)");
                 }
             }
             // Vec<String> sanitized → JsValue
@@ -232,9 +230,7 @@ pub fn field_conversion_from_core_cfg(
                             "{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())"
                         );
                     }
-                    return format!(
-                        "{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)"
-                    );
+                    return format!("{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)");
                 }
             }
             // Vec<Json> sanitized → JsValue
@@ -245,9 +241,7 @@ pub fn field_conversion_from_core_cfg(
                             "{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())"
                         );
                     }
-                    return format!(
-                        "{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)"
-                    );
+                    return format!("{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)");
                 }
             }
         }
@@ -328,8 +322,7 @@ pub fn field_conversion_from_core_cfg(
             }
         }
         // Optional(Vec<Enum-to-String>) Named types (PHP pattern)
-        TypeRef::Optional(inner)
-            if matches!(inner.as_ref(), TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Named(n) if is_enum_string(n))) =>
+        TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Named(n) if is_enum_string(n))) =>
         {
             format!("{name}: val.{name}.as_ref().map(|v| v.iter().map(|x| format!(\"{{:?}}\", x)).collect())")
         }
@@ -403,7 +396,10 @@ pub fn field_conversion_from_core_cfg(
             }
         }
         // Optional(Vec<Json>)→JsValue (WASM)
-        TypeRef::Optional(inner) if config.map_uses_jsvalue && matches!(inner.as_ref(), TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Json)) => {
+        TypeRef::Optional(inner)
+            if config.map_uses_jsvalue
+                && matches!(inner.as_ref(), TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Json)) =>
+        {
             format!("{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())")
         }
         // Fall through to default (handles paths, opaque without prefix, etc.)

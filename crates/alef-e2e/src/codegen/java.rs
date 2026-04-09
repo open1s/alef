@@ -286,10 +286,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str) {
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let java_val = json_to_java(expected);
-                let _ = writeln!(
-                    out,
-                    "        assertEquals({java_val}, {field_expr}.strip());"
-                );
+                let _ = writeln!(out, "        assertEquals({java_val}, {field_expr}.strip());");
             }
         }
         "contains" => {

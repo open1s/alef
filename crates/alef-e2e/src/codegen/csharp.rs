@@ -41,16 +41,13 @@ impl E2eCodegen for CSharpCodegen {
             .and_then(|o| o.class.as_ref())
             .cloned()
             .unwrap_or_else(|| alef_config.crate_config.name.to_upper_camel_case());
-        let namespace = overrides
-            .and_then(|o| o.module.as_ref())
-            .cloned()
-            .unwrap_or_else(|| {
-                if call.module.is_empty() {
-                    "Kreuzberg".to_string()
-                } else {
-                    call.module.to_upper_camel_case()
-                }
-            });
+        let namespace = overrides.and_then(|o| o.module.as_ref()).cloned().unwrap_or_else(|| {
+            if call.module.is_empty() {
+                "Kreuzberg".to_string()
+            } else {
+                call.module.to_upper_camel_case()
+            }
+        });
         let result_var = &call.result_var;
 
         // Resolve package config.
@@ -242,10 +239,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str) {
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let cs_val = json_to_csharp(expected);
-                let _ = writeln!(
-                    out,
-                    "        Assert.Equal({cs_val}, {field_expr}.Trim());"
-                );
+                let _ = writeln!(out, "        Assert.Equal({cs_val}, {field_expr}.Trim());");
             }
         }
         "contains" => {

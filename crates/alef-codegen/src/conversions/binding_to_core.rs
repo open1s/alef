@@ -81,7 +81,9 @@ pub(super) fn gen_optionalized_field_to_core(name: &str, ty: &TypeRef, config: &
         }
         TypeRef::Vec(inner) => match inner.as_ref() {
             TypeRef::Json => {
-                format!("{name}: val.{name}.map(|v| v.into_iter().filter_map(|s| serde_json::from_str(&s).ok()).collect()).unwrap_or_default()")
+                format!(
+                    "{name}: val.{name}.map(|v| v.into_iter().filter_map(|s| serde_json::from_str(&s).ok()).collect()).unwrap_or_default()"
+                )
             }
             TypeRef::Named(_) => {
                 format!("{name}: val.{name}.map(|v| v.into_iter().map(Into::into).collect()).unwrap_or_default()")
