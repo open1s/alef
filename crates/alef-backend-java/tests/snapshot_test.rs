@@ -254,6 +254,8 @@ fn print_generated_java_code() {
         generate: alef_core::config::GenerateConfig::default(),
         generate_overrides: std::collections::HashMap::new(),
         dto: Default::default(),
+        sync: None,
+        test: None,
     };
 
     let result = backend.generate_bindings(&api, &config).unwrap();

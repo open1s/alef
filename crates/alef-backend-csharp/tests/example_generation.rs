@@ -146,6 +146,8 @@ fn test_generated_code_example() {
         generate: alef_core::config::GenerateConfig::default(),
         generate_overrides: std::collections::HashMap::new(),
         dto: Default::default(),
+        sync: None,
+        test: None,
     };
 
     let files = backend.generate_bindings(&api, &config).unwrap();

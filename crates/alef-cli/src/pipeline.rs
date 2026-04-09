@@ -2,6 +2,7 @@ use ahash::{AHashMap, AHashSet};
 use alef_core::backend::GeneratedFile;
 use alef_core::config::{AlefConfig, Language};
 use alef_core::ir::{ApiSurface, TypeDef, TypeRef};
+use anyhow::Context as _;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -268,8 +269,76 @@ pub fn write_scaffold_files(files: &[GeneratedFile], base_dir: &Path) -> anyhow:
     Ok(count)
 }
 
+/// Bump a semver version string by the given component (major, minor, patch).
+fn bump_version(version: &str, component: &str) -> anyhow::Result<String> {
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() != 3 {
+        anyhow::bail!("Invalid semver version: {version}");
+    }
+    let mut major: u64 = parts[0]
+        .parse()
+        .with_context(|| format!("Invalid major version component: {}", parts[0]))?;
+    let mut minor: u64 = parts[1]
+        .parse()
+        .with_context(|| format!("Invalid minor version component: {}", parts[1]))?;
+    let mut patch: u64 = parts[2]
+        .parse()
+        .with_context(|| format!("Invalid patch version component: {}", parts[2]))?;
+
+    match component {
+        "major" => {
+            major += 1;
+            minor = 0;
+            patch = 0;
+        }
+        "minor" => {
+            minor += 1;
+            patch = 0;
+        }
+        "patch" => {
+            patch += 1;
+        }
+        other => anyhow::bail!("Unknown bump component '{other}': expected major, minor, or patch"),
+    }
+
+    Ok(format!("{major}.{minor}.{patch}"))
+}
+
+/// Write a bumped version back into a Cargo.toml (workspace or regular package).
+fn write_version_to_cargo_toml(cargo_toml_path: &str, new_version: &str) -> anyhow::Result<()> {
+    let content =
+        std::fs::read_to_string(cargo_toml_path).with_context(|| format!("Failed to read {cargo_toml_path}"))?;
+
+    // Match `version = "..."` as a standalone line (covers both [package] and [workspace.package])
+    let re = regex::Regex::new(r#"(?m)^(version\s*=\s*)"[^"]*""#)?;
+    let new_content = re
+        .replace(&content, format!(r#"version = "{new_version}""#).as_str())
+        .to_string();
+
+    if new_content == content {
+        anyhow::bail!("Could not find a `version = \"...\"` field to update in {cargo_toml_path}");
+    }
+
+    std::fs::write(cargo_toml_path, new_content)
+        .with_context(|| format!("Failed to write updated version to {cargo_toml_path}"))?;
+
+    Ok(())
+}
+
 /// Sync version from Cargo.toml to all package manifest files.
-pub fn sync_versions(config: &AlefConfig) -> anyhow::Result<()> {
+pub fn sync_versions(config: &AlefConfig, bump: Option<&str>) -> anyhow::Result<()> {
+    // If bump is requested, read current version, bump it, and write it back to Cargo.toml.
+    if let Some(component) = bump {
+        let current = read_version(&config.crate_config.version_from)?;
+        let bumped = bump_version(&current, component)?;
+        info!("Bumping version {current} -> {bumped} ({component})");
+        write_version_to_cargo_toml(&config.crate_config.version_from, &bumped)?;
+        info!(
+            "Updated {} with bumped version {bumped}",
+            config.crate_config.version_from
+        );
+    }
+
     let version = read_version(&config.crate_config.version_from)?;
     info!("Syncing version {version}");
 
@@ -375,8 +444,58 @@ pub fn sync_versions(config: &AlefConfig) -> anyhow::Result<()> {
         }
     }
 
+    // Process extra_paths from config [sync] section (glob patterns)
+    if let Some(sync_config) = &config.sync {
+        for pattern in &sync_config.extra_paths {
+            let version_re = regex::Regex::new(r"\d+\.\d+\.\d+").ok();
+            match glob::glob(pattern) {
+                Ok(paths) => {
+                    for entry in paths {
+                        match entry {
+                            Ok(path) => {
+                                if let Ok(content) = std::fs::read_to_string(&path) {
+                                    if let Some(ref re) = version_re {
+                                        let new_content = re.replace_all(&content, version.as_str()).to_string();
+                                        if new_content != content {
+                                            if let Err(e) = std::fs::write(&path, &new_content) {
+                                                debug!("Could not write {}: {e}", path.display());
+                                            } else {
+                                                updated.push(path.to_string_lossy().to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                debug!("Glob entry error for pattern '{pattern}': {e}");
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    debug!("Invalid glob pattern '{pattern}': {e}");
+                }
+            }
+        }
+    }
+
     for file in updated {
         info!("  Updated: {file}");
+    }
+
+    // Rebuild FFI to refresh C headers (cbindgen) if FFI language is configured.
+    if config.languages.contains(&Language::Ffi) {
+        let ffi_crate = config
+            .output
+            .ffi
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(|s| s.replace("src", "").trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("{}-ffi", config.crate_config.name));
+        info!("Rebuilding FFI ({ffi_crate}) to refresh C headers...");
+        let _ = run_command(&format!("cargo build -p {ffi_crate}"));
     }
 
     Ok(())
@@ -423,6 +542,29 @@ pub fn lint(config: &AlefConfig, languages: &[Language]) -> anyhow::Result<()> {
                 // Run typecheck command if configured
                 if let Some(typecheck_cmd) = &lang_lint.typecheck {
                     run_command(typecheck_cmd)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Run configured test commands for each language.
+pub fn test(config: &AlefConfig, languages: &[Language], e2e: bool) -> anyhow::Result<()> {
+    let test_config = config.test.as_ref();
+    for lang in languages {
+        let lang_str = lang.to_string();
+        if let Some(test_map) = test_config {
+            if let Some(lang_test) = test_map.get(&lang_str) {
+                // Run unit/integration test command if configured
+                if let Some(cmd) = &lang_test.command {
+                    run_command(cmd)?;
+                }
+                // Run e2e test command if --e2e flag is set and command is configured
+                if e2e {
+                    if let Some(e2e_cmd) = &lang_test.e2e {
+                        run_command(e2e_cmd)?;
+                    }
                 }
             }
         }

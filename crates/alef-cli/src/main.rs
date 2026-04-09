@@ -54,12 +54,25 @@ enum Commands {
         lang: Option<Vec<String>>,
     },
     /// Sync version from Cargo.toml to all package manifests.
-    SyncVersions,
+    SyncVersions {
+        /// Bump version before syncing (major, minor, patch).
+        #[arg(long)]
+        bump: Option<String>,
+    },
     /// Run configured lint/format commands on generated output.
     Lint {
         /// Comma-separated list of languages.
         #[arg(long, value_delimiter = ',')]
         lang: Option<Vec<String>>,
+    },
+    /// Run configured test suites for each language.
+    Test {
+        /// Comma-separated list of languages.
+        #[arg(long, value_delimiter = ',')]
+        lang: Option<Vec<String>>,
+        /// Also run e2e tests.
+        #[arg(long)]
+        e2e: bool,
     },
     /// Verify bindings are up to date and API surface parity.
     Verify {
@@ -192,10 +205,10 @@ fn main() -> Result<()> {
             println!("Generated {count} README files");
             Ok(())
         }
-        Commands::SyncVersions => {
+        Commands::SyncVersions { bump } => {
             let config = load_config(config_path)?;
             eprintln!("Syncing versions from Cargo.toml");
-            pipeline::sync_versions(&config)?;
+            pipeline::sync_versions(&config, bump.as_deref())?;
             println!("Version sync complete");
             Ok(())
         }
@@ -214,6 +227,17 @@ fn main() -> Result<()> {
             eprintln!("Linting generated output for: {}", format_languages(&languages));
             pipeline::lint(&config, &languages)?;
             println!("Lint complete");
+            Ok(())
+        }
+        Commands::Test { lang, e2e } => {
+            let config = load_config(config_path)?;
+            let languages = resolve_languages(&config, lang.as_deref())?;
+            eprintln!("Running tests for: {}", format_languages(&languages));
+            if e2e {
+                eprintln!("  (with e2e tests)");
+            }
+            pipeline::test(&config, &languages, e2e)?;
+            println!("Tests complete");
             Ok(())
         }
         Commands::Verify {

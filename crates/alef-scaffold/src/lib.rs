@@ -927,6 +927,8 @@ mod tests {
             generate: GenerateConfig::default(),
             generate_overrides: std::collections::HashMap::new(),
             dto: Default::default(),
+            sync: None,
+            test: None,
         }
     }
 

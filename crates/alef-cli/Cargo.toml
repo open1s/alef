@@ -30,6 +30,7 @@ alef-scaffold = { path = "../alef-scaffold" }
 anyhow = { workspace = true }
 blake3 = { workspace = true }
 clap = { version = "4", features = ["derive"] }
+glob = "0.3"
 regex = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

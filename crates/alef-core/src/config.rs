@@ -43,6 +43,8 @@ pub struct AlefConfig {
     #[serde(default)]
     pub lint: Option<HashMap<String, LintConfig>>,
     #[serde(default)]
+    pub test: Option<HashMap<String, TestConfig>>,
+    #[serde(default)]
     pub custom_files: Option<HashMap<String, Vec<PathBuf>>>,
     #[serde(default)]
     pub adapters: Vec<AdapterConfig>,
@@ -50,6 +52,8 @@ pub struct AlefConfig {
     pub custom_modules: CustomModulesConfig,
     #[serde(default)]
     pub custom_registrations: CustomRegistrationsConfig,
+    #[serde(default)]
+    pub sync: Option<SyncConfig>,
     /// Declare opaque types from external crates that alef can't extract.
     /// Map of type name → Rust path (e.g., "Tree" = "tree_sitter_language_pack::Tree").
     /// These get opaque wrapper structs in all backends.
@@ -596,6 +600,14 @@ pub struct LintConfig {
     pub typecheck: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TestConfig {
+    /// Command to run unit/integration tests for this language.
+    pub command: Option<String>,
+    /// Command to run e2e tests for this language.
+    pub e2e: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Shared config resolution helpers
 // ---------------------------------------------------------------------------
@@ -819,4 +831,12 @@ fn cargo_toml_has_serde(path: &std::path::Path) -> bool {
     });
 
     has_serde_json && has_serde_dep
+}
+
+/// Configuration for the `sync-versions` command.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SyncConfig {
+    /// Extra file paths to update version in (glob patterns).
+    #[serde(default)]
+    pub extra_paths: Vec<String>,
 }

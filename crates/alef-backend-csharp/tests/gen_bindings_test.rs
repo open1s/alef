@@ -150,6 +150,8 @@ fn test_basic_generation() {
         generate: alef_core::config::GenerateConfig::default(),
         generate_overrides: std::collections::HashMap::new(),
         dto: Default::default(),
+        sync: None,
+        test: None,
     };
 
     // Generate bindings
@@ -283,6 +285,8 @@ fn test_namespace_resolution() {
         generate: alef_core::config::GenerateConfig::default(),
         generate_overrides: std::collections::HashMap::new(),
         dto: Default::default(),
+        sync: None,
+        test: None,
     };
 
     let result = backend.generate_bindings(&api, &config);
@@ -347,6 +351,8 @@ fn test_generated_header() {
         generate: alef_core::config::GenerateConfig::default(),
         generate_overrides: std::collections::HashMap::new(),
         dto: Default::default(),
+        sync: None,
+        test: None,
     };
 
     let result = backend.generate_bindings(&api, &config);
@@ -478,6 +484,8 @@ fn test_type_mapping() {
         generate: alef_core::config::GenerateConfig::default(),
         generate_overrides: std::collections::HashMap::new(),
         dto: Default::default(),
+        sync: None,
+        test: None,
     };
 
     let result = backend.generate_bindings(&api, &config);
