@@ -1,0 +1,620 @@
+use crate::generators::{AsyncPattern, RustBindingConfig};
+use ahash::AHashSet;
+use alef_core::ir::{ParamDef, TypeDef, TypeRef};
+use std::fmt::Write;
+
+/// Wrap a core-call result for opaque delegation methods.
+///
+/// - `TypeRef::Named(n)` where `n == type_name` → re-wrap in `Self { inner: Arc::new(...) }`
+/// - `TypeRef::Named(n)` where `n` is another opaque type → wrap in `{n} { inner: Arc::new(...) }`
+/// - `TypeRef::Named(n)` where `n` is a non-opaque type → `todo!()` placeholder (From may not exist)
+/// - Everything else (primitives, String, Vec, etc.) → pass through unchanged
+/// - `TypeRef::Unit` → pass through unchanged
+pub fn wrap_return(
+    expr: &str,
+    return_type: &TypeRef,
+    type_name: &str,
+    opaque_types: &AHashSet<String>,
+    self_is_opaque: bool,
+    returns_ref: bool,
+) -> String {
+    match return_type {
+        TypeRef::Named(n) if n == type_name && self_is_opaque => {
+            if returns_ref {
+                format!("Self {{ inner: Arc::new({expr}.clone()) }}")
+            } else {
+                format!("Self {{ inner: Arc::new({expr}) }}")
+            }
+        }
+        TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
+            if returns_ref {
+                format!("{n} {{ inner: Arc::new({expr}.clone()) }}")
+            } else {
+                format!("{n} {{ inner: Arc::new({expr}) }}")
+            }
+        }
+        TypeRef::Named(_) => {
+            // Non-opaque Named return type — use .into() for core→binding From conversion.
+            // When the core returns a reference, clone first since From<&T> typically doesn't exist.
+            if returns_ref {
+                format!("{expr}.clone().into()")
+            } else {
+                format!("{expr}.into()")
+            }
+        }
+        // String/Bytes: only convert when the core returns a reference (&str→String, &[u8]→Vec<u8>).
+        // When owned (returns_ref=false), both sides are already String/Vec<u8> — skip .into().
+        TypeRef::String | TypeRef::Bytes => {
+            if returns_ref {
+                format!("{expr}.into()")
+            } else {
+                expr.to_string()
+            }
+        }
+        // Path: PathBuf→String needs to_string_lossy, &Path→String too
+        TypeRef::Path => format!("{expr}.to_string_lossy().to_string()"),
+        // Duration: core returns std::time::Duration, binding uses u64 (secs)
+        TypeRef::Duration => format!("{expr}.as_secs()"),
+        // Json: serde_json::Value needs serialization to string
+        TypeRef::Json => format!("{expr}.to_string()"),
+        // Optional: wrap inner conversion in .map(...)
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
+                if returns_ref {
+                    format!("{expr}.map(|v| {n} {{ inner: Arc::new(v.clone()) }})")
+                } else {
+                    format!("{expr}.map(|v| {n} {{ inner: Arc::new(v) }})")
+                }
+            }
+            TypeRef::Named(_) => {
+                if returns_ref {
+                    format!("{expr}.map(|v| v.clone().into())")
+                } else {
+                    format!("{expr}.map(Into::into)")
+                }
+            }
+            TypeRef::Path => {
+                format!("{expr}.map(Into::into)")
+            }
+            TypeRef::String | TypeRef::Bytes => {
+                if returns_ref {
+                    format!("{expr}.map(Into::into)")
+                } else {
+                    expr.to_string()
+                }
+            }
+            TypeRef::Duration => format!("{expr}.map(|d| d.as_secs())"),
+            TypeRef::Json => format!("{expr}.map(|v| v.to_string())"),
+            _ => expr.to_string(),
+        },
+        // Vec: map each element through the appropriate conversion
+        TypeRef::Vec(inner) => match inner.as_ref() {
+            TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
+                if returns_ref {
+                    format!("{expr}.into_iter().map(|v| {n} {{ inner: Arc::new(v.clone()) }}).collect()")
+                } else {
+                    format!("{expr}.into_iter().map(|v| {n} {{ inner: Arc::new(v) }}).collect()")
+                }
+            }
+            TypeRef::Named(_) => {
+                if returns_ref {
+                    format!("{expr}.into_iter().map(|v| v.clone().into()).collect()")
+                } else {
+                    format!("{expr}.into_iter().map(Into::into).collect()")
+                }
+            }
+            TypeRef::Path => {
+                format!("{expr}.into_iter().map(Into::into).collect()")
+            }
+            TypeRef::String | TypeRef::Bytes => {
+                if returns_ref {
+                    format!("{expr}.into_iter().map(Into::into).collect()")
+                } else {
+                    expr.to_string()
+                }
+            }
+            _ => expr.to_string(),
+        },
+        _ => expr.to_string(),
+    }
+}
+
+/// Build call argument expressions from parameters.
+/// - Opaque Named types: unwrap Arc wrapper via `(*param.inner).clone()`
+/// - Non-opaque Named types: `.into()` for From conversion
+/// - String/Path/Bytes: `&param` since core functions typically take `&str`/`&Path`/`&[u8]`
+pub fn gen_call_args(params: &[ParamDef], opaque_types: &AHashSet<String>) -> String {
+    params
+        .iter()
+        .enumerate()
+        .map(|(idx, p)| {
+            let promoted = crate::shared::is_promoted_optional(params, idx);
+            // If a required param was promoted to optional, unwrap it before use
+            let unwrap_suffix = if promoted {
+                format!(".expect(\"'{}' is required\")", p.name)
+            } else {
+                String::new()
+            };
+            match &p.ty {
+                TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
+                    // Opaque type: borrow through Arc to get &CoreType
+                    if p.optional {
+                        format!("{}.as_ref().map(|v| &v.inner)", p.name)
+                    } else if promoted {
+                        format!("{}{}.inner.as_ref()", p.name, unwrap_suffix)
+                    } else {
+                        format!("&{}.inner", p.name)
+                    }
+                }
+                TypeRef::Named(_) => {
+                    if p.optional {
+                        format!("{}.map(Into::into)", p.name)
+                    } else if promoted {
+                        format!("{}{}.into()", p.name, unwrap_suffix)
+                    } else {
+                        format!("{}.into()", p.name)
+                    }
+                }
+                // String → &str for core function calls
+                TypeRef::String | TypeRef::Char => {
+                    if promoted {
+                        format!("&{}{}", p.name, unwrap_suffix)
+                    } else {
+                        format!("&{}", p.name)
+                    }
+                }
+                // Path → PathBuf for core function calls (core expects PathBuf, binding has String)
+                TypeRef::Path => {
+                    if promoted {
+                        format!("std::path::PathBuf::from({}{})", p.name, unwrap_suffix)
+                    } else {
+                        format!("std::path::PathBuf::from({})", p.name)
+                    }
+                }
+                TypeRef::Bytes => {
+                    if promoted {
+                        format!("&{}{}", p.name, unwrap_suffix)
+                    } else {
+                        format!("&{}", p.name)
+                    }
+                }
+                // Duration: binding uses u64 (secs), core uses std::time::Duration
+                TypeRef::Duration => {
+                    if promoted {
+                        format!("std::time::Duration::from_secs({}{})", p.name, unwrap_suffix)
+                    } else {
+                        format!("std::time::Duration::from_secs({})", p.name)
+                    }
+                }
+                _ => {
+                    if promoted {
+                        format!("{}{}", p.name, unwrap_suffix)
+                    } else {
+                        p.name.clone()
+                    }
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Build call argument expressions using pre-bound let bindings for non-opaque Named params.
+/// Non-opaque Named params use `&{name}_core` references instead of `.into()`.
+pub fn gen_call_args_with_let_bindings(params: &[ParamDef], opaque_types: &AHashSet<String>) -> String {
+    params
+        .iter()
+        .enumerate()
+        .map(|(idx, p)| {
+            let promoted = crate::shared::is_promoted_optional(params, idx);
+            let unwrap_suffix = if promoted {
+                format!(".expect(\"'{}' is required\")", p.name)
+            } else {
+                String::new()
+            };
+            match &p.ty {
+                TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
+                    if p.optional {
+                        format!("{}.as_ref().map(|v| &v.inner)", p.name)
+                    } else if promoted {
+                        format!("{}{}.inner.as_ref()", p.name, unwrap_suffix)
+                    } else {
+                        format!("&{}.inner", p.name)
+                    }
+                }
+                TypeRef::Named(_) => {
+                    format!("{}_core", p.name)
+                }
+                TypeRef::String | TypeRef::Char => {
+                    if promoted {
+                        format!("&{}{}", p.name, unwrap_suffix)
+                    } else {
+                        format!("&{}", p.name)
+                    }
+                }
+                TypeRef::Path => {
+                    if promoted {
+                        format!("std::path::PathBuf::from({}{})", p.name, unwrap_suffix)
+                    } else {
+                        format!("std::path::PathBuf::from({})", p.name)
+                    }
+                }
+                TypeRef::Bytes => {
+                    if promoted {
+                        format!("&{}{}", p.name, unwrap_suffix)
+                    } else {
+                        format!("&{}", p.name)
+                    }
+                }
+                TypeRef::Duration => {
+                    if promoted {
+                        format!("std::time::Duration::from_secs({}{})", p.name, unwrap_suffix)
+                    } else {
+                        format!("std::time::Duration::from_secs({})", p.name)
+                    }
+                }
+                _ => {
+                    if promoted {
+                        format!("{}{}", p.name, unwrap_suffix)
+                    } else {
+                        p.name.clone()
+                    }
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Generate let bindings for non-opaque Named params, converting them to core types.
+pub fn gen_named_let_bindings_pub(params: &[ParamDef], opaque_types: &AHashSet<String>) -> String {
+    gen_named_let_bindings(params, opaque_types)
+}
+
+pub(super) fn gen_named_let_bindings(params: &[ParamDef], opaque_types: &AHashSet<String>) -> String {
+    let mut bindings = String::new();
+    for (idx, p) in params.iter().enumerate() {
+        if let TypeRef::Named(name) = &p.ty {
+            if !opaque_types.contains(name.as_str()) {
+                let promoted = crate::shared::is_promoted_optional(params, idx);
+                if p.optional {
+                    write!(bindings, "let {}_core = {}.map(Into::into);\n    ", p.name, p.name).ok();
+                } else if promoted {
+                    // Promoted-optional: unwrap then convert
+                    write!(
+                        bindings,
+                        "let {}_core = {}.expect(\"'{}' is required\").into();\n    ",
+                        p.name, p.name, p.name
+                    )
+                    .ok();
+                } else {
+                    write!(bindings, "let {}_core = {}.into();\n    ", p.name, p.name).ok();
+                }
+            }
+        }
+    }
+    bindings
+}
+
+/// Generate serde-based let bindings for non-opaque Named params.
+/// Serializes binding types to JSON and deserializes to core types.
+/// Used when From impls don't exist (e.g., types with sanitized fields).
+/// `indent` is the whitespace prefix for each generated line (e.g., "    " for functions, "        " for methods).
+pub fn gen_serde_let_bindings(
+    params: &[ParamDef],
+    opaque_types: &AHashSet<String>,
+    core_import: &str,
+    err_conv: &str,
+    indent: &str,
+) -> String {
+    let mut bindings = String::new();
+    for p in params {
+        if let TypeRef::Named(name) = &p.ty {
+            if !opaque_types.contains(name.as_str()) {
+                let core_path = format!("{}::{}", core_import, name);
+                if p.optional {
+                    write!(
+                        bindings,
+                        "let {name}_core: Option<{core_path}> = {name}.map(|v| {{\n\
+                         {indent}    let json = serde_json::to_string(&v){err_conv}?;\n\
+                         {indent}    serde_json::from_str(&json){err_conv}\n\
+                         {indent}}}).transpose()?;\n{indent}",
+                        name = p.name,
+                        core_path = core_path,
+                        err_conv = err_conv,
+                        indent = indent,
+                    )
+                    .ok();
+                } else {
+                    write!(
+                        bindings,
+                        "let {name}_json = serde_json::to_string(&{name}){err_conv}?;\n\
+                         {indent}let {name}_core: {core_path} = serde_json::from_str(&{name}_json){err_conv}?;\n{indent}",
+                        name = p.name,
+                        core_path = core_path,
+                        err_conv = err_conv,
+                        indent = indent,
+                    )
+                    .ok();
+                }
+            }
+        }
+    }
+    bindings
+}
+
+/// Check if params contain any non-opaque Named types that need let bindings.
+pub fn has_named_params(params: &[ParamDef], opaque_types: &AHashSet<String>) -> bool {
+    params
+        .iter()
+        .any(|p| matches!(&p.ty, TypeRef::Named(name) if !opaque_types.contains(name.as_str())))
+}
+
+/// Check if a param type is safe for non-opaque delegation (no complex conversions needed).
+/// Vec and Map params can cause type mismatches (e.g. Vec<String> vs &[&str]).
+pub fn is_simple_non_opaque_param(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Primitive(_)
+        | TypeRef::String
+        | TypeRef::Char
+        | TypeRef::Bytes
+        | TypeRef::Path
+        | TypeRef::Unit
+        | TypeRef::Duration => true,
+        TypeRef::Optional(inner) => is_simple_non_opaque_param(inner),
+        _ => false,
+    }
+}
+
+/// Generate a lossy binding→core struct literal for non-opaque delegation.
+/// Sanitized fields use `Default::default()`, non-sanitized fields are cloned and converted.
+/// Fields are accessed via `self.` (behind &self), so all non-Copy types need `.clone()`.
+pub fn gen_lossy_binding_to_core_fields(typ: &TypeDef, core_import: &str) -> String {
+    let core_path = crate::conversions::core_type_path(typ, core_import);
+    let mut out = format!("let core_self = {core_path} {{\n");
+    for field in &typ.fields {
+        let name = &field.name;
+        if field.sanitized {
+            writeln!(out, "            {name}: Default::default(),").ok();
+        } else {
+            let expr = match &field.ty {
+                TypeRef::Primitive(_) => format!("self.{name}"),
+                TypeRef::Duration => {
+                    if field.optional {
+                        format!("self.{name}.map(std::time::Duration::from_secs)")
+                    } else {
+                        format!("std::time::Duration::from_secs(self.{name})")
+                    }
+                }
+                TypeRef::String | TypeRef::Char | TypeRef::Bytes => format!("self.{name}.clone()"),
+                TypeRef::Path => {
+                    if field.optional {
+                        format!("self.{name}.clone().map(Into::into)")
+                    } else {
+                        format!("self.{name}.clone().into()")
+                    }
+                }
+                TypeRef::Named(_) => {
+                    if field.optional {
+                        format!("self.{name}.clone().map(Into::into)")
+                    } else {
+                        format!("self.{name}.clone().into()")
+                    }
+                }
+                TypeRef::Vec(inner) => match inner.as_ref() {
+                    TypeRef::Named(_) => {
+                        format!("self.{name}.clone().into_iter().map(Into::into).collect()")
+                    }
+                    _ => format!("self.{name}.clone()"),
+                },
+                TypeRef::Optional(inner) => match inner.as_ref() {
+                    TypeRef::Named(_) => {
+                        format!("self.{name}.clone().map(Into::into)")
+                    }
+                    TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Named(_)) => {
+                        format!("self.{name}.clone().map(|v| v.into_iter().map(Into::into).collect())")
+                    }
+                    _ => format!("self.{name}.clone()"),
+                },
+                TypeRef::Map(_, _) => format!("self.{name}.clone()"),
+                TypeRef::Unit | TypeRef::Json => format!("self.{name}.clone()"),
+            };
+            writeln!(out, "            {name}: {expr},").ok();
+        }
+    }
+    // Use ..Default::default() to fill cfg-gated fields stripped from the IR
+    if typ.has_stripped_cfg_fields {
+        out.push_str("            ..Default::default()\n");
+    }
+    out.push_str("        };\n        ");
+    out
+}
+
+/// Generate the body for an async call, unified across methods, static methods, and free functions.
+///
+/// - `core_call`: the expression to await, e.g. `inner.method(args)` or `CoreType::fn(args)`.
+///   For Pyo3FutureIntoPy opaque methods this should reference `inner` (the Arc clone);
+///   for all other patterns it may reference `self.inner` or a static call expression.
+/// - `cfg`: binding configuration (determines which async pattern to emit)
+/// - `has_error`: whether the core call returns a `Result`
+/// - `return_wrap`: expression to produce the binding return value from `result`,
+///   e.g. `"result"` or `"TypeName::from(result)"`
+///
+/// - `is_opaque`: whether the binding type is Arc-wrapped (affects TokioBlockOn wrapping)
+/// - `inner_clone_line`: optional statement emitted before the pattern-specific body,
+///   e.g. `"let inner = self.inner.clone();\n        "` for opaque instance methods, or `""`.
+///   Required when `core_call` references `inner` (Pyo3FutureIntoPy opaque case).
+pub fn gen_async_body(
+    core_call: &str,
+    cfg: &RustBindingConfig,
+    has_error: bool,
+    return_wrap: &str,
+    is_opaque: bool,
+    inner_clone_line: &str,
+    is_unit_return: bool,
+) -> String {
+    let pattern_body = match cfg.async_pattern {
+        AsyncPattern::Pyo3FutureIntoPy => {
+            let result_handling = if has_error {
+                format!(
+                    "let result = {core_call}.await\n            \
+                     .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;"
+                )
+            } else if is_unit_return {
+                format!("{core_call}.await;")
+            } else {
+                format!("let result = {core_call}.await;")
+            };
+            let ok_expr = if is_unit_return && !has_error {
+                "()"
+            } else {
+                return_wrap
+            };
+            format!(
+                "pyo3_async_runtimes::tokio::future_into_py(py, async move {{\n            \
+                 {result_handling}\n            \
+                 Ok({ok_expr})\n        }})"
+            )
+        }
+        AsyncPattern::WasmNativeAsync => {
+            let result_handling = if has_error {
+                format!(
+                    "let result = {core_call}.await\n        \
+                     .map_err(|e| JsValue::from_str(&e.to_string()))?;"
+                )
+            } else if is_unit_return {
+                format!("{core_call}.await;")
+            } else {
+                format!("let result = {core_call}.await;")
+            };
+            let ok_expr = if is_unit_return && !has_error {
+                "()"
+            } else {
+                return_wrap
+            };
+            format!(
+                "{result_handling}\n        \
+                 Ok({ok_expr})"
+            )
+        }
+        AsyncPattern::NapiNativeAsync => {
+            let result_handling = if has_error {
+                format!(
+                    "let result = {core_call}.await\n            \
+                     .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;"
+                )
+            } else if is_unit_return {
+                format!("{core_call}.await;")
+            } else {
+                format!("let result = {core_call}.await;")
+            };
+            let ok_expr = if is_unit_return && !has_error {
+                "()"
+            } else {
+                return_wrap
+            };
+            format!(
+                "{result_handling}\n            \
+                 Ok({ok_expr})"
+            )
+        }
+        AsyncPattern::TokioBlockOn => {
+            if has_error {
+                if is_opaque {
+                    format!(
+                        "let rt = tokio::runtime::Runtime::new()?;\n        \
+                         let result = rt.block_on(async {{ {core_call}.await.map_err(|e| e.into()) }})?;\n        \
+                         {return_wrap}"
+                    )
+                } else {
+                    format!(
+                        "let rt = tokio::runtime::Runtime::new()?;\n        \
+                         rt.block_on(async {{ {core_call}.await.map_err(|e| e.into()) }})"
+                    )
+                }
+            } else if is_opaque {
+                if is_unit_return {
+                    format!(
+                        "let rt = tokio::runtime::Runtime::new()?;\n        \
+                         rt.block_on(async {{ {core_call}.await }});"
+                    )
+                } else {
+                    format!(
+                        "let rt = tokio::runtime::Runtime::new()?;\n        \
+                         let result = rt.block_on(async {{ {core_call}.await }});\n        \
+                         {return_wrap}"
+                    )
+                }
+            } else {
+                format!(
+                    "let rt = tokio::runtime::Runtime::new()?;\n        \
+                     rt.block_on(async {{ {core_call}.await }})"
+                )
+            }
+        }
+        AsyncPattern::None => "todo!(\"async not supported by backend\")".to_string(),
+    };
+    if inner_clone_line.is_empty() {
+        pattern_body
+    } else {
+        format!("{inner_clone_line}{pattern_body}")
+    }
+}
+
+/// Generate a compilable body for functions that can't be auto-delegated.
+/// Returns a default value or error instead of `todo!()` which would panic.
+pub fn gen_unimplemented_body(
+    return_type: &TypeRef,
+    fn_name: &str,
+    has_error: bool,
+    cfg: &RustBindingConfig,
+    params: &[ParamDef],
+) -> String {
+    // Suppress unused_variables by binding all params to `_`
+    let suppress = if params.is_empty() {
+        String::new()
+    } else {
+        let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+        if names.len() == 1 {
+            format!("let _ = {};\n        ", names[0])
+        } else {
+            format!("let _ = ({});\n        ", names.join(", "))
+        }
+    };
+    let err_msg = format!("Not implemented: {fn_name}");
+    let body = if has_error {
+        // Backend-specific error return
+        match cfg.async_pattern {
+            AsyncPattern::Pyo3FutureIntoPy => {
+                format!("Err(pyo3::exceptions::PyNotImplementedError::new_err(\"{err_msg}\"))")
+            }
+            AsyncPattern::NapiNativeAsync => {
+                format!("Err(napi::Error::new(napi::Status::GenericFailure, \"{err_msg}\"))")
+            }
+            AsyncPattern::WasmNativeAsync => {
+                format!("Err(JsValue::from_str(\"{err_msg}\"))")
+            }
+            _ => format!("Err(\"{err_msg}\".to_string())"),
+        }
+    } else {
+        // Return type-appropriate default
+        match return_type {
+            TypeRef::Unit => "()".to_string(),
+            TypeRef::String | TypeRef::Char | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
+            TypeRef::Bytes => "Vec::new()".to_string(),
+            TypeRef::Primitive(p) => match p {
+                alef_core::ir::PrimitiveType::Bool => "false".to_string(),
+                _ => "0".to_string(),
+            },
+            TypeRef::Optional(_) => "None".to_string(),
+            TypeRef::Vec(_) => "Vec::new()".to_string(),
+            TypeRef::Map(_, _) => "Default::default()".to_string(),
+            TypeRef::Duration => "0".to_string(),
+            TypeRef::Named(_) | TypeRef::Json => {
+                // Named return without error type: can't return Err. Generate compilable panic.
+                format!("panic!(\"alef: {fn_name} not auto-delegatable\")")
+            }
+        }
+    };
+    format!("{suppress}{body}")
+}

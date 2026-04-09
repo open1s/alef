@@ -1,3 +1,6 @@
+//! Shared code generation utilities for all language backends.
+//! Provides struct/enum/function generators, type mapping, and conversion helpers.
+
 pub mod builder;
 pub mod config_gen;
 pub mod conversions;

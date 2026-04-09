@@ -1,0 +1,613 @@
+use crate::generators::binding_helpers::{
+    gen_async_body, gen_call_args, gen_call_args_with_let_bindings, gen_lossy_binding_to_core_fields,
+    gen_serde_let_bindings, gen_unimplemented_body, has_named_params, is_simple_non_opaque_param, wrap_return,
+};
+use crate::generators::{AdapterBodies, AsyncPattern, RustBindingConfig};
+use crate::shared::{constructor_parts, function_params, function_sig_defaults, partition_methods};
+use crate::type_mapper::TypeMapper;
+use ahash::AHashSet;
+use alef_core::ir::{MethodDef, TypeDef, TypeRef};
+use std::fmt::Write;
+
+/// Returns true when `name` matches a known trait method that would trigger
+/// `clippy::should_implement_trait`.
+pub fn is_trait_method_name(name: &str) -> bool {
+    crate::generators::TRAIT_METHOD_NAMES.contains(&name)
+}
+
+/// Generate a constructor method.
+pub fn gen_constructor(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfig) -> String {
+    let map_fn = |ty: &alef_core::ir::TypeRef| mapper.map_type(ty);
+
+    // For types with has_default, generate optional kwargs-style constructor
+    let (param_list, sig_defaults, assignments) = if typ.has_default {
+        crate::shared::config_constructor_parts(&typ.fields, &map_fn)
+    } else {
+        constructor_parts(&typ.fields, &map_fn)
+    };
+
+    let mut out = String::with_capacity(512);
+    // Per-item clippy suppression: too_many_arguments when >7 params
+    if typ.fields.len() > 7 {
+        writeln!(out, "    #[allow(clippy::too_many_arguments)]").ok();
+    }
+    writeln!(out, "    #[must_use]").ok();
+    if cfg.needs_signature {
+        writeln!(
+            out,
+            "    {}{}{}",
+            cfg.signature_prefix, sig_defaults, cfg.signature_suffix
+        )
+        .ok();
+    }
+    write!(
+        out,
+        "    {}\n    pub fn new({param_list}) -> Self {{\n        Self {{ {assignments} }}\n    }}",
+        cfg.constructor_attr
+    )
+    .ok();
+    out
+}
+
+/// Generate an instance method.
+///
+/// When `is_opaque` is true, generates delegation to `self.inner` via Arc clone
+/// instead of converting self to core type.
+///
+/// `opaque_types` is the set of opaque type names, used for correct return wrapping.
+pub fn gen_method(
+    method: &MethodDef,
+    mapper: &dyn TypeMapper,
+    cfg: &RustBindingConfig,
+    typ: &TypeDef,
+    is_opaque: bool,
+    opaque_types: &AHashSet<String>,
+    adapter_bodies: &AdapterBodies,
+) -> String {
+    let type_name = &typ.name;
+    // Use the full rust_path (with hyphens replaced by underscores) for core type references
+    let core_type_path = typ.rust_path.replace('-', "_");
+
+    let map_fn = |ty: &alef_core::ir::TypeRef| mapper.map_type(ty);
+    let params = function_params(&method.params, &map_fn);
+    let return_type = mapper.map_type(&method.return_type);
+    let ret = mapper.wrap_return(&return_type, method.error_type.is_some());
+
+    let call_args = gen_call_args(&method.params, opaque_types);
+
+    let is_owned_receiver = matches!(method.receiver.as_ref(), Some(alef_core::ir::ReceiverKind::Owned));
+
+    // Auto-delegate opaque methods: unwrap Arc for params, wrap Arc for returns.
+    // Owned receivers require the type to implement Clone (builder pattern).
+    // Async methods are allowed — gen_async_body handles them below.
+    let opaque_can_delegate = is_opaque
+        && !method.sanitized
+        && (!is_owned_receiver || typ.is_clone)
+        && method
+            .params
+            .iter()
+            .all(|p| !p.sanitized && crate::shared::is_opaque_delegatable_type(&p.ty))
+        && crate::shared::is_opaque_delegatable_type(&method.return_type);
+
+    // Build the core call expression: opaque types delegate to self.inner directly,
+    // non-opaque types convert self to core type first.
+    let make_core_call = |method_name: &str| -> String {
+        if is_opaque {
+            if is_owned_receiver {
+                // Owned receiver: clone out of Arc to get an owned value
+                format!("(*self.inner).clone().{method_name}({call_args})")
+            } else {
+                format!("self.inner.{method_name}({call_args})")
+            }
+        } else {
+            format!("{core_type_path}::from(self.clone()).{method_name}({call_args})")
+        }
+    };
+
+    // For async opaque methods, we clone the Arc before moving into the future.
+    let make_async_core_call = |method_name: &str| -> String {
+        if is_opaque {
+            format!("inner.{method_name}({call_args})")
+        } else {
+            format!("{core_type_path}::from(self.clone()).{method_name}({call_args})")
+        }
+    };
+
+    // Generate the body: convert self to core type, call method, convert result back
+    //
+    // For opaque types, wrap the return value appropriately:
+    //   - Named(self) → Self { inner: Arc::new(result) }
+    //   - Named(other) → OtherType::from(result)
+    //   - primitives/String/Vec/Unit → pass through
+    let async_result_wrap = if is_opaque {
+        wrap_return(
+            "result",
+            &method.return_type,
+            type_name,
+            opaque_types,
+            is_opaque,
+            method.returns_ref,
+        )
+    } else {
+        // For non-opaque types, only use From conversion if the return type is simple
+        // enough. Named return types may not have a From impl.
+        match &method.return_type {
+            TypeRef::Named(_) | TypeRef::Json => "result.into()".to_string(),
+            _ => "result".to_string(),
+        }
+    };
+
+    let body = if !opaque_can_delegate {
+        // Check if an adapter provides the body
+        let adapter_key = format!("{}.{}", type_name, method.name);
+        if let Some(adapter_body) = adapter_bodies.get(&adapter_key) {
+            adapter_body.clone()
+        } else if cfg.has_serde
+            && is_opaque
+            && !method.sanitized
+            && has_named_params(&method.params, opaque_types)
+            && method.error_type.is_some()
+            && crate::shared::is_opaque_delegatable_type(&method.return_type)
+        {
+            // Serde-based param conversion for opaque methods with non-opaque Named params.
+            let err_conv = match cfg.async_pattern {
+                AsyncPattern::Pyo3FutureIntoPy => {
+                    ".map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))"
+                }
+                AsyncPattern::NapiNativeAsync => {
+                    ".map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))"
+                }
+                AsyncPattern::WasmNativeAsync => ".map_err(|e| JsValue::from_str(&e.to_string()))",
+                _ => ".map_err(|e| e.to_string())",
+            };
+            let serde_bindings =
+                gen_serde_let_bindings(&method.params, opaque_types, cfg.core_import, err_conv, "        ");
+            let serde_call_args = gen_call_args_with_let_bindings(&method.params, opaque_types);
+            let core_call = format!("self.inner.{}({serde_call_args})", method.name);
+            if matches!(method.return_type, TypeRef::Unit) {
+                format!("{serde_bindings}{core_call}{err_conv}?;\n        Ok(())")
+            } else {
+                let wrap = wrap_return(
+                    "result",
+                    &method.return_type,
+                    type_name,
+                    opaque_types,
+                    is_opaque,
+                    method.returns_ref,
+                );
+                format!("{serde_bindings}let result = {core_call}{err_conv}?;\n        Ok({wrap})")
+            }
+        } else if !is_opaque
+            && !method.sanitized
+            && method
+                .params
+                .iter()
+                .all(|p| !p.sanitized && is_simple_non_opaque_param(&p.ty))
+            && crate::shared::is_delegatable_return(&method.return_type)
+        {
+            // Non-opaque delegation: construct core type field-by-field, call method, convert back.
+            // Sanitized fields use Default::default() (lossy but functional for builder pattern).
+            let field_conversions = gen_lossy_binding_to_core_fields(typ, cfg.core_import);
+            let core_call = format!("core_self.{}({call_args})", method.name);
+            let result_wrap = match &method.return_type {
+                TypeRef::Named(n) if n == type_name => ".into()".to_string(),
+                TypeRef::Named(_) => ".into()".to_string(),
+                TypeRef::String | TypeRef::Bytes | TypeRef::Path => ".into()".to_string(),
+                _ => String::new(),
+            };
+            if method.error_type.is_some() {
+                let err_conv = match cfg.async_pattern {
+                    AsyncPattern::Pyo3FutureIntoPy => {
+                        ".map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))"
+                    }
+                    AsyncPattern::NapiNativeAsync => {
+                        ".map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))"
+                    }
+                    AsyncPattern::WasmNativeAsync => ".map_err(|e| JsValue::from_str(&e.to_string()))",
+                    _ => ".map_err(|e| e.to_string())",
+                };
+                format!("{field_conversions}let result = {core_call}{err_conv}?;\n        Ok(result{result_wrap})")
+            } else {
+                format!("{field_conversions}{core_call}{result_wrap}")
+            }
+        } else {
+            gen_unimplemented_body(
+                &method.return_type,
+                &format!("{type_name}.{}", method.name),
+                method.error_type.is_some(),
+                cfg,
+                &method.params,
+            )
+        }
+    } else if method.is_async {
+        let inner_clone_line = if is_opaque {
+            "let inner = self.inner.clone();\n        "
+        } else {
+            ""
+        };
+        let core_call_str = make_async_core_call(&method.name);
+        gen_async_body(
+            &core_call_str,
+            cfg,
+            method.error_type.is_some(),
+            &async_result_wrap,
+            is_opaque,
+            inner_clone_line,
+            matches!(method.return_type, TypeRef::Unit),
+        )
+    } else {
+        let core_call = make_core_call(&method.name);
+        if method.error_type.is_some() {
+            // Backend-specific error conversion
+            let err_conv = match cfg.async_pattern {
+                AsyncPattern::Pyo3FutureIntoPy => {
+                    ".map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))"
+                }
+                AsyncPattern::NapiNativeAsync => {
+                    ".map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))"
+                }
+                AsyncPattern::WasmNativeAsync => ".map_err(|e| JsValue::from_str(&e.to_string()))",
+                _ => ".map_err(|e| e.to_string())",
+            };
+            if is_opaque {
+                if matches!(method.return_type, TypeRef::Unit) {
+                    // Unit return: avoid let_unit_value by not binding the result
+                    format!("{core_call}{err_conv}?;\n        Ok(())")
+                } else {
+                    let wrap = wrap_return(
+                        "result",
+                        &method.return_type,
+                        type_name,
+                        opaque_types,
+                        is_opaque,
+                        method.returns_ref,
+                    );
+                    format!("let result = {core_call}{err_conv}?;\n        Ok({wrap})")
+                }
+            } else {
+                format!("{core_call}{err_conv}")
+            }
+        } else if is_opaque {
+            wrap_return(
+                &core_call,
+                &method.return_type,
+                type_name,
+                opaque_types,
+                is_opaque,
+                method.returns_ref,
+            )
+        } else {
+            core_call
+        }
+    };
+
+    let needs_py = method.is_async && cfg.async_pattern == AsyncPattern::Pyo3FutureIntoPy;
+    let self_param = match (needs_py, params.is_empty()) {
+        (true, true) => "&self, py: Python<'py>",
+        (true, false) => "&self, py: Python<'py>, ",
+        (false, true) => "&self",
+        (false, false) => "&self, ",
+    };
+
+    // For async PyO3 methods, override return type to PyResult<Bound<'py, PyAny>>
+    // and add the 'py lifetime generic on the method name.
+    let ret = if needs_py {
+        "PyResult<Bound<'py, PyAny>>".to_string()
+    } else {
+        ret
+    };
+    let method_lifetime = if needs_py { "<'py>" } else { "" };
+
+    // Wrap long signature if necessary
+    let (sig_start, sig_params, sig_end) = if self_param.len() + params.len() > 100 {
+        let wrapped_params = method
+            .params
+            .iter()
+            .map(|p| {
+                let ty = if p.optional {
+                    format!("Option<{}>", mapper.map_type(&p.ty))
+                } else {
+                    mapper.map_type(&p.ty)
+                };
+                format!("{}: {}", p.name, ty)
+            })
+            .collect::<Vec<_>>()
+            .join(",\n        ");
+        let py_param = if needs_py { "\n        py: Python<'py>," } else { "" };
+        (
+            format!(
+                "pub fn {}{method_lifetime}(\n        &self,{}\n        ",
+                method.name, py_param
+            ),
+            wrapped_params,
+            "\n    ) -> ".to_string(),
+        )
+    } else {
+        (
+            format!("pub fn {}{method_lifetime}({}", method.name, self_param),
+            params,
+            ") -> ".to_string(),
+        )
+    };
+
+    let mut out = String::with_capacity(1024);
+    // Per-item clippy suppression: too_many_arguments when >7 params (including &self and py)
+    let total_params = method.params.len() + 1 + if needs_py { 1 } else { 0 };
+    if total_params > 7 {
+        writeln!(out, "    #[allow(clippy::too_many_arguments)]").ok();
+    }
+    // Per-item clippy suppression: missing_errors_doc for Result-returning methods
+    if method.error_type.is_some() {
+        writeln!(out, "    #[allow(clippy::missing_errors_doc)]").ok();
+    }
+    // Per-item clippy suppression: should_implement_trait for trait-conflicting names
+    if is_trait_method_name(&method.name) {
+        writeln!(out, "    #[allow(clippy::should_implement_trait)]").ok();
+    }
+    if cfg.needs_signature {
+        let sig = function_sig_defaults(&method.params);
+        writeln!(out, "    {}{}{}", cfg.signature_prefix, sig, cfg.signature_suffix).ok();
+    }
+    write!(
+        out,
+        "    {}{}{}{} {{\n        \
+         {body}\n    }}",
+        sig_start, sig_params, sig_end, ret,
+    )
+    .ok();
+    out
+}
+
+/// Generate a static method.
+pub fn gen_static_method(
+    method: &MethodDef,
+    mapper: &dyn TypeMapper,
+    cfg: &RustBindingConfig,
+    typ: &TypeDef,
+    adapter_bodies: &AdapterBodies,
+    opaque_types: &AHashSet<String>,
+) -> String {
+    let type_name = &typ.name;
+    // Use the full rust_path (with hyphens replaced by underscores) for core type references
+    let core_type_path = typ.rust_path.replace('-', "_");
+    let map_fn = |ty: &alef_core::ir::TypeRef| mapper.map_type(ty);
+    let params = function_params(&method.params, &map_fn);
+    let return_type = mapper.map_type(&method.return_type);
+    let ret = mapper.wrap_return(&return_type, method.error_type.is_some());
+
+    let call_args = gen_call_args(&method.params, opaque_types);
+
+    let can_delegate = crate::shared::can_auto_delegate(method, opaque_types);
+
+    let body = if !can_delegate {
+        // Check if an adapter provides the body
+        let adapter_key = format!("{}.{}", type_name, method.name);
+        if let Some(adapter_body) = adapter_bodies.get(&adapter_key) {
+            adapter_body.clone()
+        } else {
+            gen_unimplemented_body(
+                &method.return_type,
+                &format!("{type_name}::{}", method.name),
+                method.error_type.is_some(),
+                cfg,
+                &method.params,
+            )
+        }
+    } else if method.is_async {
+        let core_call = format!("{core_type_path}::{}({call_args})", method.name);
+        let return_wrap = format!("{return_type}::from(result)");
+        gen_async_body(
+            &core_call,
+            cfg,
+            method.error_type.is_some(),
+            &return_wrap,
+            false,
+            "",
+            matches!(method.return_type, TypeRef::Unit),
+        )
+    } else {
+        let core_call = format!("{core_type_path}::{}({call_args})", method.name);
+        if method.error_type.is_some() {
+            // Backend-specific error conversion
+            let err_conv = match cfg.async_pattern {
+                AsyncPattern::Pyo3FutureIntoPy => {
+                    ".map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))"
+                }
+                AsyncPattern::NapiNativeAsync => {
+                    ".map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))"
+                }
+                AsyncPattern::WasmNativeAsync => ".map_err(|e| JsValue::from_str(&e.to_string()))",
+                _ => ".map_err(|e| e.to_string())",
+            };
+            // Wrap the Ok value if the return type needs conversion (e.g. PathBuf→String)
+            let wrapped = wrap_return(
+                "val",
+                &method.return_type,
+                type_name,
+                opaque_types,
+                typ.is_opaque,
+                method.returns_ref,
+            );
+            if wrapped == "val" {
+                format!("{core_call}{err_conv}")
+            } else {
+                format!("{core_call}.map(|val| {wrapped}){err_conv}")
+            }
+        } else {
+            // Wrap return value for non-error case too (e.g. PathBuf→String)
+            wrap_return(
+                &core_call,
+                &method.return_type,
+                type_name,
+                opaque_types,
+                typ.is_opaque,
+                method.returns_ref,
+            )
+        }
+    };
+
+    let static_needs_py = method.is_async && cfg.async_pattern == AsyncPattern::Pyo3FutureIntoPy;
+
+    // For async PyO3 static methods, override return type and add lifetime generic.
+    let ret = if static_needs_py {
+        "PyResult<Bound<'py, PyAny>>".to_string()
+    } else {
+        ret
+    };
+    let method_lifetime = if static_needs_py { "<'py>" } else { "" };
+
+    // Wrap long signature if necessary
+    let (sig_start, sig_params, sig_end) = if params.len() > 100 {
+        let wrapped_params = method
+            .params
+            .iter()
+            .map(|p| {
+                let ty = if p.optional {
+                    format!("Option<{}>", mapper.map_type(&p.ty))
+                } else {
+                    mapper.map_type(&p.ty)
+                };
+                format!("{}: {}", p.name, ty)
+            })
+            .collect::<Vec<_>>()
+            .join(",\n        ");
+        // For async PyO3, add py parameter
+        if static_needs_py {
+            (
+                format!("pub fn {}{method_lifetime}(py: Python<'py>,\n        ", method.name),
+                wrapped_params,
+                "\n    ) -> ".to_string(),
+            )
+        } else {
+            (
+                format!("pub fn {}(\n        ", method.name),
+                wrapped_params,
+                "\n    ) -> ".to_string(),
+            )
+        }
+    } else if static_needs_py {
+        (
+            format!("pub fn {}{method_lifetime}(py: Python<'py>, ", method.name),
+            params,
+            ") -> ".to_string(),
+        )
+    } else {
+        (format!("pub fn {}(", method.name), params, ") -> ".to_string())
+    };
+
+    let mut out = String::with_capacity(1024);
+    // Per-item clippy suppression: too_many_arguments when >7 params (including py)
+    let total_params = method.params.len() + if static_needs_py { 1 } else { 0 };
+    if total_params > 7 {
+        writeln!(out, "    #[allow(clippy::too_many_arguments)]").ok();
+    }
+    // Per-item clippy suppression: missing_errors_doc for Result-returning methods
+    if method.error_type.is_some() {
+        writeln!(out, "    #[allow(clippy::missing_errors_doc)]").ok();
+    }
+    // Per-item clippy suppression: should_implement_trait for trait-conflicting names
+    if is_trait_method_name(&method.name) {
+        writeln!(out, "    #[allow(clippy::should_implement_trait)]").ok();
+    }
+    if let Some(attr) = cfg.static_attr {
+        writeln!(out, "    #[{attr}]").ok();
+    }
+    if cfg.needs_signature {
+        let sig = function_sig_defaults(&method.params);
+        writeln!(out, "    {}{}{}", cfg.signature_prefix, sig, cfg.signature_suffix).ok();
+    }
+    write!(
+        out,
+        "    {}{}{}{} {{\n        \
+         {body}\n    }}",
+        sig_start, sig_params, sig_end, ret,
+    )
+    .ok();
+    out
+}
+
+/// Generate a full methods impl block (non-opaque types).
+pub fn gen_impl_block(
+    typ: &TypeDef,
+    mapper: &dyn TypeMapper,
+    cfg: &RustBindingConfig,
+    adapter_bodies: &AdapterBodies,
+    opaque_types: &AHashSet<String>,
+) -> String {
+    let (instance, statics) = partition_methods(&typ.methods);
+    if instance.is_empty() && statics.is_empty() && typ.fields.is_empty() {
+        return String::new();
+    }
+
+    let prefixed_name = format!("{}{}", cfg.type_name_prefix, typ.name);
+    let mut out = String::with_capacity(2048);
+    if let Some(block_attr) = cfg.method_block_attr {
+        writeln!(out, "#[{block_attr}]").ok();
+    }
+    writeln!(out, "impl {prefixed_name} {{").ok();
+
+    // Constructor
+    if !typ.fields.is_empty() {
+        out.push_str(&gen_constructor(typ, mapper, cfg));
+        out.push_str("\n\n");
+    }
+
+    // Instance methods
+    for m in &instance {
+        out.push_str(&gen_method(m, mapper, cfg, typ, false, opaque_types, adapter_bodies));
+        out.push_str("\n\n");
+    }
+
+    // Static methods
+    for m in &statics {
+        out.push_str(&gen_static_method(m, mapper, cfg, typ, adapter_bodies, opaque_types));
+        out.push_str("\n\n");
+    }
+
+    // Trim trailing newlines inside impl block
+    let trimmed = out.trim_end();
+    let mut result = trimmed.to_string();
+    result.push_str("\n}");
+    result
+}
+
+/// Generate a full impl block for an opaque type, delegating methods to `self.inner`.
+///
+/// `opaque_types` is the set of type names that are opaque wrappers (use `Arc<inner>`).
+/// This is needed so that return-type wrapping uses the correct pattern for cross-type returns.
+pub fn gen_opaque_impl_block(
+    typ: &TypeDef,
+    mapper: &dyn TypeMapper,
+    cfg: &RustBindingConfig,
+    opaque_types: &AHashSet<String>,
+    adapter_bodies: &AdapterBodies,
+) -> String {
+    let (instance, statics) = partition_methods(&typ.methods);
+    if instance.is_empty() && statics.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::with_capacity(2048);
+    let prefixed_name = format!("{}{}", cfg.type_name_prefix, typ.name);
+    if let Some(block_attr) = cfg.method_block_attr {
+        writeln!(out, "#[{block_attr}]").ok();
+    }
+    writeln!(out, "impl {prefixed_name} {{").ok();
+
+    // Instance methods — delegate to self.inner
+    for m in &instance {
+        out.push_str(&gen_method(m, mapper, cfg, typ, true, opaque_types, adapter_bodies));
+        out.push_str("\n\n");
+    }
+
+    // Static methods
+    for m in &statics {
+        out.push_str(&gen_static_method(m, mapper, cfg, typ, adapter_bodies, opaque_types));
+        out.push_str("\n\n");
+    }
+
+    let trimmed = out.trim_end();
+    let mut result = trimmed.to_string();
+    result.push_str("\n}");
+    result
+}

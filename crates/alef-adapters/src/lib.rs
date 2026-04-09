@@ -1,3 +1,6 @@
+//! Adapter layer for connecting language-specific patterns to alef's backend trait.
+//! Handles callback bridges and custom registrations.
+
 pub mod async_method;
 pub mod callback_bridge;
 pub mod streaming;

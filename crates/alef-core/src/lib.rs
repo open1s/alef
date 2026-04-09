@@ -1,3 +1,6 @@
+//! Core types and configuration for alef polyglot binding generator.
+//! Defines IR types, config schema, and backend trait.
+
 pub mod backend;
 pub mod config;
 pub mod error;

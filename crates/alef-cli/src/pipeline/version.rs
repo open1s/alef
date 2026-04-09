@@ -203,8 +203,8 @@ pub fn sync_versions(config: &AlefConfig, bump: Option<&str>) -> anyhow::Result<
 
     // Process extra_paths from config [sync] section (glob patterns)
     if let Some(sync_config) = &config.sync {
+        let version_re = regex::Regex::new(r"\d+\.\d+\.\d+").ok();
         for pattern in &sync_config.extra_paths {
-            let version_re = regex::Regex::new(r"\d+\.\d+\.\d+").ok();
             match glob::glob(pattern) {
                 Ok(paths) => {
                     for entry in paths {
