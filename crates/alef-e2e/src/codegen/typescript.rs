@@ -21,15 +21,14 @@ impl E2eCodegen for TypeScriptCodegen {
         e2e_config: &E2eConfig,
         _alef_config: &AlefConfig,
     ) -> Result<Vec<GeneratedFile>> {
-        let lang = self.language_name();
-        let output_base = PathBuf::from(&e2e_config.output).join(lang);
+        let output_base = PathBuf::from(&e2e_config.output).join(self.language_name());
         let tests_base = output_base.join("tests");
 
         let mut files = Vec::new();
 
-        // Resolve call config with overrides.
+        // Resolve call config with overrides — use "node" key (Language::Node).
         let call = &e2e_config.call;
-        let overrides = call.overrides.get(lang);
+        let overrides = call.overrides.get("node");
         let module_path = overrides
             .and_then(|o| o.module.as_ref())
             .cloned()
@@ -110,7 +109,7 @@ impl E2eCodegen for TypeScriptCodegen {
     }
 
     fn language_name(&self) -> &'static str {
-        "typescript"
+        "node"
     }
 }
 
