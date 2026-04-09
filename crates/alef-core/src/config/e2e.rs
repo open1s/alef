@@ -115,6 +115,11 @@ pub struct CallOverride {
     /// - `"json"`: pass via `json.loads('...')` / `JSON.parse('...')`.
     #[serde(default)]
     pub options_via: Option<String>,
+    /// Maps fixture option field names to their enum type names.
+    /// E.g., `{"headingStyle": "HeadingStyle", "codeBlockStyle": "CodeBlockStyle"}`.
+    /// The generator imports these types and maps string values to enum constants.
+    #[serde(default)]
+    pub enum_fields: HashMap<String, String>,
 }
 
 /// Per-language package reference configuration.

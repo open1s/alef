@@ -9,7 +9,8 @@ use crate::fixture::{Assertion, Fixture, FixtureGroup};
 use alef_core::backend::GeneratedFile;
 use alef_core::config::AlefConfig;
 use anyhow::Result;
-use heck::ToSnakeCase;
+use heck::{ToPascalCase, ToSnakeCase};
+use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::path::PathBuf;
 
@@ -106,6 +107,18 @@ fn resolve_options_via(e2e_config: &E2eConfig) -> &str {
         .unwrap_or("kwargs")
 }
 
+/// Resolve enum field mappings from the Python override config.
+fn resolve_enum_fields(e2e_config: &E2eConfig) -> &HashMap<String, String> {
+    static EMPTY: std::sync::LazyLock<HashMap<String, String>> =
+        std::sync::LazyLock::new(HashMap::new);
+    e2e_config
+        .call
+        .overrides
+        .get("python")
+        .map(|o| &o.enum_fields)
+        .unwrap_or(&EMPTY)
+}
+
 fn is_skipped(fixture: &Fixture, language: &str) -> bool {
     fixture.skip.as_ref().is_some_and(|s| s.should_skip(language))
 }
@@ -134,6 +147,7 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
     let function_name = resolve_function_name(e2e_config);
     let options_type = resolve_options_type(e2e_config);
     let options_via = resolve_options_via(e2e_config);
+    let enum_fields = resolve_enum_fields(e2e_config);
 
     let has_error_test = fixtures
         .iter()
@@ -164,15 +178,46 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
             })
         });
 
+    // Collect enum types actually used across all fixtures in this file.
+    let mut used_enum_types: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    if needs_options_type && !enum_fields.is_empty() {
+        for fixture in fixtures.iter() {
+            for arg in &e2e_config.call.args {
+                if arg.arg_type == "json_object" {
+                    let value = resolve_field(&fixture.input, &arg.field);
+                    if let Some(obj) = value.as_object() {
+                        for key in obj.keys() {
+                            if let Some(enum_type) = enum_fields.get(key) {
+                                used_enum_types.insert(enum_type.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if let (true, Some(opts_type)) = (needs_options_type, &options_type) {
-        let _ = writeln!(out, "from {module} import {function_name}, {opts_type}");
+        let mut imports = vec![function_name.clone(), opts_type.clone()];
+        for enum_type in &used_enum_types {
+            imports.push(enum_type.clone());
+        }
+        let _ = writeln!(out, "from {module} import {}", imports.join(", "));
     } else {
         let _ = writeln!(out, "from {module} import {function_name}");
     }
     let _ = writeln!(out);
 
     for fixture in fixtures {
-        render_test_function(&mut out, fixture, e2e_config, options_type.as_deref(), options_via);
+        render_test_function(
+            &mut out,
+            fixture,
+            e2e_config,
+            options_type.as_deref(),
+            options_via,
+            enum_fields,
+        );
         let _ = writeln!(out);
     }
 
@@ -185,6 +230,7 @@ fn render_test_function(
     e2e_config: &E2eConfig,
     options_type: Option<&str>,
     options_via: &str,
+    enum_fields: &HashMap<String, String>,
 ) {
     let fn_name = sanitize_ident(&fixture.id);
     let description = &fixture.description;
@@ -239,7 +285,17 @@ fn render_test_function(
                             .iter()
                             .map(|(k, v)| {
                                 let snake_key = k.to_snake_case();
-                                let py_val = json_to_python_literal(v);
+                                let py_val = if let Some(enum_type) = enum_fields.get(k) {
+                                    // Map string value to enum constant.
+                                    if let Some(s) = v.as_str() {
+                                        let pascal_val = s.to_pascal_case();
+                                        format!("{enum_type}.{pascal_val}")
+                                    } else {
+                                        json_to_python_literal(v)
+                                    }
+                                } else {
+                                    json_to_python_literal(v)
+                                };
                                 format!("{snake_key}={py_val}")
                             })
                             .collect();
