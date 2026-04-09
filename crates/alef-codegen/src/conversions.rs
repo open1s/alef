@@ -368,6 +368,10 @@ fn gen_optionalized_field_to_core(name: &str, ty: &TypeRef, config: &ConversionC
         TypeRef::Path => {
             format!("{name}: val.{name}.map(Into::into).unwrap_or_default()")
         }
+        // Char: binding uses Option<String>, core uses char
+        TypeRef::Char => {
+            format!("{name}: val.{name}.and_then(|s| s.chars().next()).unwrap_or('*')")
+        }
         TypeRef::Vec(inner) => match inner.as_ref() {
             TypeRef::Named(_) => {
                 format!("{name}: val.{name}.map(|v| v.into_iter().map(Into::into).collect()).unwrap_or_default()")
@@ -521,8 +525,16 @@ pub fn gen_enum_from_core_to_binding_cfg(enum_def: &EnumDef, core_import: &str, 
 pub fn field_conversion_to_core(name: &str, ty: &TypeRef, optional: bool) -> String {
     match ty {
         // Primitives, String, Bytes, Unit, Json -- direct assignment
-        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Char | TypeRef::Bytes | TypeRef::Unit | TypeRef::Json => {
+        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Unit | TypeRef::Json => {
             format!("{name}: val.{name}")
+        }
+        // Char: binding uses String, core uses char — convert first character
+        TypeRef::Char => {
+            if optional {
+                format!("{name}: val.{name}.and_then(|s| s.chars().next())")
+            } else {
+                format!("{name}: val.{name}.chars().next().unwrap_or('*')")
+            }
         }
         // Duration: binding uses u64 (secs), core uses std::time::Duration
         TypeRef::Duration => {
@@ -639,6 +651,14 @@ pub fn field_conversion_from_core(
         }
         TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Path) => {
             format!("{name}: val.{name}.map(|p| p.to_string_lossy().to_string())")
+        }
+        // Char: core uses char, binding uses String — convert char to string
+        TypeRef::Char => {
+            if optional {
+                format!("{name}: val.{name}.map(|c| c.to_string())")
+            } else {
+                format!("{name}: val.{name}.to_string()")
+            }
         }
         // Bytes: core uses bytes::Bytes, binding uses Vec<u8>
         TypeRef::Bytes => {
