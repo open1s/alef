@@ -1,0 +1,343 @@
+mod functions;
+mod helpers;
+mod types;
+
+use crate::type_map::PhpMapper;
+use ahash::AHashSet;
+use alef_codegen::builder::RustFileBuilder;
+use alef_codegen::conversions::ConversionConfig;
+use alef_codegen::generators::RustBindingConfig;
+use alef_codegen::generators::{self, AsyncPattern};
+use alef_core::backend::{Backend, BuildConfig, Capabilities, GeneratedFile};
+use alef_core::config::{AlefConfig, Language, detect_serde_available, resolve_output_dir};
+use alef_core::ir::ApiSurface;
+use heck::ToPascalCase;
+use std::path::PathBuf;
+
+use functions::{gen_async_function, gen_function};
+use helpers::{
+    gen_convertible_enum_tainted, gen_enum_tainted_from_binding_to_core, gen_serde_bridge_from, gen_tokio_runtime,
+    has_enum_named_field, references_named_type,
+};
+use types::{gen_enum_constants, gen_opaque_struct_methods, gen_php_struct, gen_struct_methods};
+
+pub struct PhpBackend;
+
+impl PhpBackend {
+    fn binding_config(core_import: &str, has_serde: bool) -> RustBindingConfig<'_> {
+        RustBindingConfig {
+            struct_attrs: &["php_class"],
+            field_attrs: &[],
+            struct_derives: &["Clone"],
+            method_block_attr: Some("php_impl"),
+            constructor_attr: "",
+            static_attr: None,
+            function_attr: "#[php_function]",
+            enum_attrs: &[],
+            enum_derives: &[],
+            needs_signature: false,
+            signature_prefix: "",
+            signature_suffix: "",
+            core_import,
+            async_pattern: AsyncPattern::TokioBlockOn,
+            has_serde,
+            type_name_prefix: "",
+        }
+    }
+}
+
+impl Backend for PhpBackend {
+    fn name(&self) -> &str {
+        "php"
+    }
+
+    fn language(&self) -> Language {
+        Language::Php
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            supports_async: true,
+            supports_classes: true,
+            supports_enums: true,
+            supports_option: true,
+            supports_result: true,
+            ..Capabilities::default()
+        }
+    }
+
+    fn generate_bindings(&self, api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        let enum_names = api.enums.iter().map(|e| e.name.clone()).collect();
+        let mapper = PhpMapper { enum_names };
+        let core_import = config.core_import();
+
+        let output_dir = resolve_output_dir(
+            config.output.php.as_ref(),
+            &config.crate_config.name,
+            "crates/{name}-php/src/",
+        );
+        let has_serde = detect_serde_available(&output_dir);
+        let cfg = Self::binding_config(&core_import, has_serde);
+
+        // Build the inner module content (types, methods, conversions)
+        let mut builder = RustFileBuilder::new();
+        builder.add_import("ext_php_rs::prelude::*");
+
+        // Import serde_json when available (needed for serde-based param conversion)
+        if has_serde {
+            builder.add_import("serde_json");
+        }
+
+        // Import traits needed for trait method dispatch
+        for trait_path in generators::collect_trait_imports(api) {
+            builder.add_import(&trait_path);
+        }
+
+        // Only import HashMap when Map-typed fields or returns are present
+        let has_maps = api.types.iter().any(|t| {
+            t.fields
+                .iter()
+                .any(|f| matches!(&f.ty, alef_core::ir::TypeRef::Map(_, _)))
+        }) || api
+            .functions
+            .iter()
+            .any(|f| matches!(&f.return_type, alef_core::ir::TypeRef::Map(_, _)));
+        if has_maps {
+            builder.add_import("std::collections::HashMap");
+        }
+
+        // Custom module declarations
+        let custom_mods = config.custom_modules.for_language(Language::Php);
+        for module in custom_mods {
+            builder.add_item(&format!("pub mod {module};"));
+        }
+
+        // Check if any function or method is async
+        let has_async =
+            api.functions.iter().any(|f| f.is_async) || api.types.iter().any(|t| t.methods.iter().any(|m| m.is_async));
+
+        if has_async {
+            builder.add_item(&gen_tokio_runtime());
+        }
+
+        // Check if we have opaque types and add Arc import if needed
+        let opaque_types: AHashSet<String> = api
+            .types
+            .iter()
+            .filter(|t| t.is_opaque)
+            .map(|t| t.name.clone())
+            .collect();
+        if !opaque_types.is_empty() {
+            builder.add_import("std::sync::Arc");
+        }
+
+        for typ in &api.types {
+            if typ.is_opaque {
+                builder.add_item(&generators::gen_opaque_struct(typ, &cfg));
+                builder.add_item(&gen_opaque_struct_methods(typ, &mapper, &opaque_types, &core_import));
+            } else {
+                builder.add_item(&gen_php_struct(typ, &mapper, &cfg));
+                if typ.has_default {
+                    builder.add_item(&generators::gen_struct_default_impl(typ, ""));
+                }
+                builder.add_item(&gen_struct_methods(
+                    typ,
+                    &mapper,
+                    has_serde,
+                    &core_import,
+                    &opaque_types,
+                ));
+            }
+        }
+
+        for enum_def in &api.enums {
+            builder.add_item(&gen_enum_constants(enum_def));
+        }
+
+        for func in &api.functions {
+            if func.is_async {
+                builder.add_item(&gen_async_function(func, &mapper, &opaque_types, &core_import));
+            } else {
+                builder.add_item(&gen_function(func, &mapper, &opaque_types, &core_import));
+            }
+        }
+
+        let convertible = alef_codegen::conversions::convertible_types(api);
+        let core_to_binding = alef_codegen::conversions::core_to_binding_convertible_types(api);
+        // From/Into conversions with PHP-specific i64 casts.
+        // Types with enum Named fields (or that reference such types transitively) can't
+        // have binding->core From impls because PHP maps enums to String and there's no
+        // From<String> for the core enum type. Core->binding is always safe.
+        let enum_names_ref = &mapper.enum_names;
+        let php_conv_config = ConversionConfig {
+            cast_large_ints_to_i64: true,
+            enum_string_names: Some(enum_names_ref),
+            json_to_string: true,
+            include_cfg_metadata: false,
+            ..Default::default()
+        };
+        // Build transitive set of types that can't have binding->core From
+        let mut enum_tainted: AHashSet<String> = AHashSet::new();
+        for typ in &api.types {
+            if has_enum_named_field(typ, enum_names_ref) {
+                enum_tainted.insert(typ.name.clone());
+            }
+        }
+        // Transitively mark types that reference enum-tainted types
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for typ in &api.types {
+                if !enum_tainted.contains(&typ.name)
+                    && typ.fields.iter().any(|f| references_named_type(&f.ty, &enum_tainted))
+                {
+                    enum_tainted.insert(typ.name.clone());
+                    changed = true;
+                }
+            }
+        }
+        // Compute which enum-tainted types can have binding->core From generated
+        // (excludes types referencing enums with data variants).
+        let convertible_tainted = gen_convertible_enum_tainted(&api.types, &enum_tainted, enum_names_ref, &api.enums);
+        for typ in &api.types {
+            // binding->core: only when not enum-tainted
+            if !enum_tainted.contains(&typ.name)
+                && alef_codegen::conversions::can_generate_conversion(typ, &convertible)
+            {
+                builder.add_item(&alef_codegen::conversions::gen_from_binding_to_core_cfg(
+                    typ,
+                    &core_import,
+                    &php_conv_config,
+                ));
+            } else if enum_tainted.contains(&typ.name) && has_serde {
+                // Enum-tainted types can't use field-by-field From (no From<String> for core enum),
+                // but when serde is available we bridge via JSON serialization round-trip.
+                builder.add_item(&gen_serde_bridge_from(typ, &core_import));
+            } else if convertible_tainted.contains(&typ.name) {
+                // Enum-tainted types with only unit-variant enums: generate From with
+                // string->enum parsing for enum-Named fields, using first variant as fallback.
+                builder.add_item(&gen_enum_tainted_from_binding_to_core(
+                    typ,
+                    &core_import,
+                    enum_names_ref,
+                    &enum_tainted,
+                    &php_conv_config,
+                    &api.enums,
+                ));
+            }
+            // core->binding: always (enum->String via format, sanitized fields via format)
+            if alef_codegen::conversions::can_generate_conversion(typ, &core_to_binding) {
+                builder.add_item(&alef_codegen::conversions::gen_from_core_to_binding_cfg(
+                    typ,
+                    &core_import,
+                    &opaque_types,
+                    &php_conv_config,
+                ));
+            }
+        }
+
+        // Error converter functions
+        for error in &api.errors {
+            builder.add_item(&alef_codegen::error_gen::gen_php_error_converter(error, &core_import));
+        }
+
+        let _adapter_bodies = alef_adapters::build_adapter_bodies(config, Language::Php)?;
+
+        // Add feature gate as inner attribute — entire crate is gated
+        let php_config = config.php.as_ref();
+        if let Some(feature_name) = php_config.and_then(|c| c.feature_gate.as_deref()) {
+            builder.add_inner_attribute(&format!("cfg(feature = \"{feature_name}\")"));
+            builder.add_inner_attribute(&format!(
+                "cfg_attr(all(windows, target_env = \"msvc\", feature = \"{feature_name}\"), feature(abi_vectorcall))"
+            ));
+        }
+
+        let content = builder.build();
+
+        Ok(vec![GeneratedFile {
+            path: PathBuf::from(&output_dir).join("lib.rs"),
+            content,
+            generated_header: false,
+        }])
+    }
+
+    fn generate_public_api(&self, api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        let extension_name = config.php_extension_name();
+        let class_name = extension_name.to_pascal_case();
+
+        // Generate PHP wrapper class
+        let mut content = String::from("<?php\n");
+        content.push_str("// This file is auto-generated by alef. DO NOT EDIT.\n");
+        content.push_str("declare(strict_types=1);\n\n");
+
+        // Determine namespace
+        let namespace = if extension_name.contains('_') {
+            let parts: Vec<&str> = extension_name.split('_').collect();
+            let ns_parts: Vec<String> = parts.iter().map(|p| p.to_pascal_case()).collect();
+            ns_parts.join("\\")
+        } else {
+            class_name.clone()
+        };
+
+        content.push_str(&format!("namespace {};\n\n", namespace));
+        content.push_str(&format!("final class {}\n", class_name));
+        content.push_str("{\n");
+
+        // Generate wrapper methods for functions
+        for func in &api.functions {
+            content.push_str("    /**\n");
+            content.push_str(&format!("     * {}\n", func.doc.lines().next().unwrap_or("Function")));
+            content.push_str("     */\n");
+            content.push_str(&format!("    public static function {}(", func.name));
+
+            // Parameters
+            let params: Vec<String> = func
+                .params
+                .iter()
+                .map(|p| {
+                    if p.optional {
+                        format!("?${} = null", p.name)
+                    } else {
+                        format!("${}", p.name)
+                    }
+                })
+                .collect();
+            content.push_str(&params.join(", "));
+            content.push_str(")\n");
+            content.push_str("    {\n");
+            content.push_str(&format!(
+                "        return \\{}({}); // delegate to extension function\n",
+                func.name,
+                func.params
+                    .iter()
+                    .map(|p| format!("${}", p.name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            content.push_str("    }\n\n");
+        }
+
+        content.push_str("}\n");
+
+        let output_dir = resolve_output_dir(
+            config.output.php.as_ref(),
+            &config.crate_config.name,
+            "packages/php/src/",
+        );
+
+        Ok(vec![GeneratedFile {
+            path: PathBuf::from(&output_dir).join(format!("{}.php", class_name)),
+            content,
+            generated_header: false,
+        }])
+    }
+
+    fn build_config(&self) -> Option<BuildConfig> {
+        Some(BuildConfig {
+            tool: "cargo",
+            crate_suffix: "-php",
+            depends_on_ffi: false,
+            post_build: vec![],
+        })
+    }
+}
