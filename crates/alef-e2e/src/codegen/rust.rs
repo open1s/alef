@@ -118,7 +118,14 @@ fn is_skipped(fixture: &Fixture, language: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 fn render_cargo_toml(crate_name: &str, dep_name: &str, crate_path: &str) -> String {
-    let e2e_name = format!("{crate_name}-e2e-rust");
+    let e2e_name = format!("{dep_name}-e2e-rust");
+    // When the crate name has hyphens, Cargo needs `package = "name-with-hyphens"`
+    // because the dep key uses underscores (Rust identifier).
+    let dep_spec = if crate_name != dep_name {
+        format!("{dep_name} = {{ package = \"{crate_name}\", path = \"{crate_path}\" }}")
+    } else {
+        format!("{dep_name} = {{ path = \"{crate_path}\" }}")
+    };
     format!(
         r#"[package]
 name = "{e2e_name}"
@@ -130,7 +137,7 @@ publish = false
 [workspace]
 
 [dependencies]
-{dep_name} = {{ path = "{crate_path}" }}
+{dep_spec}
 serde_json = "1"
 "#
     )

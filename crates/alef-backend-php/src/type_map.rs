@@ -48,6 +48,11 @@ impl TypeMapper for PhpMapper {
         }
     }
 
+    /// Duration maps to i64 in PHP (PHP integers are always signed).
+    fn duration(&self) -> Cow<'static, str> {
+        Cow::Borrowed("i64")
+    }
+
     fn error_wrapper(&self) -> &str {
         "PhpResult"
     }

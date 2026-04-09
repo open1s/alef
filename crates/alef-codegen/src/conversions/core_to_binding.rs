@@ -207,8 +207,50 @@ pub fn field_conversion_from_core_cfg(
     opaque_types: &AHashSet<String>,
     config: &ConversionConfig,
 ) -> String {
-    // Sanitized fields handled the same regardless of config
+    // Sanitized fields: for WASM (map_uses_jsvalue), Map and Vec<String> fields target JsValue
+    // and need serde_wasm_bindgen::to_value() instead of iterator-based .collect().
     if sanitized {
+        if config.map_uses_jsvalue {
+            // Map(String, String) sanitized → JsValue
+            if let TypeRef::Map(k, v) = ty {
+                if matches!(k.as_ref(), TypeRef::String) && matches!(v.as_ref(), TypeRef::String) {
+                    if optional {
+                        return format!(
+                            "{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())"
+                        );
+                    }
+                    return format!(
+                        "{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)"
+                    );
+                }
+            }
+            // Vec<String> sanitized → JsValue
+            if let TypeRef::Vec(inner) = ty {
+                if matches!(inner.as_ref(), TypeRef::String) {
+                    if optional {
+                        return format!(
+                            "{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())"
+                        );
+                    }
+                    return format!(
+                        "{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)"
+                    );
+                }
+            }
+            // Vec<Json> sanitized → JsValue
+            if let TypeRef::Vec(inner) = ty {
+                if matches!(inner.as_ref(), TypeRef::Json) {
+                    if optional {
+                        return format!(
+                            "{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())"
+                        );
+                    }
+                    return format!(
+                        "{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)"
+                    );
+                }
+            }
+        }
         return field_conversion_from_core(name, ty, optional, sanitized, opaque_types);
     }
 
@@ -337,6 +379,18 @@ pub fn field_conversion_from_core_cfg(
             } else {
                 format!("{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)")
             }
+        }
+        // Vec<Json>→JsValue: core uses Vec<serde_json::Value>, binding uses JsValue (WASM)
+        TypeRef::Vec(inner) if config.map_uses_jsvalue && matches!(inner.as_ref(), TypeRef::Json) => {
+            if optional {
+                format!("{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())")
+            } else {
+                format!("{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)")
+            }
+        }
+        // Optional(Vec<Json>)→JsValue (WASM)
+        TypeRef::Optional(inner) if config.map_uses_jsvalue && matches!(inner.as_ref(), TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Json)) => {
+            format!("{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())")
         }
         // Fall through to default (handles paths, opaque without prefix, etc.)
         _ => field_conversion_from_core(name, ty, optional, sanitized, opaque_types),

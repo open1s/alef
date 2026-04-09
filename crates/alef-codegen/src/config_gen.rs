@@ -596,7 +596,7 @@ pub fn gen_rustler_kwargs_constructor(typ: &TypeDef, _type_mapper: &dyn Fn(&Type
         let default_str = default_value_for_field(field, "rust");
         writeln!(
             out,
-            "        {}: opts.get(\"{}\").and_then(|t| t.decode()).unwrap_or({}),",
+            "        {}: opts.get(\"{}\").and_then(|t| t.decode().ok()).unwrap_or({}),",
             field.name, field.name, default_str
         )
         .ok();

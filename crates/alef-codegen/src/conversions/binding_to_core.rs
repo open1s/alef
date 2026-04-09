@@ -199,11 +199,12 @@ pub fn field_conversion_to_core(name: &str, ty: &TypeRef, optional: bool) -> Str
 
 /// Binding→core field conversion with backend-specific config (i64 casts, etc.).
 pub fn field_conversion_to_core_cfg(name: &str, ty: &TypeRef, optional: bool, config: &ConversionConfig) -> String {
-    // WASM JsValue: use serde_wasm_bindgen for Map and nested Vec types
+    // WASM JsValue: use serde_wasm_bindgen for Map, nested Vec, and Vec<Json> types
     if config.map_uses_jsvalue {
         let is_nested_vec = matches!(ty, TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::Vec(_)));
+        let is_vec_json = matches!(ty, TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::Json));
         let is_map = matches!(ty, TypeRef::Map(_, _));
-        if is_nested_vec || is_map {
+        if is_nested_vec || is_map || is_vec_json {
             if optional {
                 return format!(
                     "{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::from_value(v.clone()).ok())"
@@ -213,8 +214,9 @@ pub fn field_conversion_to_core_cfg(name: &str, ty: &TypeRef, optional: bool, co
         }
         if let TypeRef::Optional(inner) = ty {
             let is_inner_nested = matches!(inner.as_ref(), TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Vec(_)));
+            let is_inner_vec_json = matches!(inner.as_ref(), TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Json));
             let is_inner_map = matches!(inner.as_ref(), TypeRef::Map(_, _));
-            if is_inner_nested || is_inner_map {
+            if is_inner_nested || is_inner_map || is_inner_vec_json {
                 return format!(
                     "{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::from_value(v.clone()).ok())"
                 );

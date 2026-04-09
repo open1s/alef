@@ -887,18 +887,39 @@ fn gen_function(func: &FunctionDef, mapper: &WasmMapper, core_import: &str, opaq
     if func.is_async {
         let call_args = generators::gen_call_args(&func.params, opaque_types);
         let core_call = format!("{core_import}::{}({call_args})", func.name);
+        // Build the return expression: handle Vec<Named> with collect pattern (turbofish),
+        // plain Named with From::from, and everything else as passthrough.
+        let return_expr = match &func.return_type {
+            TypeRef::Vec(inner) => match inner.as_ref() {
+                TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
+                    format!("result.into_iter().map(|v| {} {{ inner: Arc::new(v) }}).collect::<Vec<_>>()", mapper.map_type(inner))
+                }
+                TypeRef::Named(_) => {
+                    let inner_mapped = mapper.map_type(inner);
+                    format!("result.into_iter().map(|v| {inner_mapped}::from(v)).collect::<Vec<_>>()")
+                }
+                _ => "result".to_string(),
+            },
+            TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
+                let prefixed = mapper.map_type(&func.return_type);
+                format!("{prefixed} {{ inner: Arc::new(result) }}")
+            }
+            TypeRef::Named(_) => {
+                format!("{return_type}::from(result)")
+            }
+            TypeRef::Unit => "result".to_string(),
+            _ => "result".to_string(),
+        };
         let body = if func.error_type.is_some() {
             format!(
                 "let result = {core_call}.await\n        \
                  .map_err(|e| JsValue::from_str(&e.to_string()))?;\n    \
-                 Ok({}::from(result))",
-                return_type
+                 Ok({return_expr})"
             )
         } else {
             format!(
                 "let result = {core_call}.await;\n    \
-                 Ok({}::from(result))",
-                return_type
+                 {return_expr}"
             )
         };
         format!(
