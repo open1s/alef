@@ -55,6 +55,9 @@ pub fn gen_from_binding_to_core_cfg(typ: &TypeDef, core_import: &str, config: &C
 /// (wrapped in Option<T>) in the binding struct for JS ergonomics.
 pub(super) fn gen_optionalized_field_to_core(name: &str, ty: &TypeRef, config: &ConversionConfig) -> String {
     match ty {
+        TypeRef::Json => {
+            format!("{name}: val.{name}.as_ref().and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default()")
+        }
         TypeRef::Named(_) => {
             // Named type: unwrap Option, convert via .into(), or use Default
             format!("{name}: val.{name}.map(Into::into).unwrap_or_default()")
@@ -77,6 +80,9 @@ pub(super) fn gen_optionalized_field_to_core(name: &str, ty: &TypeRef, config: &
             format!("{name}: val.{name}.and_then(|s| s.chars().next()).unwrap_or('*')")
         }
         TypeRef::Vec(inner) => match inner.as_ref() {
+            TypeRef::Json => {
+                format!("{name}: val.{name}.map(|v| v.into_iter().filter_map(|s| serde_json::from_str(&s).ok()).collect()).unwrap_or_default()")
+            }
             TypeRef::Named(_) => {
                 format!("{name}: val.{name}.map(|v| v.into_iter().map(Into::into).collect()).unwrap_or_default()")
             }
