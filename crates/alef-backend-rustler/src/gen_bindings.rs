@@ -398,6 +398,15 @@ fn gen_rustler_wrap_return(
         TypeRef::Path => format!("{expr}.to_string_lossy().to_string()"),
         TypeRef::Duration => format!("{expr}.as_secs()"),
         TypeRef::Json => format!("{expr}.to_string()"),
+        TypeRef::Vec(inner) => match inner.as_ref() {
+            TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
+                format!("{expr}.into_iter().map(|v| ResourceArc::new({n} {{ inner: Arc::new(v) }})).collect()")
+            }
+            TypeRef::Named(_) => {
+                format!("{expr}.into_iter().map(Into::into).collect()")
+            }
+            _ => expr.to_string(),
+        },
         _ => expr.to_string(),
     }
 }

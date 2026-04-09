@@ -591,15 +591,27 @@ pub fn gen_rustler_kwargs_constructor(typ: &TypeDef, _type_mapper: &dyn Fn(&Type
     .ok();
     writeln!(out, "    Self {{").ok();
 
-    // Field assignments with defaults from opts
+    // Field assignments with defaults from opts.
+    // Optional fields (Option<T>) need special handling: decode the inner type
+    // directly so we get Option<T> from and_then, with no unwrap_or needed.
     for field in &typ.fields {
-        let default_str = default_value_for_field(field, "rust");
-        writeln!(
-            out,
-            "        {}: opts.get(\"{}\").and_then(|t| t.decode().ok()).unwrap_or({}),",
-            field.name, field.name, default_str
-        )
-        .ok();
+        if field.optional {
+            // Field type is Option<T>. Decode inner T from the Term, yielding Option<T>.
+            writeln!(
+                out,
+                "        {}: opts.get(\"{}\").and_then(|t| t.decode().ok()),",
+                field.name, field.name
+            )
+            .ok();
+        } else {
+            let default_str = default_value_for_field(field, "rust");
+            writeln!(
+                out,
+                "        {}: opts.get(\"{}\").and_then(|t| t.decode().ok()).unwrap_or({}),",
+                field.name, field.name, default_str
+            )
+            .ok();
+        }
     }
 
     writeln!(out, "    }}").ok();

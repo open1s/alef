@@ -16,8 +16,8 @@ use std::path::PathBuf;
 
 use functions::{gen_async_function, gen_function};
 use helpers::{
-    gen_convertible_enum_tainted, gen_enum_tainted_from_binding_to_core, gen_serde_bridge_from, gen_tokio_runtime,
-    has_enum_named_field, references_named_type,
+    gen_enum_tainted_from_binding_to_core, gen_serde_bridge_from, gen_tokio_runtime, has_enum_named_field,
+    references_named_type,
 };
 use types::{gen_enum_constants, gen_opaque_struct_methods, gen_php_struct, gen_struct_methods};
 
@@ -196,9 +196,6 @@ impl Backend for PhpBackend {
                 }
             }
         }
-        // Compute which enum-tainted types can have binding->core From generated
-        // (excludes types referencing enums with data variants).
-        let convertible_tainted = gen_convertible_enum_tainted(&api.types, &enum_tainted, enum_names_ref, &api.enums);
         for typ in &api.types {
             // binding->core: only when not enum-tainted
             if !enum_tainted.contains(&typ.name)
@@ -213,9 +210,10 @@ impl Backend for PhpBackend {
                 // Enum-tainted types can't use field-by-field From (no From<String> for core enum),
                 // but when serde is available we bridge via JSON serialization round-trip.
                 builder.add_item(&gen_serde_bridge_from(typ, &core_import));
-            } else if convertible_tainted.contains(&typ.name) {
-                // Enum-tainted types with only unit-variant enums: generate From with
-                // string->enum parsing for enum-Named fields, using first variant as fallback.
+            } else if enum_tainted.contains(&typ.name) {
+                // Enum-tainted types: generate From with string->enum parsing for enum-Named
+                // fields, using first variant as fallback. Data-variant enum fields fill
+                // data fields with Default::default().
                 builder.add_item(&gen_enum_tainted_from_binding_to_core(
                     typ,
                     &core_import,

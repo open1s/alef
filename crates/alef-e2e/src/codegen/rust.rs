@@ -92,18 +92,13 @@ fn resolve_function_name(e2e_config: &E2eConfig) -> String {
 }
 
 fn resolve_module(e2e_config: &E2eConfig, dep_name: &str) -> String {
-    e2e_config
-        .call
-        .overrides
-        .get("rust")
-        .and_then(|o| o.module.clone())
-        .unwrap_or_else(|| {
-            if e2e_config.call.module.is_empty() {
-                dep_name.to_string()
-            } else {
-                e2e_config.call.module.replace('-', "_")
-            }
-        })
+    // For Rust, the module name is the crate identifier (underscores).
+    // Priority: override.crate_name > override.module > dep_name
+    let overrides = e2e_config.call.overrides.get("rust");
+    overrides
+        .and_then(|o| o.crate_name.clone())
+        .or_else(|| overrides.and_then(|o| o.module.clone()))
+        .unwrap_or_else(|| dep_name.to_string())
 }
 
 fn is_skipped(fixture: &Fixture, language: &str) -> bool {

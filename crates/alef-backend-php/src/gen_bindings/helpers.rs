@@ -55,7 +55,7 @@ pub(crate) fn has_enum_named_field(typ: &alef_core::ir::TypeDef, enum_names: &AH
 pub(crate) fn gen_php_function_params(
     params: &[alef_core::ir::ParamDef],
     mapper: &PhpMapper,
-    opaque_types: &AHashSet<String>,
+    _opaque_types: &AHashSet<String>,
 ) -> String {
     params
         .iter()
@@ -293,6 +293,7 @@ pub(crate) fn gen_php_lossy_binding_to_core_fields(typ: &TypeDef, core_import: &
 /// Compute the set of enum-tainted types for which binding->core From CAN be generated.
 /// A type is excluded if it references (directly or transitively) an enum with data variants,
 /// because data-variant fields may reference types that don't implement Default.
+#[allow(dead_code)]
 pub(crate) fn gen_convertible_enum_tainted(
     types: &[TypeDef],
     enum_tainted: &AHashSet<String>,
