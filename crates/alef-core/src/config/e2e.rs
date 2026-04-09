@@ -108,6 +108,13 @@ pub struct CallOverride {
     /// `new ConversionOptions(options)` in TypeScript.
     #[serde(default)]
     pub options_type: Option<String>,
+    /// How to pass json_object args: "kwargs" (default), "dict", or "json".
+    ///
+    /// - `"kwargs"`: construct `OptionsType(key=val, ...)` (requires `options_type`).
+    /// - `"dict"`: pass as a plain dict/object literal `{"key": "val"}`.
+    /// - `"json"`: pass via `json.loads('...')` / `JSON.parse('...')`.
+    #[serde(default)]
+    pub options_via: Option<String>,
 }
 
 /// Per-language package reference configuration.

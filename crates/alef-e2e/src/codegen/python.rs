@@ -96,6 +96,16 @@ fn resolve_options_type(e2e_config: &E2eConfig) -> Option<String> {
         .and_then(|o| o.options_type.clone())
 }
 
+/// Resolve how json_object args are passed: "kwargs" (default), "dict", or "json".
+fn resolve_options_via(e2e_config: &E2eConfig) -> &str {
+    e2e_config
+        .call
+        .overrides
+        .get("python")
+        .and_then(|o| o.options_via.as_deref())
+        .unwrap_or("kwargs")
+}
+
 fn is_skipped(fixture: &Fixture, language: &str) -> bool {
     fixture.skip.as_ref().is_some_and(|s| s.should_skip(language))
 }
@@ -123,6 +133,7 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
     let module = resolve_module(e2e_config);
     let function_name = resolve_function_name(e2e_config);
     let options_type = resolve_options_type(e2e_config);
+    let options_via = resolve_options_via(e2e_config);
 
     let has_error_test = fixtures
         .iter()
@@ -132,8 +143,21 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
         let _ = writeln!(out, "import pytest");
     }
 
-    // Check if any fixture in this category uses a json_object arg that needs the options type.
-    let needs_options_type = options_type.is_some()
+    // "json" mode needs `import json`.
+    let needs_json_import = options_via == "json"
+        && fixtures.iter().any(|f| {
+            e2e_config.call.args.iter().any(|arg| {
+                arg.arg_type == "json_object" && !resolve_field(&f.input, &arg.field).is_null()
+            })
+        });
+
+    if needs_json_import {
+        let _ = writeln!(out, "import json");
+    }
+
+    // Only import options_type when using "kwargs" mode.
+    let needs_options_type = options_via == "kwargs"
+        && options_type.is_some()
         && fixtures.iter().any(|f| {
             e2e_config.call.args.iter().any(|arg| {
                 arg.arg_type == "json_object" && !resolve_field(&f.input, &arg.field).is_null()
@@ -148,7 +172,7 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
     let _ = writeln!(out);
 
     for fixture in fixtures {
-        render_test_function(&mut out, fixture, e2e_config, options_type.as_deref());
+        render_test_function(&mut out, fixture, e2e_config, options_type.as_deref(), options_via);
         let _ = writeln!(out);
     }
 
@@ -160,6 +184,7 @@ fn render_test_function(
     fixture: &Fixture,
     e2e_config: &E2eConfig,
     options_type: Option<&str>,
+    options_via: &str,
 ) {
     let fn_name = sanitize_ident(&fixture.id);
     let description = &fixture.description;
@@ -189,21 +214,41 @@ fn render_test_function(
             continue;
         }
 
-        // For json_object args with options_type, construct a typed object.
-        if arg.arg_type == "json_object" {
-            if let (Some(opts_type), Some(obj)) = (options_type, value.as_object()) {
-                let kwargs: Vec<String> = obj
-                    .iter()
-                    .map(|(k, v)| {
-                        let snake_key = k.to_snake_case();
-                        let py_val = json_to_python_literal(v);
-                        format!("{snake_key}={py_val}")
-                    })
-                    .collect();
-                let constructor = format!("{opts_type}({})", kwargs.join(", "));
-                arg_bindings.push(format!("    {var_name} = {constructor}"));
-                kwarg_exprs.push(format!("{var_name}={var_name}"));
-                continue;
+        // For json_object args, use the configured options_via strategy.
+        if arg.arg_type == "json_object" && !value.is_null() {
+            match options_via {
+                "dict" => {
+                    // Pass as a plain Python dict literal.
+                    let literal = json_to_python_literal(value);
+                    arg_bindings.push(format!("    {var_name} = {literal}"));
+                    kwarg_exprs.push(format!("{var_name}={var_name}"));
+                    continue;
+                }
+                "json" => {
+                    // Pass via json.loads() with the raw JSON string.
+                    let json_str = serde_json::to_string(value).unwrap_or_default();
+                    let escaped = escape_python(&json_str);
+                    arg_bindings.push(format!("    {var_name} = json.loads(\"{escaped}\")"));
+                    kwarg_exprs.push(format!("{var_name}={var_name}"));
+                    continue;
+                }
+                _ => {
+                    // "kwargs" (default): construct OptionsType(key=val, ...).
+                    if let (Some(opts_type), Some(obj)) = (options_type, value.as_object()) {
+                        let kwargs: Vec<String> = obj
+                            .iter()
+                            .map(|(k, v)| {
+                                let snake_key = k.to_snake_case();
+                                let py_val = json_to_python_literal(v);
+                                format!("{snake_key}={py_val}")
+                            })
+                            .collect();
+                        let constructor = format!("{opts_type}({})", kwargs.join(", "));
+                        arg_bindings.push(format!("    {var_name} = {constructor}"));
+                        kwarg_exprs.push(format!("{var_name}={var_name}"));
+                        continue;
+                    }
+                }
             }
         }
 
