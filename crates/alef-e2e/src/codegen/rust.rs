@@ -189,7 +189,7 @@ fn render_test_function(out: &mut String, fixture: &Fixture, e2e_config: &E2eCon
         let _ = writeln!(out, "    let {result_var} = {function_name}({args_str});");
         // Render error assertions.
         for assertion in &fixture.assertions {
-            render_assertion(out, assertion, result_var, dep_name, true);
+            render_assertion(out, assertion, result_var, dep_name, true, &[]);
         }
         let _ = writeln!(out, "}}");
         return;
