@@ -328,7 +328,7 @@ pub fn default_value_for_field(field: &FieldDef, language: &str) -> String {
                         PrimitiveType::F32 | PrimitiveType::F64 => "0.0".to_string(),
                         _ => "0".to_string(),
                     },
-                    TypeRef::String | TypeRef::Path | TypeRef::Json => match language {
+                    TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => match language {
                         "rust" => "String::new()".to_string(),
                         _ => "\"\"".to_string(),
                     },
@@ -384,7 +384,7 @@ pub fn default_value_for_field(field: &FieldDef, language: &str) -> String {
             | alef_core::ir::PrimitiveType::Isize => "0".to_string(),
             alef_core::ir::PrimitiveType::F32 | alef_core::ir::PrimitiveType::F64 => "0.0".to_string(),
         },
-        TypeRef::String => match language {
+        TypeRef::String | TypeRef::Char => match language {
             "python" => "\"\"".to_string(),
             "ruby" => "\"\"".to_string(),
             "go" => "\"\"".to_string(),
@@ -474,7 +474,7 @@ impl TypeRefExt for TypeRef {
         match self {
             TypeRef::Named(n) => n.clone(),
             TypeRef::Primitive(p) => format!("{:?}", p),
-            TypeRef::String => "String".to_string(),
+            TypeRef::String | TypeRef::Char => "String".to_string(),
             TypeRef::Bytes => "Bytes".to_string(),
             TypeRef::Optional(inner) => format!("Option<{}>", inner.type_name()),
             TypeRef::Vec(inner) => format!("Vec<{}>", inner.type_name()),
@@ -794,7 +794,7 @@ mod tests {
         let typ = make_test_type();
         let output = gen_pyo3_kwargs_constructor(&typ, &|tr: &TypeRef| match tr {
             TypeRef::Primitive(p) => format!("{:?}", p),
-            TypeRef::String => "str".to_string(),
+            TypeRef::String | TypeRef::Char => "str".to_string(),
             _ => "Any".to_string(),
         });
 
@@ -811,7 +811,7 @@ mod tests {
         let typ = make_test_type();
         let output = gen_napi_defaults_constructor(&typ, &|tr: &TypeRef| match tr {
             TypeRef::Primitive(p) => format!("{:?}", p),
-            TypeRef::String => "String".to_string(),
+            TypeRef::String | TypeRef::Char => "String".to_string(),
             _ => "Value".to_string(),
         });
 
@@ -830,7 +830,7 @@ mod tests {
                 PrimitiveType::Bool => "bool".to_string(),
                 _ => "interface{}".to_string(),
             },
-            TypeRef::String => "string".to_string(),
+            TypeRef::String | TypeRef::Char => "string".to_string(),
             _ => "interface{}".to_string(),
         });
 
@@ -851,7 +851,7 @@ mod tests {
                 PrimitiveType::Bool => "boolean".to_string(),
                 _ => "int".to_string(),
             },
-            TypeRef::String => "String".to_string(),
+            TypeRef::String | TypeRef::Char => "String".to_string(),
             _ => "Object".to_string(),
         });
 
@@ -872,7 +872,7 @@ mod tests {
                 PrimitiveType::Bool => "bool".to_string(),
                 _ => "int".to_string(),
             },
-            TypeRef::String => "string".to_string(),
+            TypeRef::String | TypeRef::Char => "string".to_string(),
             _ => "object".to_string(),
         });
 

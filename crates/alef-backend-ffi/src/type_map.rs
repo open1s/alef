@@ -6,14 +6,14 @@ use alef_core::ir::{PrimitiveType, TypeRef};
 pub fn c_param_type(ty: &TypeRef, core_import: &str) -> Cow<'static, str> {
     match ty {
         TypeRef::Primitive(prim) => c_primitive(prim),
-        TypeRef::String => Cow::Borrowed("*const std::ffi::c_char"),
+        TypeRef::String | TypeRef::Char => Cow::Borrowed("*const std::ffi::c_char"),
         TypeRef::Bytes => Cow::Borrowed("*const u8"),
         TypeRef::Optional(inner) => {
             // Optional params use nullable pointers or sentinel values
             match inner.as_ref() {
                 TypeRef::Primitive(PrimitiveType::Bool) => Cow::Borrowed("i32"), // -1 = None, 0 = false, 1 = true
                 TypeRef::Primitive(_) => c_param_type(inner, core_import),       // caller uses sentinel
-                TypeRef::String | TypeRef::Path | TypeRef::Json => {
+                TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => {
                     Cow::Borrowed("*const std::ffi::c_char") // null = None
                 }
                 TypeRef::Named(_) => Cow::Owned(format!("*const {}", c_param_type(inner, core_import))), // null = None
@@ -34,14 +34,16 @@ pub fn c_param_type(ty: &TypeRef, core_import: &str) -> Cow<'static, str> {
 pub fn c_return_type(ty: &TypeRef, core_import: &str) -> Cow<'static, str> {
     match ty {
         TypeRef::Primitive(prim) => c_primitive(prim),
-        TypeRef::String => Cow::Borrowed("*mut std::ffi::c_char"),
+        TypeRef::String | TypeRef::Char => Cow::Borrowed("*mut std::ffi::c_char"),
         TypeRef::Bytes => Cow::Borrowed("*mut u8"), // paired with out-param length
         TypeRef::Optional(inner) => {
             // Optional returns use nullable pointers
             match inner.as_ref() {
                 TypeRef::Primitive(PrimitiveType::Bool) => Cow::Borrowed("i32"), // -1 = None
                 TypeRef::Primitive(_) => c_return_type(inner, core_import),
-                TypeRef::String | TypeRef::Path | TypeRef::Json => Cow::Borrowed("*mut std::ffi::c_char"),
+                TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => {
+                    Cow::Borrowed("*mut std::ffi::c_char")
+                }
                 TypeRef::Named(name) => Cow::Owned(format!("*mut {core_import}::{name}")),
                 _ => Cow::Borrowed("*mut std::ffi::c_char"),
             }

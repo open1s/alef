@@ -20,7 +20,7 @@ pub fn csharp_type(ty: &TypeRef) -> Cow<'static, str> {
             PrimitiveType::Usize => Cow::Borrowed("nuint"),
             PrimitiveType::Isize => Cow::Borrowed("nint"),
         },
-        TypeRef::String => Cow::Borrowed("string"),
+        TypeRef::String | TypeRef::Char => Cow::Borrowed("string"),
         TypeRef::Bytes => Cow::Borrowed("byte[]"),
         TypeRef::Optional(inner) => Cow::Owned(format!("{}?", csharp_type(inner))),
         TypeRef::Vec(inner) => Cow::Owned(format!("List<{}>", csharp_type(inner))),

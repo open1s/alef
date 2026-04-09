@@ -609,7 +609,9 @@ fn gen_instance_method_non_opaque(
                 // Enum return type: PHP maps enums to String via format!("{:?}")
                 String::new()
             }
-            TypeRef::Named(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path => ".into()".to_string(),
+            TypeRef::Named(_) | TypeRef::String | TypeRef::Char | TypeRef::Bytes | TypeRef::Path => {
+                ".into()".to_string()
+            }
             _ => String::new(),
         };
         // For enum return types, wrap with format!("{:?}", ...)
@@ -950,7 +952,7 @@ fn gen_php_unimplemented_body(return_type: &alef_core::ir::TypeRef, fn_name: &st
     } else {
         match return_type {
             TypeRef::Unit => "()".to_string(),
-            TypeRef::String | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
+            TypeRef::String | TypeRef::Char | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
             TypeRef::Bytes => "Vec::new()".to_string(),
             TypeRef::Primitive(p) => match p {
                 alef_core::ir::PrimitiveType::Bool => "false".to_string(),
@@ -1065,7 +1067,7 @@ fn gen_php_call_args(params: &[alef_core::ir::ParamDef], opaque_types: &AHashSet
                     format!("{}.clone().into()", p.name)
                 }
             }
-            TypeRef::String => format!("&{}", p.name),
+            TypeRef::String | TypeRef::Char => format!("&{}", p.name),
             TypeRef::Path => format!("std::path::PathBuf::from({})", p.name),
             TypeRef::Bytes => format!("&{}", p.name),
             TypeRef::Duration => format!("std::time::Duration::from_secs({})", p.name),
@@ -1123,7 +1125,7 @@ fn gen_php_call_args_with_let_bindings(params: &[alef_core::ir::ParamDef], opaqu
             TypeRef::Named(_) => {
                 format!("{}_core", p.name)
             }
-            TypeRef::String => format!("&{}", p.name),
+            TypeRef::String | TypeRef::Char => format!("&{}", p.name),
             TypeRef::Path => format!("std::path::PathBuf::from({})", p.name),
             TypeRef::Bytes => format!("&{}", p.name),
             TypeRef::Duration => format!("std::time::Duration::from_secs({})", p.name),
@@ -1175,7 +1177,7 @@ fn gen_php_lossy_binding_to_core_fields(typ: &TypeDef, core_import: &str) -> Str
                         format!("std::time::Duration::from_secs(self.{name} as u64)")
                     }
                 }
-                TypeRef::String | TypeRef::Bytes => format!("self.{name}.clone()"),
+                TypeRef::String | TypeRef::Char | TypeRef::Bytes => format!("self.{name}.clone()"),
                 TypeRef::Path => {
                     if field.optional {
                         format!("self.{name}.clone().map(Into::into)")

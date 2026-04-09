@@ -39,6 +39,7 @@ pub fn is_delegatable_param(ty: &TypeRef, _opaque_types: &AHashSet<String>) -> b
     match ty {
         TypeRef::Primitive(_)
         | TypeRef::String
+        | TypeRef::Char
         | TypeRef::Bytes
         | TypeRef::Path
         | TypeRef::Unit
@@ -55,6 +56,7 @@ pub fn is_delegatable_return(ty: &TypeRef) -> bool {
     match ty {
         TypeRef::Primitive(_)
         | TypeRef::String
+        | TypeRef::Char
         | TypeRef::Bytes
         | TypeRef::Path
         | TypeRef::Unit
@@ -73,6 +75,7 @@ pub fn is_delegatable_type(ty: &TypeRef) -> bool {
     match ty {
         TypeRef::Primitive(_)
         | TypeRef::String
+        | TypeRef::Char
         | TypeRef::Bytes
         | TypeRef::Path
         | TypeRef::Unit
@@ -90,6 +93,7 @@ pub fn is_opaque_delegatable_type(ty: &TypeRef) -> bool {
     match ty {
         TypeRef::Primitive(_)
         | TypeRef::String
+        | TypeRef::Char
         | TypeRef::Bytes
         | TypeRef::Path
         | TypeRef::Unit
@@ -106,6 +110,7 @@ pub fn is_simple_type(ty: &TypeRef) -> bool {
     match ty {
         TypeRef::Primitive(_)
         | TypeRef::String
+        | TypeRef::Char
         | TypeRef::Bytes
         | TypeRef::Path
         | TypeRef::Unit

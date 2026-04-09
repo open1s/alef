@@ -185,6 +185,7 @@ fn is_field_convertible(ty: &TypeRef, convertible_enums: &AHashSet<&str>, known_
     match ty {
         TypeRef::Primitive(_)
         | TypeRef::String
+        | TypeRef::Char
         | TypeRef::Bytes
         | TypeRef::Path
         | TypeRef::Unit
@@ -223,6 +224,7 @@ fn is_simple_type(ty: &TypeRef) -> bool {
     match ty {
         TypeRef::Primitive(_)
         | TypeRef::String
+        | TypeRef::Char
         | TypeRef::Bytes
         | TypeRef::Path
         | TypeRef::Unit
@@ -519,7 +521,7 @@ pub fn gen_enum_from_core_to_binding_cfg(enum_def: &EnumDef, core_import: &str, 
 pub fn field_conversion_to_core(name: &str, ty: &TypeRef, optional: bool) -> String {
     match ty {
         // Primitives, String, Bytes, Unit, Json -- direct assignment
-        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Unit | TypeRef::Json => {
+        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Char | TypeRef::Bytes | TypeRef::Unit | TypeRef::Json => {
             format!("{name}: val.{name}")
         }
         // Duration: binding uses u64 (secs), core uses std::time::Duration

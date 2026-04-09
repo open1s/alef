@@ -90,6 +90,7 @@ fn resolve_path_type(type_path: &syn::TypePath) -> TypeRef {
 
         // String types
         "String" => TypeRef::String,
+        "char" => TypeRef::Char,
 
         // Path types
         "PathBuf" => TypeRef::Path,

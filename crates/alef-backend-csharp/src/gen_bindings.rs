@@ -195,6 +195,7 @@ fn pinvoke_return_type(ty: &TypeRef) -> &'static str {
         TypeRef::Duration => "ulong",
         // Everything else is a pointer that needs manual marshalling.
         TypeRef::String
+        | TypeRef::Char
         | TypeRef::Bytes
         | TypeRef::Optional(_)
         | TypeRef::Vec(_)
@@ -207,7 +208,7 @@ fn pinvoke_return_type(ty: &TypeRef) -> &'static str {
 
 /// Does the return type need IntPtr→string marshalling in the wrapper?
 fn returns_string(ty: &TypeRef) -> bool {
-    matches!(ty, TypeRef::String | TypeRef::Path | TypeRef::Json)
+    matches!(ty, TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json)
 }
 
 /// Does the return type come back as a C int that should be converted to bool?
@@ -298,7 +299,7 @@ fn gen_pinvoke_for_func(c_name: &str, func: &FunctionDef) -> String {
         out.push('\n');
         for (i, param) in func.params.iter().enumerate() {
             out.push_str("        ");
-            if param.ty == TypeRef::String {
+            if matches!(param.ty, TypeRef::String | TypeRef::Char) {
                 out.push_str("[MarshalAs(UnmanagedType.LPStr)] ");
             }
             let param_name = param.name.to_lower_camel_case();
@@ -332,7 +333,7 @@ fn gen_pinvoke_for_method(c_name: &str, method: &MethodDef) -> String {
         out.push('\n');
         for (i, param) in method.params.iter().enumerate() {
             out.push_str("        ");
-            if param.ty == TypeRef::String {
+            if matches!(param.ty, TypeRef::String | TypeRef::Char) {
                 out.push_str("[MarshalAs(UnmanagedType.LPStr)] ");
             }
             let param_name = param.name.to_lower_camel_case();
@@ -660,7 +661,7 @@ fn gen_record_type(typ: &TypeDef, namespace: &str) -> String {
             } else {
                 // Use type-appropriate zero value
                 let default_val = match &field.ty {
-                    TypeRef::String | TypeRef::Path | TypeRef::Json => "\"\"".to_string(),
+                    TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => "\"\"".to_string(),
                     TypeRef::Bytes => "Array.Empty<byte>()".to_string(),
                     TypeRef::Primitive(p) => match p {
                         PrimitiveType::Bool => "false".to_string(),

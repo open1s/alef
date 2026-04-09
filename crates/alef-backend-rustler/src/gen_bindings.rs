@@ -346,7 +346,7 @@ fn gen_rustler_call_args(params: &[ParamDef], opaque_types: &AHashSet<String>) -
                     format!("{}.into()", p.name)
                 }
             }
-            TypeRef::String => format!("&{}", p.name),
+            TypeRef::String | TypeRef::Char => format!("&{}", p.name),
             TypeRef::Path => format!("std::path::PathBuf::from({})", p.name),
             TypeRef::Bytes => format!("&{}", p.name),
             TypeRef::Duration => format!("std::time::Duration::from_secs({})", p.name),
@@ -379,7 +379,7 @@ fn gen_rustler_wrap_return(
                 format!("{expr}.into()")
             }
         }
-        TypeRef::String | TypeRef::Bytes => format!("{expr}.into()"),
+        TypeRef::String | TypeRef::Char | TypeRef::Bytes => format!("{expr}.into()"),
         TypeRef::Path => format!("{expr}.to_string_lossy().to_string()"),
         TypeRef::Duration => format!("{expr}.as_secs()"),
         TypeRef::Json => format!("{expr}.to_string()"),
@@ -402,7 +402,7 @@ fn gen_rustler_method_call_args(params: &[ParamDef], opaque_types: &AHashSet<Str
                     format!("{}.into()", p.name)
                 }
             }
-            TypeRef::String => format!("&{}", p.name),
+            TypeRef::String | TypeRef::Char => format!("&{}", p.name),
             TypeRef::Path => format!("std::path::PathBuf::from({})", p.name),
             TypeRef::Bytes => format!("&{}", p.name),
             TypeRef::Duration => format!("std::time::Duration::from_secs({})", p.name),
@@ -682,7 +682,7 @@ fn gen_rustler_unimplemented_body(return_type: &alef_core::ir::TypeRef, fn_name:
     } else {
         match return_type {
             TypeRef::Unit => "()".to_string(),
-            TypeRef::String | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
+            TypeRef::String | TypeRef::Char | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
             TypeRef::Bytes => "Vec::new()".to_string(),
             TypeRef::Primitive(p) => match p {
                 alef_core::ir::PrimitiveType::Bool => "false".to_string(),

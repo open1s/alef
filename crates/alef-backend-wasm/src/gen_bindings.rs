@@ -16,7 +16,7 @@ fn is_copy_type(ty: &TypeRef) -> bool {
     match ty {
         TypeRef::Primitive(_) => true, // All primitives are Copy
         TypeRef::Duration => true,     // Duration maps to u64 (secs), which is Copy
-        TypeRef::String | TypeRef::Bytes | TypeRef::Path | TypeRef::Json => false,
+        TypeRef::String | TypeRef::Char | TypeRef::Bytes | TypeRef::Path | TypeRef::Json => false,
         TypeRef::Optional(_) | TypeRef::Vec(_) | TypeRef::Map(_, _) => false,
         TypeRef::Named(_) => false, // Custom types are not Copy
         TypeRef::Unit => true,
@@ -944,7 +944,7 @@ fn gen_wasm_unimplemented_body(return_type: &TypeRef, fn_name: &str, has_error: 
     } else {
         match return_type {
             TypeRef::Unit => "()".to_string(),
-            TypeRef::String | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
+            TypeRef::String | TypeRef::Char | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
             TypeRef::Bytes => "Vec::new()".to_string(),
             TypeRef::Primitive(p) => match p {
                 alef_core::ir::PrimitiveType::Bool => "false".to_string(),
@@ -1033,7 +1033,7 @@ fn wasm_wrap_return_fn(
                 format!("{expr}.into()")
             }
         }
-        TypeRef::String | TypeRef::Bytes => {
+        TypeRef::String | TypeRef::Char | TypeRef::Bytes => {
             if returns_ref {
                 format!("{expr}.into()")
             } else {
@@ -1060,7 +1060,7 @@ fn wasm_wrap_return_fn(
             TypeRef::Path => {
                 format!("{expr}.map(Into::into)")
             }
-            TypeRef::String | TypeRef::Bytes => {
+            TypeRef::String | TypeRef::Char | TypeRef::Bytes => {
                 if returns_ref {
                     format!("{expr}.map(Into::into)")
                 } else {
@@ -1087,7 +1087,7 @@ fn wasm_wrap_return_fn(
             TypeRef::Path => {
                 format!("{expr}.into_iter().map(Into::into).collect()")
             }
-            TypeRef::String | TypeRef::Bytes => {
+            TypeRef::String | TypeRef::Char | TypeRef::Bytes => {
                 if returns_ref {
                     format!("{expr}.into_iter().map(Into::into).collect()")
                 } else {

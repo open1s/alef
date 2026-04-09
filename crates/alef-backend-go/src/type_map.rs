@@ -7,7 +7,7 @@ use alef_core::ir::{PrimitiveType, TypeRef};
 pub fn go_type(ty: &TypeRef) -> Cow<'static, str> {
     match ty {
         TypeRef::Primitive(prim) => go_primitive(prim),
-        TypeRef::String => Cow::Borrowed("string"),
+        TypeRef::String | TypeRef::Char => Cow::Borrowed("string"),
         TypeRef::Bytes => Cow::Borrowed("[]byte"),
         TypeRef::Optional(inner) => Cow::Owned(format!("*{}", go_type(inner))),
         TypeRef::Vec(inner) => Cow::Owned(format!("[]{}", go_type(inner))),

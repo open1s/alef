@@ -261,7 +261,7 @@ pub fn gen_unimplemented_body(
         // Return type-appropriate default
         match return_type {
             TypeRef::Unit => "()".to_string(),
-            TypeRef::String | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
+            TypeRef::String | TypeRef::Char | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
             TypeRef::Bytes => "Vec::new()".to_string(),
             TypeRef::Primitive(p) => match p {
                 alef_core::ir::PrimitiveType::Bool => "false".to_string(),
@@ -438,7 +438,7 @@ pub fn gen_call_args(params: &[ParamDef], opaque_types: &AHashSet<String>) -> St
                     }
                 }
                 // String → &str for core function calls
-                TypeRef::String => {
+                TypeRef::String | TypeRef::Char => {
                     if promoted {
                         format!("&{}{}", p.name, unwrap_suffix)
                     } else {
@@ -507,7 +507,7 @@ pub fn gen_call_args_with_let_bindings(params: &[ParamDef], opaque_types: &AHash
                 TypeRef::Named(_) => {
                     format!("{}_core", p.name)
                 }
-                TypeRef::String => {
+                TypeRef::String | TypeRef::Char => {
                     if promoted {
                         format!("&{}{}", p.name, unwrap_suffix)
                     } else {
@@ -637,6 +637,7 @@ pub fn is_simple_non_opaque_param(ty: &TypeRef) -> bool {
     match ty {
         TypeRef::Primitive(_)
         | TypeRef::String
+        | TypeRef::Char
         | TypeRef::Bytes
         | TypeRef::Path
         | TypeRef::Unit
@@ -666,7 +667,7 @@ pub fn gen_lossy_binding_to_core_fields(typ: &TypeDef, core_import: &str) -> Str
                         format!("std::time::Duration::from_secs(self.{name})")
                     }
                 }
-                TypeRef::String | TypeRef::Bytes => format!("self.{name}.clone()"),
+                TypeRef::String | TypeRef::Char | TypeRef::Bytes => format!("self.{name}.clone()"),
                 TypeRef::Path => {
                     if field.optional {
                         format!("self.{name}.clone().map(Into::into)")

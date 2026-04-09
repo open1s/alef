@@ -77,7 +77,7 @@ pub trait TypeMapper {
     fn map_type(&self, ty: &TypeRef) -> String {
         match ty {
             TypeRef::Primitive(p) => self.primitive(p).into_owned(),
-            TypeRef::String => self.string().into_owned(),
+            TypeRef::String | TypeRef::Char => self.string().into_owned(),
             TypeRef::Bytes => self.bytes().into_owned(),
             TypeRef::Path => self.path().into_owned(),
             TypeRef::Json => self.json().into_owned(),

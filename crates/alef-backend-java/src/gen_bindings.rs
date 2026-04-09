@@ -891,7 +891,7 @@ fn gen_enum_class(package: &str, enum_def: &EnumDef) -> String {
 fn gen_ffi_layout(ty: &TypeRef) -> String {
     match ty {
         TypeRef::Primitive(prim) => java_ffi_type(prim).to_string(),
-        TypeRef::String | TypeRef::Path | TypeRef::Json => "ValueLayout.ADDRESS".to_string(),
+        TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => "ValueLayout.ADDRESS".to_string(),
         TypeRef::Bytes => "ValueLayout.ADDRESS".to_string(),
         TypeRef::Optional(inner) => gen_ffi_layout(inner),
         TypeRef::Vec(_) => "ValueLayout.ADDRESS".to_string(),
@@ -904,7 +904,7 @@ fn gen_ffi_layout(ty: &TypeRef) -> String {
 
 fn marshal_param_to_ffi(out: &mut String, name: &str, ty: &TypeRef) {
     match ty {
-        TypeRef::String | TypeRef::Path | TypeRef::Json => {
+        TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => {
             let cname = "c".to_string() + name;
             writeln!(out, "            var {} = arena.allocateFrom({});", cname, name).ok();
         }
@@ -917,7 +917,7 @@ fn marshal_param_to_ffi(out: &mut String, name: &str, ty: &TypeRef) {
         TypeRef::Optional(inner) => {
             // For optional types, marshal the inner type if not null
             match inner.as_ref() {
-                TypeRef::String | TypeRef::Path | TypeRef::Json => {
+                TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => {
                     let cname = "c".to_string() + name;
                     writeln!(
                         out,
@@ -944,10 +944,12 @@ fn marshal_param_to_ffi(out: &mut String, name: &str, ty: &TypeRef) {
 
 fn ffi_param_name(name: &str, ty: &TypeRef) -> String {
     match ty {
-        TypeRef::String | TypeRef::Path | TypeRef::Json => "c".to_string() + name,
+        TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => "c".to_string() + name,
         TypeRef::Named(_) => "c".to_string() + name,
         TypeRef::Optional(inner) => match inner.as_ref() {
-            TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Named(_) => "c".to_string() + name,
+            TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Named(_) => {
+                "c".to_string() + name
+            }
             _ => name.to_string(),
         },
         _ => name.to_string(),
@@ -978,7 +980,7 @@ fn gen_function_descriptor(return_layout: &str, param_layouts: &[String]) -> Str
 /// (i.e. the FFI returns `*mut c_char` which must be unmarshaled and freed).
 fn is_ffi_string_return(ty: &TypeRef) -> bool {
     match ty {
-        TypeRef::String | TypeRef::Path | TypeRef::Json => true,
+        TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => true,
         TypeRef::Optional(inner) => is_ffi_string_return(inner),
         _ => false,
     }
@@ -1134,7 +1136,7 @@ fn gen_builder_class(package: &str, typ: &TypeDef) -> String {
                 default.clone()
             } else {
                 match &field.ty {
-                    TypeRef::String | TypeRef::Path | TypeRef::Json => "\"\"".to_string(),
+                    TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => "\"\"".to_string(),
                     TypeRef::Bytes => "new byte[0]".to_string(),
                     TypeRef::Primitive(p) => match p {
                         PrimitiveType::Bool => "false".to_string(),

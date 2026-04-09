@@ -41,7 +41,7 @@ pub fn rbs_type(ty: &TypeRef) -> String {
             | PrimitiveType::Isize => "Integer".to_string(),
             PrimitiveType::F32 | PrimitiveType::F64 => "Float".to_string(),
         },
-        TypeRef::String => "String".to_string(),
+        TypeRef::String | TypeRef::Char => "String".to_string(),
         TypeRef::Bytes => "String".to_string(),
         TypeRef::Optional(inner) => format!("{}?", rbs_type(inner)),
         TypeRef::Vec(inner) => format!("Array[{}]", rbs_type(inner)),

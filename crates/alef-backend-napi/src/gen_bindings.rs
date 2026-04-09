@@ -786,7 +786,7 @@ fn napi_gen_call_args(params: &[ParamDef], opaque_types: &AHashSet<String>) -> S
                     format!("{}.into()", p.name)
                 }
             }
-            TypeRef::String => format!("&{}", p.name),
+            TypeRef::String | TypeRef::Char => format!("&{}", p.name),
             TypeRef::Path => format!("std::path::PathBuf::from({})", p.name),
             TypeRef::Bytes => format!("&{}", p.name),
             _ => p.name.clone(),
@@ -862,7 +862,7 @@ fn napi_wrap_return_fn(
                 format!("{expr}.into()")
             }
         }
-        TypeRef::String | TypeRef::Bytes => {
+        TypeRef::String | TypeRef::Char | TypeRef::Bytes => {
             if returns_ref {
                 format!("{expr}.into()")
             } else {
@@ -889,7 +889,7 @@ fn napi_wrap_return_fn(
             TypeRef::Path => {
                 format!("{expr}.map(Into::into)")
             }
-            TypeRef::String | TypeRef::Bytes => {
+            TypeRef::String | TypeRef::Char | TypeRef::Bytes => {
                 if returns_ref {
                     format!("{expr}.map(Into::into)")
                 } else {
@@ -916,7 +916,7 @@ fn napi_wrap_return_fn(
             TypeRef::Path => {
                 format!("{expr}.into_iter().map(Into::into).collect()")
             }
-            TypeRef::String | TypeRef::Bytes => {
+            TypeRef::String | TypeRef::Char | TypeRef::Bytes => {
                 if returns_ref {
                     format!("{expr}.into_iter().map(Into::into).collect()")
                 } else {

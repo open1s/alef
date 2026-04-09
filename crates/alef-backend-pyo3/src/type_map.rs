@@ -32,7 +32,7 @@ pub fn python_type(ty: &TypeRef) -> String {
             | PrimitiveType::Isize => "int".to_string(),
             PrimitiveType::F32 | PrimitiveType::F64 => "float".to_string(),
         },
-        TypeRef::String => "str".to_string(),
+        TypeRef::String | TypeRef::Char => "str".to_string(),
         TypeRef::Bytes => "bytes".to_string(),
         TypeRef::Optional(inner) => format!("{} | None", python_type(inner)),
         TypeRef::Vec(inner) => format!("list[{}]", python_type(inner)),

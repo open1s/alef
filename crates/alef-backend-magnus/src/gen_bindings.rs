@@ -556,7 +556,9 @@ fn gen_instance_method(
         let field_conversions = generators::gen_lossy_binding_to_core_fields(typ, core_import);
         let core_call = format!("core_self.{}({})", method.name, call_args);
         let result_wrap = match &method.return_type {
-            TypeRef::Named(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path => ".into()".to_string(),
+            TypeRef::Named(_) | TypeRef::String | TypeRef::Char | TypeRef::Bytes | TypeRef::Path => {
+                ".into()".to_string()
+            }
             _ => String::new(),
         };
         if method.error_type.is_some() {
@@ -600,7 +602,9 @@ fn gen_async_instance_method(
         let field_conversions = generators::gen_lossy_binding_to_core_fields(typ, core_import);
         let _core_call = format!("core_self.{}({})", method.name, call_args);
         let result_wrap = match &method.return_type {
-            TypeRef::Named(_) | TypeRef::String | TypeRef::Bytes | TypeRef::Path => ".into()".to_string(),
+            TypeRef::Named(_) | TypeRef::String | TypeRef::Char | TypeRef::Bytes | TypeRef::Path => {
+                ".into()".to_string()
+            }
             _ => String::new(),
         };
         if method.error_type.is_some() {
@@ -805,7 +809,7 @@ fn gen_magnus_unimplemented_body(return_type: &alef_core::ir::TypeRef, fn_name: 
     } else {
         match return_type {
             TypeRef::Unit => "()".to_string(),
-            TypeRef::String | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
+            TypeRef::String | TypeRef::Char | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
             TypeRef::Bytes => "Vec::new()".to_string(),
             TypeRef::Primitive(p) => match p {
                 alef_core::ir::PrimitiveType::Bool => "false".to_string(),

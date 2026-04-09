@@ -493,7 +493,7 @@ fn gen_value_to_c(expr: &str, ty: &TypeRef, indent: &str) -> String {
                 writeln!(out, "{indent}{expr}").unwrap();
             }
         }
-        TypeRef::String => {
+        TypeRef::String | TypeRef::Char => {
             writeln!(out, "{indent}match CString::new({expr}.to_string()) {{").unwrap();
             writeln!(out, "{indent}    Ok(cs) => cs.into_raw(),").unwrap();
             writeln!(out, "{indent}    Err(_) => std::ptr::null_mut(),").unwrap();
@@ -583,7 +583,7 @@ fn null_return_value(ty: &TypeRef) -> &'static str {
             PrimitiveType::F32 | PrimitiveType::F64 => "0.0",
             _ => "0",
         },
-        TypeRef::String | TypeRef::Path | TypeRef::Json => "std::ptr::null_mut()",
+        TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => "std::ptr::null_mut()",
         TypeRef::Bytes => "std::ptr::null_mut()",
         TypeRef::Named(_) => "std::ptr::null_mut()",
         TypeRef::Vec(_) | TypeRef::Map(_, _) => "std::ptr::null_mut()",
@@ -759,10 +759,10 @@ fn gen_method_wrapper(
             let rs = format!("{}_rs", p.name);
             match &p.ty {
                 TypeRef::Path if !p.optional => rs, // PathBuf is passed owned
-                TypeRef::String | TypeRef::Bytes | TypeRef::Named(_) if !p.optional => {
+                TypeRef::String | TypeRef::Char | TypeRef::Bytes | TypeRef::Named(_) if !p.optional => {
                     format!("&{rs}")
                 }
-                TypeRef::String | TypeRef::Bytes if p.optional => {
+                TypeRef::String | TypeRef::Char | TypeRef::Bytes if p.optional => {
                     format!("{rs}.as_deref()")
                 }
                 TypeRef::Path if p.optional => rs, // Optional<PathBuf> passed owned
@@ -923,10 +923,10 @@ fn gen_free_function(
             let rs = format!("{}_rs", p.name);
             match &p.ty {
                 TypeRef::Path if !p.optional => rs, // PathBuf is passed owned
-                TypeRef::String | TypeRef::Bytes | TypeRef::Named(_) if !p.optional => {
+                TypeRef::String | TypeRef::Char | TypeRef::Bytes | TypeRef::Named(_) if !p.optional => {
                     format!("&{rs}")
                 }
-                TypeRef::String | TypeRef::Bytes if p.optional => {
+                TypeRef::String | TypeRef::Char | TypeRef::Bytes if p.optional => {
                     format!("{rs}.as_deref()")
                 }
                 TypeRef::Path if p.optional => rs, // Optional<PathBuf> passed owned
@@ -999,7 +999,7 @@ fn gen_param_conversion(param: &ParamDef, has_error: bool, return_type: &TypeRef
     if param.optional {
         // Optional parameter — null means None
         match &param.ty {
-            TypeRef::String | TypeRef::Path | TypeRef::Json => {
+            TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => {
                 writeln!(out, "    let {rs_name} = if {name}.is_null() {{").unwrap();
                 writeln!(out, "        None").unwrap();
                 writeln!(out, "    }} else {{").unwrap();
@@ -1049,7 +1049,7 @@ fn gen_param_conversion(param: &ParamDef, has_error: bool, return_type: &TypeRef
         }
     } else {
         match &param.ty {
-            TypeRef::String => {
+            TypeRef::String | TypeRef::Char => {
                 writeln!(out, "    if {name}.is_null() {{").unwrap();
                 writeln!(
                     out,
@@ -1236,7 +1236,7 @@ fn gen_owned_value_to_c(expr: &str, ty: &TypeRef, indent: &str) -> String {
                 writeln!(out, "{indent}{expr}").unwrap();
             }
         },
-        TypeRef::String => {
+        TypeRef::String | TypeRef::Char => {
             writeln!(out, "{indent}match CString::new({expr}) {{").unwrap();
             writeln!(out, "{indent}    Ok(cs) => cs.into_raw(),").unwrap();
             writeln!(out, "{indent}    Err(_) => std::ptr::null_mut(),").unwrap();

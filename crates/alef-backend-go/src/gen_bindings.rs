@@ -411,7 +411,7 @@ fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
             // Free the pointer if non-nil even on error, to avoid leaks
             if matches!(
                 func.return_type,
-                TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Bytes
+                TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Bytes
             ) {
                 writeln!(out, "        if ptr != nil {{").ok();
                 writeln!(out, "            C.{}_free_string(ptr)", ffi_prefix).ok();
@@ -422,7 +422,7 @@ fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
             // Free the FFI-allocated string after unmarshaling
             if matches!(
                 func.return_type,
-                TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Bytes
+                TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Bytes
             ) {
                 writeln!(out, "    defer C.{}_free_string(ptr)", ffi_prefix).ok();
             }
@@ -435,7 +435,7 @@ fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
         // Add defer free for C string returns
         if matches!(
             func.return_type,
-            TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Bytes
+            TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Bytes
         ) {
             writeln!(out, "    defer C.{}_free_string(ptr)", ffi_prefix).ok();
         }
@@ -579,7 +579,7 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str) -> St
                 // Free the pointer if non-nil even on error, to avoid leaks
                 if matches!(
                     method.return_type,
-                    TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Bytes
+                    TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Bytes
                 ) {
                     writeln!(out, "        if ptr != nil {{").ok();
                     writeln!(out, "            C.{}_free_string(ptr)", ffi_prefix).ok();
@@ -590,7 +590,7 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str) -> St
                 // Free the FFI-allocated string after unmarshaling
                 if matches!(
                     method.return_type,
-                    TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Bytes
+                    TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Bytes
                 ) {
                     writeln!(out, "    defer C.{}_free_string(ptr)", ffi_prefix).ok();
                 }
@@ -603,7 +603,7 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str) -> St
             // Add defer free for C string returns
             if matches!(
                 method.return_type,
-                TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Bytes
+                TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Bytes
             ) {
                 writeln!(out, "    defer C.{}_free_string(ptr)", ffi_prefix).ok();
             }
@@ -621,7 +621,7 @@ fn gen_param_to_c(param: &alef_core::ir::ParamDef) -> String {
     let c_name = format!("c{}", param.name.to_pascal_case());
 
     match &param.ty {
-        TypeRef::String => {
+        TypeRef::String | TypeRef::Char => {
             writeln!(
                 out,
                 "    {} := C.CString({})\n    defer C.free(unsafe.Pointer({}))",
@@ -652,7 +652,7 @@ fn gen_param_to_c(param: &alef_core::ir::ParamDef) -> String {
         }
         TypeRef::Optional(inner) => {
             match inner.as_ref() {
-                TypeRef::String | TypeRef::Path => {
+                TypeRef::String | TypeRef::Char | TypeRef::Path => {
                     writeln!(
                         out,
                         "    var {} *C.char\n    if {} != nil {{\n        \
@@ -695,7 +695,7 @@ fn gen_param_to_c(param: &alef_core::ir::ParamDef) -> String {
 fn type_name(ty: &TypeRef) -> String {
     match ty {
         TypeRef::Named(n) => n.to_pascal_case(),
-        TypeRef::String => "String".to_string(),
+        TypeRef::String | TypeRef::Char => "String".to_string(),
         TypeRef::Bytes => "Bytes".to_string(),
         TypeRef::Optional(inner) => type_name(inner),
         TypeRef::Vec(inner) => format!("List{}", type_name(inner)),
@@ -782,7 +782,7 @@ fn gen_config_options(typ: &TypeDef) -> String {
         } else {
             // Use type-appropriate zero value
             match &field.ty {
-                TypeRef::String | TypeRef::Path | TypeRef::Json => "\"\"".to_string(),
+                TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => "\"\"".to_string(),
                 TypeRef::Bytes => "[]byte{}".to_string(),
                 TypeRef::Primitive(p) => match p {
                     alef_core::ir::PrimitiveType::Bool => "false".to_string(),

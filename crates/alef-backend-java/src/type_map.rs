@@ -6,7 +6,7 @@ use alef_core::ir::{PrimitiveType, TypeRef};
 pub fn java_type(ty: &TypeRef) -> Cow<'static, str> {
     match ty {
         TypeRef::Primitive(prim) => java_primitive(prim),
-        TypeRef::String => Cow::Borrowed("String"),
+        TypeRef::String | TypeRef::Char => Cow::Borrowed("String"),
         TypeRef::Bytes => Cow::Borrowed("byte[]"),
         TypeRef::Optional(inner) => java_boxed_type(inner),
         TypeRef::Vec(inner) => {
@@ -40,7 +40,7 @@ pub fn java_boxed_type(ty: &TypeRef) -> Cow<'static, str> {
             PrimitiveType::F32 => Cow::Borrowed("Float"),
             PrimitiveType::F64 => Cow::Borrowed("Double"),
         },
-        TypeRef::String => Cow::Borrowed("String"),
+        TypeRef::String | TypeRef::Char => Cow::Borrowed("String"),
         TypeRef::Bytes => Cow::Borrowed("byte[]"),
         TypeRef::Optional(inner) => java_boxed_type(inner),
         TypeRef::Vec(inner) => {
