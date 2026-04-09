@@ -116,11 +116,28 @@ enum Commands {
         #[arg(long, value_delimiter = ',')]
         lang: Option<Vec<String>>,
     },
+    /// Generate e2e test suites from fixture files.
+    E2e {
+        #[command(subcommand)]
+        action: E2eAction,
+    },
     /// Manage the build cache.
     Cache {
         #[command(subcommand)]
         action: CacheAction,
     },
+}
+
+#[derive(Subcommand)]
+enum E2eAction {
+    /// Generate e2e test projects from fixtures.
+    Generate {
+        /// Comma-separated list of languages.
+        #[arg(long, value_delimiter = ',')]
+        lang: Option<Vec<String>>,
+    },
+    /// List all fixtures with counts per category.
+    List,
 }
 
 #[derive(Subcommand)]
@@ -350,6 +367,40 @@ fn main() -> Result<()> {
             pipeline::init(config_path, lang)?;
             println!("Initialized alef.toml");
             Ok(())
+        }
+        Commands::E2e { action } => {
+            let config = load_config(config_path)?;
+            let e2e_config = config
+                .e2e
+                .as_ref()
+                .context("no [e2e] section in alef.toml")?;
+            match action {
+                E2eAction::Generate { lang } => {
+                    let languages = lang.as_deref();
+                    eprintln!("Generating e2e test suites...");
+                    let files = alef_e2e::generate_e2e(&config, e2e_config, languages)?;
+                    let base_dir = std::env::current_dir()?;
+                    let count = pipeline::write_scaffold_files(&files, &base_dir)?;
+
+                    // Run per-language formatters
+                    alef_e2e::format::run_formatters(&files, e2e_config);
+
+                    println!("Generated {count} e2e files");
+                    Ok(())
+                }
+                E2eAction::List => {
+                    let fixtures_dir = std::path::Path::new(&e2e_config.fixtures);
+                    let fixtures = alef_e2e::fixture::load_fixtures(fixtures_dir)
+                        .with_context(|| format!("failed to load fixtures from {}", fixtures_dir.display()))?;
+                    let groups = alef_e2e::fixture::group_fixtures(&fixtures);
+
+                    println!("Fixtures: {} total", fixtures.len());
+                    for group in &groups {
+                        println!("  {}: {} fixture(s)", group.category, group.fixtures.len());
+                    }
+                    Ok(())
+                }
+            }
         }
         Commands::Cache { action } => match action {
             CacheAction::Clear => {

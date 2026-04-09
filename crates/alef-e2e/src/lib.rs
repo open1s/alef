@@ -8,6 +8,7 @@ pub mod codegen;
 pub mod config;
 pub mod escape;
 pub mod fixture;
+pub mod format;
 
 use alef_core::backend::GeneratedFile;
 use alef_core::config::AlefConfig;

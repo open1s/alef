@@ -175,6 +175,7 @@ dependencies = [
  "alef-backend-rustler",
  "alef-backend-wasm",
  "alef-core",
+ "alef-e2e",
  "alef-extract",
  "alef-readme",
  "alef-scaffold",
