@@ -66,11 +66,6 @@ pub fn gen_from_core_to_binding_cfg(
         writeln!(out, "            {conversion},").ok();
     }
 
-    // Synthetic field conversion for cfg-gated metadata field (NAPI only).
-    if config.include_cfg_metadata && typ.has_stripped_cfg_fields && typ.name == "ConversionResult" {
-        writeln!(out, "            metadata: Some(val.metadata.into()),").ok();
-    }
-
     writeln!(out, "        }}").ok();
     writeln!(out, "    }}").ok();
     write!(out, "}}").ok();
