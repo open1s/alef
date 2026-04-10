@@ -48,7 +48,7 @@ impl E2eCodegen for CCodegen {
         let c_pkg = e2e_config.packages.get("c");
         let include_path = c_pkg
             .and_then(|p| p.path.as_ref())
-            .cloned()
+            .map(|p| format!("{p}/include"))
             .unwrap_or_else(|| "../../crates/ffi/include".to_string());
         let lib_path = c_pkg
             .and_then(|p| p.module.as_ref())
@@ -255,11 +255,9 @@ fn render_test_function(
     let fn_name = sanitize_ident(&fixture.id);
     let description = &fixture.description;
 
-    let prefixed_fn = if prefix.is_empty() {
-        function_name.to_string()
-    } else {
-        format!("{prefix}_{function_name}")
-    };
+    // Use the function name directly — the override already includes the prefix
+    // (e.g. "htm_convert"), so we must NOT prepend it again.
+    let prefixed_fn = function_name.to_string();
 
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
 
@@ -269,19 +267,41 @@ fn render_test_function(
     let _ = writeln!(out, "    /* {description} */");
 
     if expects_error {
-        let _ = writeln!(out, "    const char* {result_var} = {prefixed_fn}({args_str});");
+        let _ = writeln!(out, "    HTMConversionResult* {result_var} = {prefixed_fn}({args_str});");
         let _ = writeln!(out, "    assert({result_var} == NULL && \"expected call to fail\");");
         let _ = writeln!(out, "}}");
         return;
     }
 
-    let _ = writeln!(out, "    const char* {result_var} = {prefixed_fn}({args_str});");
+    // The FFI returns an opaque handle; extract the content string from it.
+    let _ = writeln!(out, "    HTMConversionResult* {result_var} = {prefixed_fn}({args_str});");
     let _ = writeln!(out, "    assert({result_var} != NULL && \"expected call to succeed\");");
 
+    // Collect fields accessed by assertions so we can emit accessor calls.
+    // C FFI uses the opaque handle pattern: {prefix}_conversion_result_{field}(handle).
+    let mut accessed_fields: Vec<(String, String)> = Vec::new();
     for assertion in &fixture.assertions {
-        render_assertion(out, assertion, result_var, field_resolver);
+        if let Some(f) = &assertion.field {
+            if !f.is_empty() && !accessed_fields.iter().any(|(k, _)| k == f) {
+                let resolved = field_resolver.resolve(f);
+                let field_suffix = resolved.replace('.', "_").replace(['[', ']'], "");
+                let accessor_fn = format!("{prefix}_conversion_result_{field_suffix}");
+                let local_var = f.replace(['.', '['], "_").replace(']', "");
+                accessed_fields.push((f.clone(), local_var.clone()));
+                let _ = writeln!(out, "    char* {local_var} = {accessor_fn}({result_var});");
+            }
+        }
     }
 
+    for assertion in &fixture.assertions {
+        render_assertion(out, assertion, result_var, field_resolver, &accessed_fields);
+    }
+
+    // Free extracted strings, then the result handle.
+    for (_, local_var) in &accessed_fields {
+        let _ = writeln!(out, "    {prefix}_free_string({local_var});");
+    }
+    let _ = writeln!(out, "    {prefix}_conversion_result_free({result_var});");
     let _ = writeln!(out, "}}");
 }
 
@@ -304,9 +324,22 @@ fn build_args_string(input: &serde_json::Value, args: &[crate::config::ArgMappin
     parts.join(", ")
 }
 
-fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, field_resolver: &FieldResolver) {
+fn render_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    result_var: &str,
+    _field_resolver: &FieldResolver,
+    accessed_fields: &[(String, String)],
+) {
     let field_expr = match &assertion.field {
-        Some(f) if !f.is_empty() => field_resolver.accessor(f, "c", result_var),
+        Some(f) if !f.is_empty() => {
+            // Use the local variable extracted from the opaque handle.
+            accessed_fields
+                .iter()
+                .find(|(k, _)| k == f)
+                .map(|(_, local)| local.clone())
+                .unwrap_or_else(|| result_var.to_string())
+        }
         _ => result_var.to_string(),
     };
 

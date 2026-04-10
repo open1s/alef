@@ -81,7 +81,7 @@ impl E2eCodegen for GoCodegen {
             let content = render_test_file(
                 &group.category,
                 &active,
-                &go_module_path,
+                &module_path,
                 &import_alias,
                 &function_name,
                 result_var,
@@ -213,9 +213,29 @@ fn render_test_function(
     let _ = writeln!(out, "\t\tt.Fatalf(\"call failed: %v\", err)");
     let _ = writeln!(out, "\t}}");
 
+    // Collect optional fields referenced by assertions and emit nil-safe
+    // dereference blocks so that assertions can use plain string locals.
+    let mut optional_locals: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for assertion in &fixture.assertions {
+        if let Some(f) = &assertion.field {
+            if !f.is_empty() {
+                let resolved = field_resolver.resolve(f);
+                if field_resolver.is_optional(resolved) && !optional_locals.contains_key(f.as_str()) {
+                    let field_expr = field_resolver.accessor(f, "go", result_var);
+                    let local_var = resolved.replace(['.', '['], "_").replace(']', "");
+                    let _ = writeln!(out, "\tvar {local_var} string");
+                    let _ = writeln!(out, "\tif {field_expr} != nil {{");
+                    let _ = writeln!(out, "\t\t{local_var} = *{field_expr}");
+                    let _ = writeln!(out, "\t}}");
+                    optional_locals.insert(f.clone(), local_var);
+                }
+            }
+        }
+    }
+
     // Emit assertions.
     for assertion in &fixture.assertions {
-        render_assertion(out, assertion, result_var, field_resolver);
+        render_assertion(out, assertion, result_var, field_resolver, &optional_locals);
     }
 
     let _ = writeln!(out, "}}");
@@ -240,9 +260,22 @@ fn build_args_string(input: &serde_json::Value, args: &[crate::config::ArgMappin
     parts.join(", ")
 }
 
-fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, field_resolver: &FieldResolver) {
+fn render_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    result_var: &str,
+    field_resolver: &FieldResolver,
+    optional_locals: &std::collections::HashMap<String, String>,
+) {
     let field_expr = match &assertion.field {
-        Some(f) if !f.is_empty() => field_resolver.accessor(f, "go", result_var),
+        Some(f) if !f.is_empty() => {
+            // Use the local variable if the field was dereferenced above.
+            if let Some(local_var) = optional_locals.get(f.as_str()) {
+                local_var.clone()
+            } else {
+                field_resolver.accessor(f, "go", result_var)
+            }
+        }
         _ => result_var.to_string(),
     };
 
