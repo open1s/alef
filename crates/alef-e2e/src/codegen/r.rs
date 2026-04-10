@@ -46,6 +46,10 @@ impl E2eCodegen for RCodegen {
             .and_then(|p| p.name.as_ref())
             .cloned()
             .unwrap_or_else(|| module_path.clone());
+        let pkg_path = r_pkg
+            .and_then(|p| p.path.as_ref())
+            .cloned()
+            .unwrap_or_else(|| "../../packages/r".to_string());
 
         // Generate DESCRIPTION file.
         files.push(GeneratedFile {
@@ -57,7 +61,7 @@ impl E2eCodegen for RCodegen {
         // Generate test runner script.
         files.push(GeneratedFile {
             path: output_base.join("run_tests.R"),
-            content: render_test_runner(&pkg_name),
+            content: render_test_runner(&pkg_path),
             generated_header: true,
         });
 
@@ -110,10 +114,12 @@ Config/testthat/edition: 3
     )
 }
 
-fn render_test_runner(pkg_name: &str) -> String {
+fn render_test_runner(pkg_path: &str) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "library(testthat)");
-    let _ = writeln!(out, "library({pkg_name})");
+    // Use devtools::load_all() to load the local R package without requiring
+    // a full install, matching the e2e test runner convention.
+    let _ = writeln!(out, "devtools::load_all(\"{pkg_path}\")");
     let _ = writeln!(out);
     let _ = writeln!(out, "test_dir(\"tests\")");
     out

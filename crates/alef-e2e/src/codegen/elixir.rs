@@ -40,7 +40,7 @@ impl E2eCodegen for ElixirCodegen {
         // (e.g., "html_to_markdown" -> "HtmlToMarkdown").
         // If the override already contains "." (e.g., "Elixir.HtmlToMarkdown"), use as-is.
         let module_path = if raw_module.contains('.') || raw_module.chars().next().is_some_and(|c| c.is_uppercase()) {
-            raw_module
+            raw_module.clone()
         } else {
             elixir_module_name(&raw_module)
         };
@@ -60,15 +60,24 @@ impl E2eCodegen for ElixirCodegen {
             .and_then(|p| p.path.as_ref())
             .cloned()
             .unwrap_or_else(|| "../../packages/elixir".to_string());
-        let pkg_name = elixir_pkg
+        // The dep atom must be a valid snake_case Elixir atom (e.g., :html_to_markdown),
+        // derived from the call module name, not the PascalCase module path.
+        let dep_atom = elixir_pkg
             .and_then(|p| p.name.as_ref())
             .cloned()
-            .unwrap_or_else(|| module_path.clone());
+            .unwrap_or_else(|| raw_module.clone());
 
         // Generate mix.exs.
         files.push(GeneratedFile {
             path: output_base.join("mix.exs"),
-            content: render_mix_exs(&pkg_name, &pkg_path),
+            content: render_mix_exs(&dep_atom, &pkg_path),
+            generated_header: false,
+        });
+
+        // Generate lib/e2e_elixir.ex — required so the mix project compiles.
+        files.push(GeneratedFile {
+            path: output_base.join("lib").join("e2e_elixir.ex"),
+            content: "defmodule E2eElixir do\n  @moduledoc false\nend\n".to_string(),
             generated_header: false,
         });
 
@@ -120,7 +129,7 @@ impl E2eCodegen for ElixirCodegen {
     }
 }
 
-fn render_mix_exs(pkg_name: &str, pkg_path: &str) -> String {
+fn render_mix_exs(dep_atom: &str, pkg_path: &str) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "defmodule E2eElixir.MixProject do");
     let _ = writeln!(out, "  use Mix.Project");
@@ -136,7 +145,8 @@ fn render_mix_exs(pkg_name: &str, pkg_path: &str) -> String {
     let _ = writeln!(out);
     let _ = writeln!(out, "  defp deps do");
     let _ = writeln!(out, "    [");
-    let dep_line = format!("      {{:\"{pkg_name}\", path: \"{pkg_path}\"}}");
+    // Use a bare atom for the dep name (e.g., :html_to_markdown), not a quoted atom.
+    let dep_line = format!("      {{:{dep_atom}, path: \"{pkg_path}\"}}");
     let _ = writeln!(out, "{dep_line}");
     let _ = writeln!(out, "    ]");
     let _ = writeln!(out, "  end");

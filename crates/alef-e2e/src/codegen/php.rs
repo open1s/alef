@@ -57,7 +57,7 @@ impl E2eCodegen for PhpCodegen {
         let pkg_name = php_pkg
             .and_then(|p| p.name.as_ref())
             .cloned()
-            .unwrap_or_else(|| format!("kreuzberg/{}", alef_config.crate_config.name));
+            .unwrap_or_else(|| format!("kreuzberg/{}", call.module.replace('_', "-")));
         let pkg_path = php_pkg
             .and_then(|p| p.path.as_ref())
             .cloned()

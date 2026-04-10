@@ -128,6 +128,8 @@ fn render_package_json(pkg_name: &str, pkg_path: &str) -> String {
   }},
   "devDependencies": {{
     "{pkg_name}": "file:{pkg_path}",
+    "vite-plugin-top-level-await": "^1.4.0",
+    "vite-plugin-wasm": "^3.4.0",
     "vitest": "^3.0.0"
   }}
 }}
@@ -137,8 +139,11 @@ fn render_package_json(pkg_name: &str, pkg_path: &str) -> String {
 
 fn render_vitest_config() -> String {
     r#"import { defineConfig } from 'vitest/config';
+import wasm from 'vite-plugin-wasm';
+import topLevelAwait from 'vite-plugin-top-level-await';
 
 export default defineConfig({
+  plugins: [wasm(), topLevelAwait()],
   test: {
     include: ['tests/**/*.test.ts'],
   },
