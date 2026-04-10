@@ -44,7 +44,7 @@ impl super::E2eCodegen for PythonE2eCodegen {
 
         // Per-category test files.
         for group in groups {
-            let fixtures: Vec<&Fixture> = group.fixtures.iter().filter(|f| !is_skipped(f, "python")).collect();
+            let fixtures: Vec<&Fixture> = group.fixtures.iter().collect();
 
             if fixtures.is_empty() {
                 continue;
@@ -153,8 +153,9 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
     let has_error_test = fixtures
         .iter()
         .any(|f| f.assertions.iter().any(|a| a.assertion_type == "error"));
+    let has_skipped = fixtures.iter().any(|f| is_skipped(f, "python"));
 
-    if has_error_test {
+    if has_error_test || has_skipped {
         let _ = writeln!(out, "import pytest");
     }
 
@@ -259,6 +260,16 @@ fn render_test_function(
     } else {
         format!("{description}.")
     };
+
+    // Emit pytest.mark.skip for fixtures that should be skipped for python.
+    if is_skipped(fixture, "python") {
+        let reason = fixture
+            .skip
+            .as_ref()
+            .and_then(|s| s.reason.as_deref())
+            .unwrap_or("skipped for python");
+        let _ = writeln!(out, "@pytest.mark.skip(reason=\"{reason}\")");
+    }
 
     let _ = writeln!(out, "def test_{fn_name}() -> None:");
     let _ = writeln!(out, "    \"\"\"{desc_with_period}\"\"\"");
@@ -416,6 +427,14 @@ fn json_to_python_literal(value: &serde_json::Value) -> String {
 // ---------------------------------------------------------------------------
 
 fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, field_resolver: &FieldResolver) {
+    // Emit TODO for nested field paths without an explicit alias mapping.
+    if let Some(f) = &assertion.field {
+        if f.contains('.') && !field_resolver.has_alias(f) {
+            let _ = writeln!(out, "    # TODO: unsupported nested field path: {f}");
+            return;
+        }
+    }
+
     let field_access = match &assertion.field {
         Some(f) if !f.is_empty() => field_resolver.accessor(f, "python", result_var),
         _ => result_var.to_string(),

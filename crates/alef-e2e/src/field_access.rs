@@ -46,6 +46,11 @@ impl FieldResolver {
         self.optional_fields.contains(field)
     }
 
+    /// Check if a fixture field has an explicit alias mapping.
+    pub fn has_alias(&self, fixture_field: &str) -> bool {
+        self.aliases.contains_key(fixture_field)
+    }
+
     /// Generate a language-specific accessor expression.
     /// `result_var` is the variable holding the function return value.
     pub fn accessor(&self, fixture_field: &str, language: &str, result_var: &str) -> String {
@@ -64,7 +69,14 @@ impl FieldResolver {
         let segments = parse_path(resolved);
         let local_var = resolved.replace(['.', '['], "_").replace(']', "");
         let accessor = render_accessor(&segments, "rust", result_var);
-        let binding = format!("let {local_var} = {accessor}.as_deref().unwrap_or(\"\");");
+        // Map access (.get("key").map(|s| s.as_str())) already returns Option<&str>,
+        // so skip .as_deref() to avoid borrowing from a temporary.
+        let has_map_access = segments.iter().any(|s| matches!(s, PathSegment::MapAccess { .. }));
+        let binding = if has_map_access {
+            format!("let {local_var} = {accessor}.unwrap_or(\"\");")
+        } else {
+            format!("let {local_var} = {accessor}.as_deref().unwrap_or(\"\");")
+        };
         Some((binding, local_var))
     }
 }
