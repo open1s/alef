@@ -10,6 +10,8 @@ use crate::fixture::{Assertion, Fixture, FixtureGroup};
 use alef_core::backend::GeneratedFile;
 use alef_core::config::AlefConfig;
 use anyhow::Result;
+use heck::{ToPascalCase, ToSnakeCase};
+use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::path::PathBuf;
 
@@ -111,6 +113,7 @@ impl E2eCodegen for CCodegen {
                 result_var,
                 &e2e_config.call.args,
                 &field_resolver,
+                &e2e_config.fields_c_types,
             );
             files.push(GeneratedFile {
                 path: output_base.join(filename),
@@ -214,6 +217,7 @@ fn render_test_file(
     result_var: &str,
     args: &[crate::config::ArgMapping],
     field_resolver: &FieldResolver,
+    fields_c_types: &HashMap<String, String>,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "/* E2e tests for category: {category} */");
@@ -253,6 +257,7 @@ fn render_test_file(
             result_var,
             args,
             field_resolver,
+            fields_c_types,
         );
         if i + 1 < fixtures.len() {
             let _ = writeln!(out);
@@ -270,6 +275,7 @@ fn render_test_function(
     result_var: &str,
     args: &[crate::config::ArgMapping],
     field_resolver: &FieldResolver,
+    fields_c_types: &HashMap<String, String>,
 ) {
     let fn_name = sanitize_ident(&fixture.id);
     let description = &fixture.description;
@@ -304,23 +310,29 @@ fn render_test_function(
 
     // Collect fields accessed by assertions so we can emit accessor calls.
     // C FFI uses the opaque handle pattern: {prefix}_conversion_result_{field}(handle).
-    // For nested paths (document.nodes, metadata.document.title) we emit TODO
-    // comments because the FFI accessor chain is complex and not yet generated.
+    // For nested paths we generate chained FFI accessor calls using the type
+    // chain from `fields_c_types`.
     let mut accessed_fields: Vec<(String, String)> = Vec::new();
+    // Track intermediate handles emitted so we can free them and avoid duplicates.
+    // Each entry: (handle_var_name, snake_type_name) — freed in reverse order.
+    let mut intermediate_handles: Vec<(String, String)> = Vec::new();
+
     for assertion in &fixture.assertions {
         if let Some(f) = &assertion.field {
             if !f.is_empty() && !accessed_fields.iter().any(|(k, _)| k == f) {
                 let resolved = field_resolver.resolve(f);
                 let local_var = f.replace(['.', '['], "_").replace(']', "");
 
-                // Check if the resolved path is nested (contains dots).
                 if resolved.contains('.') {
-                    let _ = writeln!(
+                    emit_nested_accessor(
                         out,
-                        "    /* TODO: nested field access for \"{resolved}\" — \
-                         FFI accessor chain not yet generated */"
+                        prefix,
+                        resolved,
+                        &local_var,
+                        result_var,
+                        fields_c_types,
+                        &mut intermediate_handles,
                     );
-                    let _ = writeln!(out, "    char* {local_var} = NULL; /* placeholder */");
                 } else {
                     let accessor_fn = format!("{prefix}_conversion_result_{resolved}");
                     let _ = writeln!(out, "    char* {local_var} = {accessor_fn}({result_var});");
@@ -334,21 +346,84 @@ fn render_test_function(
         render_assertion(out, assertion, result_var, field_resolver, &accessed_fields);
     }
 
-    // Free extracted strings, then the result handle.
-    // Skip freeing NULL placeholders from unresolved nested paths.
-    for (f, local_var) in &accessed_fields {
-        let resolved = field_resolver.resolve(f);
-        if resolved.contains('.') {
-            let _ = writeln!(
-                out,
-                "    /* TODO: free nested accessor for \"{resolved}\" when implemented */"
-            );
-        } else {
-            let _ = writeln!(out, "    {prefix}_free_string({local_var});");
-        }
+    // Free extracted leaf strings.
+    for (_f, local_var) in &accessed_fields {
+        let _ = writeln!(out, "    {prefix}_free_string({local_var});");
+    }
+    // Free intermediate handles in reverse order.
+    for (handle_var, snake_type) in intermediate_handles.iter().rev() {
+        let _ = writeln!(out, "    {prefix}_{snake_type}_free({handle_var});");
     }
     let _ = writeln!(out, "    {prefix}_conversion_result_free({result_var});");
     let _ = writeln!(out, "}}");
+}
+
+/// Emit chained FFI accessor calls for a nested resolved field path.
+///
+/// For a path like `metadata.document.title`, this generates:
+/// ```c
+/// HTMHtmlMetadata* metadata_handle = htm_conversion_result_metadata(result);
+/// assert(metadata_handle != NULL);
+/// HTMDocumentMetadata* doc_handle = htm_html_metadata_document(metadata_handle);
+/// assert(doc_handle != NULL);
+/// char* metadata_title = htm_document_metadata_title(doc_handle);
+/// ```
+///
+/// The type chain is looked up from `fields_c_types` which maps
+/// `"{parent_snake_type}.{field}"` -> `"PascalCaseType"`.
+fn emit_nested_accessor(
+    out: &mut String,
+    prefix: &str,
+    resolved: &str,
+    local_var: &str,
+    result_var: &str,
+    fields_c_types: &HashMap<String, String>,
+    intermediate_handles: &mut Vec<(String, String)>,
+) {
+    let segments: Vec<&str> = resolved.split('.').collect();
+    let prefix_upper = prefix.to_uppercase();
+
+    // Walk the path, starting from the root type `conversion_result`.
+    let mut current_snake_type = "conversion_result".to_string();
+    let mut current_handle = result_var.to_string();
+
+    for (i, segment) in segments.iter().enumerate() {
+        let is_leaf = i + 1 == segments.len();
+        let seg_snake = segment.to_snake_case();
+        let accessor_fn = format!("{prefix}_{current_snake_type}_{seg_snake}");
+
+        if is_leaf {
+            // Leaf field returns char* — assign to the local variable.
+            let _ = writeln!(out, "    char* {local_var} = {accessor_fn}({current_handle});");
+        } else {
+            // Intermediate field returns an opaque handle.
+            let lookup_key = format!("{current_snake_type}.{seg_snake}");
+            let return_type_pascal = match fields_c_types.get(&lookup_key) {
+                Some(t) => t.clone(),
+                None => {
+                    // Fallback: derive PascalCase from the segment name itself.
+                    segment.to_pascal_case()
+                }
+            };
+            let return_snake = return_type_pascal.to_snake_case();
+            let handle_var = format!("{seg_snake}_handle");
+
+            // Only emit the handle if we haven't already (multiple fields may
+            // share the same intermediate path prefix).
+            if !intermediate_handles.iter().any(|(h, _)| h == &handle_var) {
+                let _ = writeln!(
+                    out,
+                    "    {prefix_upper}{return_type_pascal}* {handle_var} = \
+                     {accessor_fn}({current_handle});"
+                );
+                let _ = writeln!(out, "    assert({handle_var} != NULL);");
+                intermediate_handles.push((handle_var.clone(), return_snake.clone()));
+            }
+
+            current_snake_type = return_snake;
+            current_handle = handle_var;
+        }
+    }
 }
 
 fn build_args_string(input: &serde_json::Value, args: &[crate::config::ArgMapping]) -> String {

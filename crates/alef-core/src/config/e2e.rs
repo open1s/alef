@@ -32,6 +32,20 @@ pub struct E2eConfig {
     /// Rust generators use .as_deref().unwrap_or("") for strings, .is_some() for structs.
     #[serde(default)]
     pub fields_optional: HashSet<String>,
+    /// C FFI accessor type chain: maps `"{parent_snake_type}.{field}"` to the
+    /// PascalCase return type name (without prefix).
+    ///
+    /// Used by the C e2e generator to emit chained FFI accessor calls for
+    /// nested field paths. The root type is always `conversion_result`.
+    ///
+    /// Example:
+    /// ```toml
+    /// [e2e.fields_c_types]
+    /// "conversion_result.metadata" = "HtmlMetadata"
+    /// "html_metadata.document" = "DocumentMetadata"
+    /// ```
+    #[serde(default)]
+    pub fields_c_types: HashMap<String, String>,
 }
 
 fn default_fixtures_dir() -> String {
