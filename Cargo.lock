@@ -83,6 +83,7 @@ dependencies = [
 name = "alef-backend-java"
 version = "0.2.0"
 dependencies = [
+ "ahash",
  "alef-adapters",
  "alef-codegen",
  "alef-core",

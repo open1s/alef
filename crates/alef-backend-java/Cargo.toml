@@ -8,6 +8,7 @@ description = "Java (Panama FFM) backend for alef"
 repository.workspace = true
 
 [dependencies]
+ahash = { workspace = true }
 alef-adapters = { workspace = true }
 alef-codegen = { version = "0.2.0", path = "../alef-codegen" }
 alef-core = { workspace = true }

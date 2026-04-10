@@ -530,18 +530,13 @@ fn gen_sync_function_method(out: &mut String, func: &FunctionDef, prefix: &str, 
         .ok();
         writeln!(out, "        }}").ok();
     } else if matches!(func.return_type, TypeRef::Named(_)) {
-        // Named return types: FFI returns a struct pointer, use accessor functions.
+        // Named return types: FFI returns a struct pointer.
         let return_type_name = match &func.return_type {
             TypeRef::Named(name) => name,
             _ => unreachable!(),
         };
-        let type_snake = return_type_name.to_snake_case();
-        let free_handle = format!("NativeLib.{}_{}_FREE", prefix.to_uppercase(), type_snake.to_uppercase());
-        let content_handle = format!(
-            "NativeLib.{}_{}_CONTENT",
-            prefix.to_uppercase(),
-            type_snake.to_uppercase()
-        );
+        let is_opaque = opaque_types.contains(return_type_name.as_str());
+
         writeln!(
             out,
             "            var resultPtr = (MemorySegment) {}.invoke({});",
@@ -552,31 +547,44 @@ fn gen_sync_function_method(out: &mut String, func: &FunctionDef, prefix: &str, 
         writeln!(out, "            if (resultPtr.equals(MemorySegment.NULL)) {{").ok();
         writeln!(out, "                return null;").ok();
         writeln!(out, "            }}").ok();
-        // Use accessor to get content, then free the struct
-        writeln!(
-            out,
-            "            var contentPtr = (MemorySegment) {}.invoke(resultPtr);",
-            content_handle
-        )
-        .ok();
-        writeln!(
-            out,
-            "            String content = contentPtr.equals(MemorySegment.NULL) ? null :"
-        )
-        .ok();
-        writeln!(
-            out,
-            "                contentPtr.reinterpret(Long.MAX_VALUE).getString(0);"
-        )
-        .ok();
-        writeln!(out, "            {}.invoke(resultPtr);", free_handle).ok();
-        // Construct result — content from accessor, other fields defaulted for now
-        writeln!(out, "            return new {}(", return_type_name).ok();
-        writeln!(out, "                java.util.Optional.ofNullable(content),").ok();
-        writeln!(out, "                java.util.Optional.empty(),").ok();
-        writeln!(out, "                java.util.List.of(),").ok();
-        writeln!(out, "                java.util.List.of()").ok();
-        writeln!(out, "            );").ok();
+
+        if is_opaque {
+            // Opaque handles: wrap the raw pointer directly, caller owns and will close()
+            writeln!(out, "            return new {}(resultPtr);", return_type_name).ok();
+        } else {
+            // Record types: use content accessor to get JSON, then deserialize
+            let type_snake = return_type_name.to_snake_case();
+            let free_handle = format!("NativeLib.{}_{}_FREE", prefix.to_uppercase(), type_snake.to_uppercase());
+            let content_handle = format!(
+                "NativeLib.{}_{}_CONTENT",
+                prefix.to_uppercase(),
+                type_snake.to_uppercase()
+            );
+            writeln!(
+                out,
+                "            var contentPtr = (MemorySegment) {}.invoke(resultPtr);",
+                content_handle
+            )
+            .ok();
+            writeln!(
+                out,
+                "            String content = contentPtr.equals(MemorySegment.NULL) ? null :"
+            )
+            .ok();
+            writeln!(
+                out,
+                "                contentPtr.reinterpret(Long.MAX_VALUE).getString(0);"
+            )
+            .ok();
+            writeln!(out, "            {}.invoke(resultPtr);", free_handle).ok();
+            writeln!(
+                out,
+                "            return new ObjectMapper().readValue(content, {}.class);",
+                return_type_name
+            )
+            .ok();
+        }
+
         writeln!(out, "        }} catch (Throwable e) {{").ok();
         writeln!(
             out,
@@ -1021,17 +1029,21 @@ fn gen_ffi_layout(ty: &TypeRef) -> String {
     }
 }
 
-fn marshal_param_to_ffi(out: &mut String, name: &str, ty: &TypeRef) {
+fn marshal_param_to_ffi(out: &mut String, name: &str, ty: &TypeRef, opaque_types: &AHashSet<String>) {
     match ty {
         TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => {
             let cname = "c".to_string() + name;
             writeln!(out, "            var {} = arena.allocateFrom({});", cname, name).ok();
         }
-        TypeRef::Named(_) => {
-            // Named types are struct pointers in FFI.
-            // For now, pass NULL to use defaults. Full support requires JSON serialization.
+        TypeRef::Named(type_name) => {
             let cname = "c".to_string() + name;
-            writeln!(out, "            var {} = MemorySegment.NULL;", cname).ok();
+            if opaque_types.contains(type_name.as_str()) {
+                // Opaque handles: pass the inner MemorySegment via .handle()
+                writeln!(out, "            var {} = {}.handle();", cname, name).ok();
+            } else {
+                // Non-opaque named types: serialize to JSON and pass as string
+                writeln!(out, "            var {} = MemorySegment.NULL;", cname).ok();
+            }
         }
         TypeRef::Optional(inner) => {
             // For optional types, marshal the inner type if not null
@@ -1045,10 +1057,18 @@ fn marshal_param_to_ffi(out: &mut String, name: &str, ty: &TypeRef) {
                     )
                     .ok();
                 }
-                TypeRef::Named(_) => {
-                    // Optional named types also pass NULL for now
+                TypeRef::Named(type_name) => {
                     let cname = "c".to_string() + name;
-                    writeln!(out, "            var {} = MemorySegment.NULL;", cname).ok();
+                    if opaque_types.contains(type_name.as_str()) {
+                        writeln!(
+                            out,
+                            "            var {} = {} != null ? {}.handle() : MemorySegment.NULL;",
+                            cname, name, name
+                        )
+                        .ok();
+                    } else {
+                        writeln!(out, "            var {} = MemorySegment.NULL;", cname).ok();
+                    }
                 }
                 _ => {
                     // Other optional types (primitives) pass through
@@ -1061,7 +1081,7 @@ fn marshal_param_to_ffi(out: &mut String, name: &str, ty: &TypeRef) {
     }
 }
 
-fn ffi_param_name(name: &str, ty: &TypeRef) -> String {
+fn ffi_param_name(name: &str, ty: &TypeRef, _opaque_types: &AHashSet<String>) -> String {
     match ty {
         TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => "c".to_string() + name,
         TypeRef::Named(_) => "c".to_string() + name,
