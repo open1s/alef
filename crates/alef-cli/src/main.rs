@@ -415,8 +415,7 @@ fn main() -> Result<()> {
                     category,
                     description,
                 } => {
-                    let path =
-                        alef_e2e::scaffold::scaffold_fixture(e2e_config, &config, &id, &category, &description)?;
+                    let path = alef_e2e::scaffold::scaffold_fixture(e2e_config, &config, &id, &category, &description)?;
                     println!("Created {path}");
                     Ok(())
                 }

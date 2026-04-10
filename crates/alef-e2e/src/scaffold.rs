@@ -37,8 +37,7 @@ pub fn init_fixtures(e2e_config: &E2eConfig, _alef_config: &AlefConfig) -> Resul
     // 4. Write smoke/basic.json example fixture
     let basic_path = smoke_dir.join("basic.json");
     let basic_fixture = build_example_fixture(e2e_config);
-    std::fs::write(&basic_path, basic_fixture)
-        .with_context(|| format!("failed to write {}", basic_path.display()))?;
+    std::fs::write(&basic_path, basic_fixture).with_context(|| format!("failed to write {}", basic_path.display()))?;
     created.push(basic_path.display().to_string());
 
     Ok(created)
@@ -65,8 +64,7 @@ pub fn scaffold_fixture(
     // 2. Write fixture file
     let fixture_path = category_dir.join(format!("{id}.json"));
     let fixture = build_scaffold_fixture(e2e_config, id, description);
-    std::fs::write(&fixture_path, fixture)
-        .with_context(|| format!("failed to write {}", fixture_path.display()))?;
+    std::fs::write(&fixture_path, fixture).with_context(|| format!("failed to write {}", fixture_path.display()))?;
 
     Ok(fixture_path.display().to_string())
 }
