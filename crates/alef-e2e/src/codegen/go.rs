@@ -278,7 +278,7 @@ fn build_args_string(
                     let with_calls: Vec<String> = obj
                         .iter()
                         .map(|(k, v)| {
-                            let func_name = format!("With{}", k.to_upper_camel_case());
+                            let func_name = format!("With{}{}", options_type.unwrap(), k.to_upper_camel_case());
                             let go_val = json_to_go(v);
                             format!("htmd.{func_name}({go_val})")
                         })
