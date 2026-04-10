@@ -197,10 +197,14 @@ fn render_test_function(
 
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
 
-    let args_str = build_args_string(&fixture.input, args, e2e_config);
+    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, import_alias, e2e_config);
 
     let _ = writeln!(out, "func Test_{fn_name}(t *testing.T) {{");
     let _ = writeln!(out, "\t// {description}");
+
+    for line in &setup_lines {
+        let _ = writeln!(out, "\t{line}");
+    }
 
     if expects_error {
         let _ = writeln!(out, "\t_, err := {import_alias}.{function_name}({args_str})");
@@ -274,47 +278,77 @@ fn render_test_function(
     let _ = writeln!(out, "}}");
 }
 
-fn build_args_string(
+/// Build setup lines (e.g. handle creation) and the argument list for the function call.
+///
+/// Returns `(setup_lines, args_string)`.
+fn build_args_and_setup(
     input: &serde_json::Value,
     args: &[crate::config::ArgMapping],
+    import_alias: &str,
     e2e_config: &crate::config::E2eConfig,
-) -> String {
+) -> (Vec<String>, String) {
     use heck::ToUpperCamelCase;
 
     if args.is_empty() {
-        return json_to_go(input);
+        return (Vec::new(), json_to_go(input));
     }
 
     let overrides = e2e_config.call.overrides.get("go");
     let options_type = overrides.and_then(|o| o.options_type.as_deref());
 
-    let parts: Vec<String> = args
-        .iter()
-        .filter_map(|arg| {
-            let val = input.get(&arg.field)?;
-            if val.is_null() && arg.optional {
-                return None;
-            }
-            // For json_object args with options_type: construct using functional options
-            if arg.arg_type == "json_object" && options_type.is_some() {
-                if let Some(obj) = val.as_object() {
-                    let with_calls: Vec<String> = obj
-                        .iter()
-                        .map(|(k, v)| {
-                            let func_name = format!("With{}{}", options_type.unwrap(), k.to_upper_camel_case());
-                            let go_val = json_to_go(v);
-                            format!("htmd.{func_name}({go_val})")
-                        })
-                        .collect();
-                    let new_fn = format!("New{}", options_type.unwrap());
-                    return Some(format!("htmd.{new_fn}({})", with_calls.join(", ")));
-                }
-            }
-            Some(json_to_go(val))
-        })
-        .collect();
+    let mut setup_lines: Vec<String> = Vec::new();
+    let mut parts: Vec<String> = Vec::new();
 
-    parts.join(", ")
+    for arg in args {
+        if arg.arg_type == "handle" {
+            // Generate a CreateEngine (or equivalent) call and pass the variable.
+            let constructor_name = format!("Create{}", arg.name.to_upper_camel_case());
+            setup_lines.push(format!("{}, _ := {import_alias}.{constructor_name}(nil)", arg.name));
+            parts.push(arg.name.clone());
+            continue;
+        }
+
+        let val = input.get(&arg.field);
+        match val {
+            None | Some(serde_json::Value::Null) if arg.optional => {
+                // Optional arg with no fixture value: skip entirely.
+                continue;
+            }
+            None | Some(serde_json::Value::Null) => {
+                // Required arg with no fixture value: pass a language-appropriate default.
+                let default_val = match arg.arg_type.as_str() {
+                    "string" => "\"\"".to_string(),
+                    "int" | "integer" => "0".to_string(),
+                    "float" | "number" => "0.0".to_string(),
+                    "bool" | "boolean" => "false".to_string(),
+                    _ => "nil".to_string(),
+                };
+                parts.push(default_val);
+            }
+            Some(v) => {
+                // For json_object args with options_type: construct using functional options.
+                if arg.arg_type == "json_object" && options_type.is_some() {
+                    if let Some(obj) = v.as_object() {
+                        let with_calls: Vec<String> = obj
+                            .iter()
+                            .map(|(k, vv)| {
+                                let func_name =
+                                    format!("With{}{}", options_type.unwrap(), k.to_upper_camel_case());
+                                let go_val = json_to_go(vv);
+                                format!("htmd.{func_name}({go_val})")
+                            })
+                            .collect();
+                        let new_fn = format!("New{}", options_type.unwrap());
+                        parts.push(format!("htmd.{new_fn}({})", with_calls.join(", ")));
+                        continue;
+                    }
+                }
+                parts.push(json_to_go(v));
+            }
+        }
+    }
+
+    (setup_lines, parts.join(", "))
 }
 
 fn render_assertion(

@@ -201,11 +201,16 @@ fn render_example(
     let description = fixture.description.replace('"', "\\\"");
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
 
-    let args_str = build_args_string(&fixture.input, args, options_type, enum_fields, result_is_simple);
+    let (setup_lines, args_str) =
+        build_args_and_setup(&fixture.input, args, call_receiver, options_type, enum_fields, result_is_simple);
 
     let call_expr = format!("{call_receiver}.{function_name}({args_str})");
 
     let _ = writeln!(out, "  it \"{test_name}: {description}\" do");
+
+    for line in &setup_lines {
+        let _ = writeln!(out, "    {line}");
+    }
 
     if expects_error {
         let _ = writeln!(out, "    expect {{ {call_expr} }}.to raise_error");
@@ -222,58 +227,86 @@ fn render_example(
     let _ = writeln!(out, "  end");
 }
 
-fn build_args_string(
+/// Build setup lines (e.g. handle creation) and the argument list for the function call.
+///
+/// Returns `(setup_lines, args_string)`.
+fn build_args_and_setup(
     input: &serde_json::Value,
     args: &[crate::config::ArgMapping],
+    call_receiver: &str,
     options_type: Option<&str>,
     enum_fields: &HashMap<String, String>,
     result_is_simple: bool,
-) -> String {
+) -> (Vec<String>, String) {
     if args.is_empty() {
-        return json_to_ruby(input);
+        return (Vec::new(), json_to_ruby(input));
     }
 
-    let parts: Vec<String> = args
-        .iter()
-        .filter_map(|arg| {
-            let val = input.get(&arg.field)?;
-            if val.is_null() && arg.optional {
-                return None;
-            }
-            // For json_object args with options_type, construct a typed options object.
-            // When result_is_simple, the binding accepts a plain Hash (no wrapper class).
-            if arg.arg_type == "json_object" && !val.is_null() {
-                if let (Some(opts_type), Some(obj)) = (options_type, val.as_object()) {
-                    let kwargs: Vec<String> = obj
-                        .iter()
-                        .map(|(k, v)| {
-                            let snake_key = k.to_snake_case();
-                            let rb_val = if enum_fields.contains_key(k) {
-                                // Enum fields: convert to snake_case for Ruby bindings.
-                                if let Some(s) = v.as_str() {
-                                    let snake_val = s.to_snake_case();
-                                    format!("\"{snake_val}\"")
-                                } else {
-                                    json_to_ruby(v)
-                                }
-                            } else {
-                                json_to_ruby(v)
-                            };
-                            format!("{snake_key}: {rb_val}")
-                        })
-                        .collect();
-                    if result_is_simple {
-                        // Pass as keyword-style Hash (binding accepts plain Hash).
-                        return Some(format!("{{{}}}", kwargs.join(", ")));
-                    }
-                    return Some(format!("{opts_type}.new({})", kwargs.join(", ")));
-                }
-            }
-            Some(json_to_ruby(val))
-        })
-        .collect();
+    let mut setup_lines: Vec<String> = Vec::new();
+    let mut parts: Vec<String> = Vec::new();
 
-    parts.join(", ")
+    for arg in args {
+        if arg.arg_type == "handle" {
+            // Generate a create_engine (or equivalent) call and pass the variable.
+            let constructor_name = format!("create_{}", arg.name.to_snake_case());
+            setup_lines.push(format!("{} = {call_receiver}.{constructor_name}(nil)", arg.name));
+            parts.push(arg.name.clone());
+            continue;
+        }
+
+        let val = input.get(&arg.field);
+        match val {
+            None | Some(serde_json::Value::Null) if arg.optional => {
+                // Optional arg with no fixture value: skip entirely.
+                continue;
+            }
+            None | Some(serde_json::Value::Null) => {
+                // Required arg with no fixture value: pass a language-appropriate default.
+                let default_val = match arg.arg_type.as_str() {
+                    "string" => "\"\"".to_string(),
+                    "int" | "integer" => "0".to_string(),
+                    "float" | "number" => "0.0".to_string(),
+                    "bool" | "boolean" => "false".to_string(),
+                    _ => "nil".to_string(),
+                };
+                parts.push(default_val);
+            }
+            Some(v) => {
+                // For json_object args with options_type, construct a typed options object.
+                // When result_is_simple, the binding accepts a plain Hash (no wrapper class).
+                if arg.arg_type == "json_object" && !v.is_null() {
+                    if let (Some(opts_type), Some(obj)) = (options_type, v.as_object()) {
+                        let kwargs: Vec<String> = obj
+                            .iter()
+                            .map(|(k, vv)| {
+                                let snake_key = k.to_snake_case();
+                                let rb_val = if enum_fields.contains_key(k) {
+                                    if let Some(s) = vv.as_str() {
+                                        let snake_val = s.to_snake_case();
+                                        format!("\"{snake_val}\"")
+                                    } else {
+                                        json_to_ruby(vv)
+                                    }
+                                } else {
+                                    json_to_ruby(vv)
+                                };
+                                format!("{snake_key}: {rb_val}")
+                            })
+                            .collect();
+                        if result_is_simple {
+                            parts.push(format!("{{{}}}", kwargs.join(", ")));
+                        } else {
+                            parts.push(format!("{opts_type}.new({})", kwargs.join(", ")));
+                        }
+                        continue;
+                    }
+                }
+                parts.push(json_to_ruby(v));
+            }
+        }
+    }
+
+    (setup_lines, parts.join(", "))
 }
 
 fn render_assertion(

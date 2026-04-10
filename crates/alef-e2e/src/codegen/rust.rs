@@ -148,6 +148,16 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
     let field_resolver = FieldResolver::new(&e2e_config.fields, &e2e_config.fields_optional);
 
     let _ = writeln!(out, "use {module}::{function_name};");
+
+    // Import handle constructor functions.
+    for arg in &e2e_config.call.args {
+        if arg.arg_type == "handle" {
+            use heck::ToSnakeCase;
+            let constructor_name = format!("create_{}", arg.name.to_snake_case());
+            let _ = writeln!(out, "use {module}::{constructor_name};");
+        }
+    }
+
     let _ = writeln!(out);
 
     for fixture in fixtures {
@@ -285,8 +295,31 @@ fn render_rust_arg(
     optional: bool,
     module: &str,
 ) -> (Vec<String>, String) {
+    if arg_type == "handle" {
+        // Generate a create_engine (or equivalent) call and pass the variable.
+        use heck::ToSnakeCase;
+        let constructor_name = format!("create_{}", name.to_snake_case());
+        let lines = vec![format!(
+            "let {name} = {module}::{constructor_name}(None).expect(\"handle creation should succeed\");"
+        )];
+        return (lines, format!("&{name}"));
+    }
     if arg_type == "json_object" {
         return render_json_object_arg(name, value, optional, module);
+    }
+    if value.is_null() && !optional {
+        // Required arg with no fixture value: use a language-appropriate default.
+        let default_val = match arg_type {
+            "string" => "String::new()".to_string(),
+            "int" | "integer" => "0".to_string(),
+            "float" | "number" => "0.0_f64".to_string(),
+            "bool" | "boolean" => "false".to_string(),
+            _ => "Default::default()".to_string(),
+        };
+        return (
+            vec![format!("let {name} = {default_val};")],
+            name.to_string(),
+        );
     }
     let literal = json_to_rust_literal(value, arg_type);
     if optional && value.is_null() {

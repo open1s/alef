@@ -213,7 +213,7 @@ fn render_test_case(
 
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
 
-    let args_str = build_args_string(
+    let (setup_lines, args_str) = build_args_and_setup(
         &fixture.input,
         args,
         module_path,
@@ -225,9 +225,14 @@ fn render_test_case(
     // Use the bang variant (convert!) to unwrap {:ok, result} tuples.
     let bang_function = format!("{function_name}!");
 
+    let _ = writeln!(out, "  describe \"{test_name}\" do");
+    let _ = writeln!(out, "    test \"{description}\" do");
+
+    for line in &setup_lines {
+        let _ = writeln!(out, "      {line}");
+    }
+
     if expects_error {
-        let _ = writeln!(out, "  describe \"{test_name}\" do");
-        let _ = writeln!(out, "    test \"{description}\" do");
         let _ = writeln!(out, "      assert_raise RuntimeError, fn ->");
         let _ = writeln!(out, "        {module_path}.{bang_function}({args_str})");
         let _ = writeln!(out, "      end");
@@ -236,8 +241,6 @@ fn render_test_case(
         return;
     }
 
-    let _ = writeln!(out, "  describe \"{test_name}\" do");
-    let _ = writeln!(out, "    test \"{description}\" do");
     let _ = writeln!(out, "      {result_var} = {module_path}.{bang_function}({args_str})");
 
     for assertion in &fixture.assertions {
@@ -248,55 +251,82 @@ fn render_test_case(
     let _ = writeln!(out, "  end");
 }
 
-fn build_args_string(
+/// Build setup lines (e.g. handle creation) and the argument list for the function call.
+///
+/// Returns `(setup_lines, args_string)`.
+fn build_args_and_setup(
     input: &serde_json::Value,
     args: &[crate::config::ArgMapping],
-    _module_path: &str,
+    module_path: &str,
     options_type: Option<&str>,
     _options_default_fn: Option<&str>,
     enum_fields: &HashMap<String, String>,
-) -> String {
+) -> (Vec<String>, String) {
     if args.is_empty() {
-        return json_to_elixir(input);
+        return (Vec::new(), json_to_elixir(input));
     }
 
-    let parts: Vec<String> = args
-        .iter()
-        .filter_map(|arg| {
-            let val = input.get(&arg.field)?;
-            if val.is_null() && arg.optional {
-                return None;
-            }
-            // For json_object args with options_type, pass as a plain map with
-            // string keys. The Elixir Rustler NIF expects string-keyed maps.
-            if arg.arg_type == "json_object" && !val.is_null() {
-                if let (Some(_opts_type), Some(obj)) = (options_type, val.as_object()) {
-                    let fields: Vec<String> = obj
-                        .iter()
-                        .map(|(k, v)| {
-                            let snake_key = k.to_snake_case();
-                            let elixir_val = if let Some(_enum_type) = enum_fields.get(k) {
-                                // Enum fields: pass as snake_case string (NIF expects strings).
-                                if let Some(s) = v.as_str() {
-                                    let snake_val = s.to_snake_case();
-                                    format!("\"{snake_val}\"")
-                                } else {
-                                    json_to_elixir(v)
-                                }
-                            } else {
-                                json_to_elixir(v)
-                            };
-                            format!("\"{snake_key}\" => {elixir_val}")
-                        })
-                        .collect();
-                    return Some(format!("%{{{}}}", fields.join(", ")));
-                }
-            }
-            Some(json_to_elixir(val))
-        })
-        .collect();
+    let mut setup_lines: Vec<String> = Vec::new();
+    let mut parts: Vec<String> = Vec::new();
 
-    parts.join(", ")
+    for arg in args {
+        if arg.arg_type == "handle" {
+            // Generate a create_engine! (or equivalent) call and pass the variable.
+            let constructor_name = format!("create_{}!", arg.name.to_snake_case());
+            setup_lines.push(format!("{} = {module_path}.{constructor_name}(nil)", arg.name));
+            parts.push(arg.name.clone());
+            continue;
+        }
+
+        let val = input.get(&arg.field);
+        match val {
+            None | Some(serde_json::Value::Null) if arg.optional => {
+                // Optional arg with no fixture value: skip entirely.
+                continue;
+            }
+            None | Some(serde_json::Value::Null) => {
+                // Required arg with no fixture value: pass a language-appropriate default.
+                let default_val = match arg.arg_type.as_str() {
+                    "string" => "\"\"".to_string(),
+                    "int" | "integer" => "0".to_string(),
+                    "float" | "number" => "0.0".to_string(),
+                    "bool" | "boolean" => "false".to_string(),
+                    _ => "nil".to_string(),
+                };
+                parts.push(default_val);
+            }
+            Some(v) => {
+                // For json_object args with options_type, pass as a plain map with
+                // string keys. The Elixir Rustler NIF expects string-keyed maps.
+                if arg.arg_type == "json_object" && !v.is_null() {
+                    if let (Some(_opts_type), Some(obj)) = (options_type, v.as_object()) {
+                        let fields: Vec<String> = obj
+                            .iter()
+                            .map(|(k, vv)| {
+                                let snake_key = k.to_snake_case();
+                                let elixir_val = if let Some(_enum_type) = enum_fields.get(k) {
+                                    if let Some(s) = vv.as_str() {
+                                        let snake_val = s.to_snake_case();
+                                        format!("\"{snake_val}\"")
+                                    } else {
+                                        json_to_elixir(vv)
+                                    }
+                                } else {
+                                    json_to_elixir(vv)
+                                };
+                                format!("\"{snake_key}\" => {elixir_val}")
+                            })
+                            .collect();
+                        parts.push(format!("%{{{}}}", fields.join(", ")));
+                        continue;
+                    }
+                }
+                parts.push(json_to_elixir(v));
+            }
+        }
+    }
+
+    (setup_lines, parts.join(", "))
 }
 
 fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, field_resolver: &FieldResolver) {

@@ -245,11 +245,15 @@ fn render_test_method(
     let description = &fixture.description;
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
 
-    let args_str = build_args_string(&fixture.input, args);
+    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, class_name);
 
     let _ = writeln!(out, "    /** {description} */");
     let _ = writeln!(out, "    public function test_{method_name}(): void");
     let _ = writeln!(out, "    {{");
+
+    for line in &setup_lines {
+        let _ = writeln!(out, "        {line}");
+    }
 
     if expects_error {
         let _ = writeln!(out, "        $this->expectException(\\Exception::class);");
@@ -270,23 +274,54 @@ fn render_test_method(
     let _ = writeln!(out, "    }}");
 }
 
-fn build_args_string(input: &serde_json::Value, args: &[crate::config::ArgMapping]) -> String {
+/// Build setup lines (e.g. handle creation) and the argument list for the function call.
+///
+/// Returns `(setup_lines, args_string)`.
+fn build_args_and_setup(
+    input: &serde_json::Value,
+    args: &[crate::config::ArgMapping],
+    class_name: &str,
+) -> (Vec<String>, String) {
     if args.is_empty() {
-        return json_to_php(input);
+        return (Vec::new(), json_to_php(input));
     }
 
-    let parts: Vec<String> = args
-        .iter()
-        .filter_map(|arg| {
-            let val = input.get(&arg.field)?;
-            if val.is_null() && arg.optional {
-                return None;
-            }
-            Some(json_to_php(val))
-        })
-        .collect();
+    let mut setup_lines: Vec<String> = Vec::new();
+    let mut parts: Vec<String> = Vec::new();
 
-    parts.join(", ")
+    for arg in args {
+        if arg.arg_type == "handle" {
+            // Generate a createEngine (or equivalent) call and pass the variable.
+            let constructor_name = format!("create{}", arg.name.to_upper_camel_case());
+            setup_lines.push(format!("${} = {class_name}::{constructor_name}(null);", arg.name));
+            parts.push(format!("${}", arg.name));
+            continue;
+        }
+
+        let val = input.get(&arg.field);
+        match val {
+            None | Some(serde_json::Value::Null) if arg.optional => {
+                // Optional arg with no fixture value: skip entirely.
+                continue;
+            }
+            None | Some(serde_json::Value::Null) => {
+                // Required arg with no fixture value: pass a language-appropriate default.
+                let default_val = match arg.arg_type.as_str() {
+                    "string" => "\"\"".to_string(),
+                    "int" | "integer" => "0".to_string(),
+                    "float" | "number" => "0.0".to_string(),
+                    "bool" | "boolean" => "false".to_string(),
+                    _ => "null".to_string(),
+                };
+                parts.push(default_val);
+            }
+            Some(v) => {
+                parts.push(json_to_php(v));
+            }
+        }
+    }
+
+    (setup_lines, parts.join(", "))
 }
 
 fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, field_resolver: &FieldResolver) {

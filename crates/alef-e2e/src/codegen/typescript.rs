@@ -7,6 +7,7 @@ use crate::fixture::{Assertion, Fixture, FixtureGroup};
 use alef_core::backend::GeneratedFile;
 use alef_core::config::AlefConfig;
 use anyhow::Result;
+use heck::ToUpperCamelCase;
 use std::fmt::Write as FmtWrite;
 use std::path::PathBuf;
 
@@ -186,13 +187,27 @@ fn render_test_file(
                 .any(|arg| arg.arg_type == "json_object" && f.input.get(&arg.field).is_some_and(|v| !v.is_null()))
         });
 
+    // Collect handle constructor function names that need to be imported.
+    let handle_constructors: Vec<String> = args
+        .iter()
+        .filter(|arg| arg.arg_type == "handle")
+        .map(|arg| format!("create{}", arg.name.to_upper_camel_case()))
+        .collect();
+
+    let mut imports: Vec<String> = vec![function_name.to_string()];
+    for ctor in &handle_constructors {
+        if !imports.contains(ctor) {
+            imports.push(ctor.clone());
+        }
+    }
+
     if let (true, Some(opts_type)) = (needs_options_import, options_type) {
-        let _ = writeln!(
-            out,
-            "import {{ {function_name}, type {opts_type} }} from '{module_path}';"
-        );
+        imports.push(format!("type {opts_type}"));
+        let imports_str = imports.join(", ");
+        let _ = writeln!(out, "import {{ {imports_str} }} from '{module_path}';");
     } else {
-        let _ = writeln!(out, "import {{ {function_name} }} from '{module_path}';");
+        let imports_str = imports.join(", ");
+        let _ = writeln!(out, "import {{ {imports_str} }} from '{module_path}';");
     }
     let _ = writeln!(out);
     let _ = writeln!(out, "describe('{category}', () => {{");
@@ -237,7 +252,10 @@ fn render_test_case(
 
     if expects_error {
         let _ = writeln!(out, "  it('{test_name}: {description}', {async_kw}() => {{");
-        let args_str = build_args_string(&fixture.input, args, options_type);
+        let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, options_type);
+        for line in &setup_lines {
+            let _ = writeln!(out, "    {line}");
+        }
         if is_async {
             let _ = writeln!(
                 out,
@@ -253,7 +271,11 @@ fn render_test_case(
     let _ = writeln!(out, "  it('{test_name}: {description}', {async_kw}() => {{");
 
     // Build function call arguments from input fields.
-    let args_str = build_args_string(&fixture.input, args, options_type);
+    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, options_type);
+
+    for line in &setup_lines {
+        let _ = writeln!(out, "    {line}");
+    }
 
     // Emit variable declarations for input args (for readability in complex cases).
     let _ = writeln!(out, "    const {result_var} = {await_kw}{function_name}({args_str});");
@@ -266,34 +288,62 @@ fn render_test_case(
     let _ = writeln!(out, "  }});");
 }
 
-fn build_args_string(
+/// Build setup lines (e.g. handle creation) and the argument list for the function call.
+///
+/// Returns `(setup_lines, args_string)`.
+fn build_args_and_setup(
     input: &serde_json::Value,
     args: &[crate::config::ArgMapping],
     options_type: Option<&str>,
-) -> String {
+) -> (Vec<String>, String) {
     if args.is_empty() {
         // If no args mapping, pass the whole input as a single argument.
-        return json_to_js(input);
+        return (Vec::new(), json_to_js(input));
     }
 
-    let parts: Vec<String> = args
-        .iter()
-        .filter_map(|arg| {
-            let val = input.get(&arg.field)?;
-            if val.is_null() && arg.optional {
-                return None;
-            }
-            // For json_object args with options_type, cast the object literal.
-            if arg.arg_type == "json_object" {
-                if let Some(opts_type) = options_type {
-                    return Some(format!("{} as {opts_type}", json_to_js(val)));
-                }
-            }
-            Some(json_to_js(val))
-        })
-        .collect();
+    let mut setup_lines: Vec<String> = Vec::new();
+    let mut parts: Vec<String> = Vec::new();
 
-    parts.join(", ")
+    for arg in args {
+        if arg.arg_type == "handle" {
+            // Generate a createEngine (or equivalent) call and pass the variable.
+            let constructor_name = format!("create{}", arg.name.to_upper_camel_case());
+            setup_lines.push(format!("const {} = {constructor_name}(null);", arg.name));
+            parts.push(arg.name.clone());
+            continue;
+        }
+
+        let val = input.get(&arg.field);
+        match val {
+            None | Some(serde_json::Value::Null) if arg.optional => {
+                // Optional arg with no fixture value: skip entirely.
+                continue;
+            }
+            None | Some(serde_json::Value::Null) => {
+                // Required arg with no fixture value: pass a language-appropriate default.
+                let default_val = match arg.arg_type.as_str() {
+                    "string" => "\"\"".to_string(),
+                    "int" | "integer" => "0".to_string(),
+                    "float" | "number" => "0.0".to_string(),
+                    "bool" | "boolean" => "false".to_string(),
+                    _ => "null".to_string(),
+                };
+                parts.push(default_val);
+            }
+            Some(v) => {
+                // For json_object args with options_type, cast the object literal.
+                if arg.arg_type == "json_object" {
+                    if let Some(opts_type) = options_type {
+                        parts.push(format!("{} as {opts_type}", json_to_js(v)));
+                        continue;
+                    }
+                }
+                parts.push(json_to_js(v));
+            }
+        }
+    }
+
+    (setup_lines, parts.join(", "))
 }
 
 fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, field_resolver: &FieldResolver) {

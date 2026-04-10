@@ -333,7 +333,11 @@ fn render_test_method(
         }
     }
 
-    let args_str = build_args_string(&fixture.input, args, options_type);
+    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, class_name, options_type);
+
+    for line in &setup_lines {
+        let _ = writeln!(out, "        {line}");
+    }
 
     if expects_error {
         let _ = writeln!(
@@ -356,31 +360,60 @@ fn render_test_method(
     let _ = writeln!(out, "    }}");
 }
 
-fn build_args_string(
+/// Build setup lines (e.g. handle creation) and the argument list for the function call.
+///
+/// Returns `(setup_lines, args_string)`.
+fn build_args_and_setup(
     input: &serde_json::Value,
     args: &[crate::config::ArgMapping],
+    class_name: &str,
     options_type: Option<&str>,
-) -> String {
+) -> (Vec<String>, String) {
     if args.is_empty() {
-        return json_to_java(input);
+        return (Vec::new(), json_to_java(input));
     }
 
-    let parts: Vec<String> = args
-        .iter()
-        .filter_map(|arg| {
-            let val = input.get(&arg.field)?;
-            if val.is_null() && arg.optional {
-                return None;
-            }
-            // For json_object args with options_type, use the pre-deserialized variable.
-            if arg.arg_type == "json_object" && options_type.is_some() {
-                return Some(arg.name.clone());
-            }
-            Some(json_to_java(val))
-        })
-        .collect();
+    let mut setup_lines: Vec<String> = Vec::new();
+    let mut parts: Vec<String> = Vec::new();
 
-    parts.join(", ")
+    for arg in args {
+        if arg.arg_type == "handle" {
+            // Generate a createEngine (or equivalent) call and pass the variable.
+            let constructor_name = format!("create{}", arg.name.to_upper_camel_case());
+            setup_lines.push(format!("var {} = {class_name}.{constructor_name}(null);", arg.name));
+            parts.push(arg.name.clone());
+            continue;
+        }
+
+        let val = input.get(&arg.field);
+        match val {
+            None | Some(serde_json::Value::Null) if arg.optional => {
+                // Optional arg with no fixture value: skip entirely.
+                continue;
+            }
+            None | Some(serde_json::Value::Null) => {
+                // Required arg with no fixture value: pass a language-appropriate default.
+                let default_val = match arg.arg_type.as_str() {
+                    "string" => "\"\"".to_string(),
+                    "int" | "integer" => "0".to_string(),
+                    "float" | "number" => "0.0d".to_string(),
+                    "bool" | "boolean" => "false".to_string(),
+                    _ => "null".to_string(),
+                };
+                parts.push(default_val);
+            }
+            Some(v) => {
+                // For json_object args with options_type, use the pre-deserialized variable.
+                if arg.arg_type == "json_object" && options_type.is_some() {
+                    parts.push(arg.name.clone());
+                    continue;
+                }
+                parts.push(json_to_java(v));
+            }
+        }
+    }
+
+    (setup_lines, parts.join(", "))
 }
 
 fn render_assertion(

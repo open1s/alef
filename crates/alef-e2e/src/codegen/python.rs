@@ -218,8 +218,25 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
         thirdparty_bare.push("import pytest".to_string());
     }
 
+    // Collect handle constructor function names that need to be imported.
+    let handle_constructors: Vec<String> = e2e_config
+        .call
+        .args
+        .iter()
+        .filter(|arg| arg.arg_type == "handle")
+        .map(|arg| format!("create_{}", arg.name.to_snake_case()))
+        .collect();
+
+    let mut import_names: Vec<String> = vec![function_name.clone()];
+    for ctor in &handle_constructors {
+        if !import_names.contains(ctor) {
+            import_names.push(ctor.clone());
+        }
+    }
+
     if let (true, Some(opts_type)) = (needs_options_type, &options_type) {
-        thirdparty_from.push(format!("from {module} import {function_name}, {opts_type}"));
+        import_names.push(opts_type.clone());
+        thirdparty_from.push(format!("from {module} import {}", import_names.join(", ")));
         // Import enum types from enum_module (if specified) or main module.
         if !used_enum_types.is_empty() {
             let enum_mod = e2e_config
@@ -235,7 +252,7 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
             ));
         }
     } else {
-        thirdparty_from.push(format!("from {module} import {function_name}"));
+        thirdparty_from.push(format!("from {module} import {}", import_names.join(", ")));
     }
 
     stdlib_imports.sort();
@@ -316,8 +333,17 @@ fn render_test_function(
     let mut arg_bindings = Vec::new();
     let mut kwarg_exprs = Vec::new();
     for arg in &e2e_config.call.args {
-        let value = resolve_field(&fixture.input, &arg.field);
         let var_name = &arg.name;
+
+        if arg.arg_type == "handle" {
+            // Generate a create_engine (or equivalent) call and pass the variable.
+            let constructor_name = format!("create_{}", arg.name.to_snake_case());
+            arg_bindings.push(format!("    {var_name} = {constructor_name}()"));
+            kwarg_exprs.push(format!("{var_name}={var_name}"));
+            continue;
+        }
+
+        let value = resolve_field(&fixture.input, &arg.field);
 
         if value.is_null() && arg.optional {
             continue;
@@ -369,6 +395,20 @@ fn render_test_function(
                     }
                 }
             }
+        }
+
+        // For required args with no fixture value, use a language-appropriate default.
+        if value.is_null() && !arg.optional {
+            let default_val = match arg.arg_type.as_str() {
+                "string" => "\"\"".to_string(),
+                "int" | "integer" => "0".to_string(),
+                "float" | "number" => "0.0".to_string(),
+                "bool" | "boolean" => "False".to_string(),
+                _ => "None".to_string(),
+            };
+            arg_bindings.push(format!("    {var_name} = {default_val}"));
+            kwarg_exprs.push(format!("{var_name}={var_name}"));
+            continue;
         }
 
         let literal = json_to_python_literal(value);

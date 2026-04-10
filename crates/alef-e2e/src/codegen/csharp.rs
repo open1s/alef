@@ -159,8 +159,10 @@ fn render_test_file(
     args: &[crate::config::ArgMapping],
     field_resolver: &FieldResolver,
     result_is_simple: bool,
+    is_async: bool,
 ) -> String {
     let mut out = String::new();
+    let _ = writeln!(out, "using System.Threading.Tasks;");
     let _ = writeln!(out, "using Xunit;");
     let _ = writeln!(out, "using {namespace};");
     let _ = writeln!(out);
@@ -180,6 +182,7 @@ fn render_test_file(
             args,
             field_resolver,
             result_is_simple,
+            is_async,
         );
         if i + 1 < fixtures.len() {
             let _ = writeln!(out);
@@ -199,30 +202,45 @@ fn render_test_method(
     args: &[crate::config::ArgMapping],
     field_resolver: &FieldResolver,
     result_is_simple: bool,
+    is_async: bool,
 ) {
     let method_name = fixture.id.to_upper_camel_case();
     let description = &fixture.description;
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
 
-    let args_str = build_args_string(&fixture.input, args);
+    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, class_name);
+
+    let return_type = if is_async { "async Task" } else { "void" };
+    let await_kw = if is_async { "await " } else { "" };
 
     let _ = writeln!(out, "    [Fact]");
-    let _ = writeln!(out, "    public void Test_{method_name}()");
+    let _ = writeln!(out, "    public {return_type} Test_{method_name}()");
     let _ = writeln!(out, "    {{");
     let _ = writeln!(out, "        // {description}");
 
+    for line in &setup_lines {
+        let _ = writeln!(out, "        {line}");
+    }
+
     if expects_error {
-        let _ = writeln!(
-            out,
-            "        Assert.Throws<Exception>(() => {class_name}.{function_name}({args_str}));"
-        );
+        if is_async {
+            let _ = writeln!(
+                out,
+                "        await Assert.ThrowsAsync<Exception>(() => {class_name}.{function_name}({args_str}));"
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "        Assert.Throws<Exception>(() => {class_name}.{function_name}({args_str}));"
+            );
+        }
         let _ = writeln!(out, "    }}");
         return;
     }
 
     let _ = writeln!(
         out,
-        "        var {result_var} = {class_name}.{function_name}({args_str});"
+        "        var {result_var} = {await_kw}{class_name}.{function_name}({args_str});"
     );
 
     for assertion in &fixture.assertions {
@@ -232,23 +250,54 @@ fn render_test_method(
     let _ = writeln!(out, "    }}");
 }
 
-fn build_args_string(input: &serde_json::Value, args: &[crate::config::ArgMapping]) -> String {
+/// Build setup lines (e.g. handle creation) and the argument list for the function call.
+///
+/// Returns `(setup_lines, args_string)`.
+fn build_args_and_setup(
+    input: &serde_json::Value,
+    args: &[crate::config::ArgMapping],
+    class_name: &str,
+) -> (Vec<String>, String) {
     if args.is_empty() {
-        return json_to_csharp(input);
+        return (Vec::new(), json_to_csharp(input));
     }
 
-    let parts: Vec<String> = args
-        .iter()
-        .filter_map(|arg| {
-            let val = input.get(&arg.field)?;
-            if val.is_null() && arg.optional {
-                return None;
-            }
-            Some(json_to_csharp(val))
-        })
-        .collect();
+    let mut setup_lines: Vec<String> = Vec::new();
+    let mut parts: Vec<String> = Vec::new();
 
-    parts.join(", ")
+    for arg in args {
+        if arg.arg_type == "handle" {
+            // Generate a CreateEngine (or equivalent) call and pass the variable.
+            let constructor_name = format!("Create{}", arg.name.to_upper_camel_case());
+            setup_lines.push(format!("var {} = {class_name}.{constructor_name}(null);", arg.name));
+            parts.push(arg.name.clone());
+            continue;
+        }
+
+        let val = input.get(&arg.field);
+        match val {
+            None | Some(serde_json::Value::Null) if arg.optional => {
+                // Optional arg with no fixture value: skip entirely.
+                continue;
+            }
+            None | Some(serde_json::Value::Null) => {
+                // Required arg with no fixture value: pass a language-appropriate default.
+                let default_val = match arg.arg_type.as_str() {
+                    "string" => "\"\"".to_string(),
+                    "int" | "integer" => "0".to_string(),
+                    "float" | "number" => "0.0d".to_string(),
+                    "bool" | "boolean" => "false".to_string(),
+                    _ => "null".to_string(),
+                };
+                parts.push(default_val);
+            }
+            Some(v) => {
+                parts.push(json_to_csharp(v));
+            }
+        }
+    }
+
+    (setup_lines, parts.join(", "))
 }
 
 fn render_assertion(
@@ -271,7 +320,12 @@ fn render_assertion(
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let cs_val = json_to_csharp(expected);
-                let _ = writeln!(out, "        Assert.Equal({cs_val}, {field_expr}.Trim());");
+                // Only call .Trim() on string fields, not numeric or boolean ones.
+                if expected.is_string() {
+                    let _ = writeln!(out, "        Assert.Equal({cs_val}, {field_expr}.Trim());");
+                } else {
+                    let _ = writeln!(out, "        Assert.Equal({cs_val}, {field_expr});");
+                }
             }
         }
         "contains" => {
