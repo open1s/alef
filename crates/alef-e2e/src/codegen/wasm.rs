@@ -50,7 +50,7 @@ impl E2eCodegen for WasmCodegen {
         let pkg_path = wasm_pkg
             .and_then(|p| p.path.as_ref())
             .cloned()
-            .unwrap_or_else(|| "../../packages/wasm".to_string());
+            .unwrap_or_else(|| "../../crates/html-to-markdown-wasm/pkg".to_string());
         let pkg_name = wasm_pkg
             .and_then(|p| p.name.as_ref())
             .cloned()

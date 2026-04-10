@@ -141,6 +141,13 @@ fn render_spec_file(
     let _ = writeln!(out, "require \"{}\"", require_name.replace('-', "_"));
     let _ = writeln!(out);
 
+    // Build the Ruby module/class qualifier for calls.
+    // If a class_name override is given, use it; otherwise convert the module_path
+    // to PascalCase (Ruby convention: HtmlToMarkdown, not html_to_markdown).
+    let call_receiver = class_name
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| ruby_module_name(module_path));
+
     let _ = writeln!(out, "RSpec.describe \"{category}\" do");
 
     for (i, fixture) in fixtures.iter().enumerate() {
@@ -148,7 +155,7 @@ fn render_spec_file(
             &mut out,
             fixture,
             function_name,
-            class_name,
+            &call_receiver,
             result_var,
             args,
             field_resolver,
@@ -166,7 +173,7 @@ fn render_example(
     out: &mut String,
     fixture: &Fixture,
     function_name: &str,
-    class_name: Option<&str>,
+    call_receiver: &str,
     result_var: &str,
     args: &[crate::config::ArgMapping],
     field_resolver: &FieldResolver,
@@ -177,10 +184,7 @@ fn render_example(
 
     let args_str = build_args_string(&fixture.input, args);
 
-    let call_expr = match class_name {
-        Some(cls) => format!("{cls}.{function_name}({args_str})"),
-        None => format!("{function_name}({args_str})"),
-    };
+    let call_expr = format!("{call_receiver}.{function_name}({args_str})");
 
     let _ = writeln!(out, "  it \"{test_name}: {description}\" do");
 
@@ -293,6 +297,13 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
             let _ = writeln!(out, "    # TODO: unsupported assertion type: {other}");
         }
     }
+}
+
+/// Convert a module path (e.g., "html_to_markdown") to Ruby PascalCase module name
+/// (e.g., "HtmlToMarkdown").
+fn ruby_module_name(module_path: &str) -> String {
+    use heck::ToUpperCamelCase;
+    module_path.to_upper_camel_case()
 }
 
 /// Convert a `serde_json::Value` to a Ruby literal string.

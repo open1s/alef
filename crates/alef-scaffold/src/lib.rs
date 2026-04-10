@@ -353,11 +353,14 @@ fn scaffold_ruby(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<Ge
         format!("[{}]", entries.join(", "))
     };
 
-    let keywords_ruby = if meta.keywords.is_empty() {
+    let metadata_ruby = if meta.keywords.is_empty() {
         String::new()
     } else {
         let entries: Vec<String> = meta.keywords.iter().map(|k| format!("\"{}\"", k)).collect();
-        format!("  spec.keywords       = [{}]\n", entries.join(", "))
+        format!(
+            "  spec.metadata[\"keywords\"] = [{}].join(\",\")\n",
+            entries.join(", ")
+        )
     };
 
     let content = format!(
@@ -370,8 +373,8 @@ fn scaffold_ruby(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<Ge
   spec.homepage      = "{repository}"
   spec.license       = "{license}"
   spec.required_ruby_version = ">= 2.7.0"
-{keywords}
-  spec.files         = Dir.glob("{{"lib/**/*", "ext/**/*"}}")
+{metadata}
+  spec.files         = Dir.glob(["lib/**/*", "ext/**/*"])
   spec.require_paths = ["lib"]
   spec.extensions    = ["ext/{gem_name}/extconf.rb"]
 end
@@ -382,7 +385,7 @@ end
         description = meta.description,
         repository = meta.repository,
         license = meta.license,
-        keywords = keywords_ruby,
+        metadata = metadata_ruby,
     );
 
     let rubocop_content = r#"plugins:
@@ -1135,7 +1138,7 @@ mod tests {
         let content = &files[0].content;
         assert!(content.contains("spec.required_ruby_version"));
         assert!(content.contains("spec.extensions"));
-        assert!(content.contains("spec.keywords"));
+        assert!(content.contains("spec.metadata[\"keywords\"]"));
         // Check for Cargo.toml generation
         assert_eq!(
             files[1].path,

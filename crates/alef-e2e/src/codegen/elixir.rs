@@ -30,10 +30,18 @@ impl E2eCodegen for ElixirCodegen {
         // Resolve call config with overrides.
         let call = &e2e_config.call;
         let overrides = call.overrides.get(lang);
-        let module_path = overrides
+        let raw_module = overrides
             .and_then(|o| o.module.as_ref())
             .cloned()
             .unwrap_or_else(|| call.module.clone());
+        // Convert module path to Elixir PascalCase if it looks like snake_case
+        // (e.g., "html_to_markdown" -> "HtmlToMarkdown").
+        // If the override already contains "." (e.g., "Elixir.HtmlToMarkdown"), use as-is.
+        let module_path = if raw_module.contains('.') || raw_module.chars().next().is_some_and(|c| c.is_uppercase()) {
+            raw_module
+        } else {
+            elixir_module_name(&raw_module)
+        };
         let function_name = overrides
             .and_then(|o| o.function.as_ref())
             .cloned()
