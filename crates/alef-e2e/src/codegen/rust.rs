@@ -523,40 +523,28 @@ fn render_assertion(
         "greater_than" => {
             if let Some(val) = &assertion.value {
                 if let Some(n) = val.as_f64() {
-                    let _ = writeln!(
-                        out,
-                        "    assert!({field_access} > {n}_f64, \"expected > {n}\");"
-                    );
+                    let _ = writeln!(out, "    assert!({field_access} > {n}_f64, \"expected > {n}\");");
                 }
             }
         }
         "less_than" => {
             if let Some(val) = &assertion.value {
                 if let Some(n) = val.as_f64() {
-                    let _ = writeln!(
-                        out,
-                        "    assert!({field_access} < {n}_f64, \"expected < {n}\");"
-                    );
+                    let _ = writeln!(out, "    assert!({field_access} < {n}_f64, \"expected < {n}\");");
                 }
             }
         }
         "greater_than_or_equal" => {
             if let Some(val) = &assertion.value {
                 if let Some(n) = val.as_f64() {
-                    let _ = writeln!(
-                        out,
-                        "    assert!({field_access} >= {n}_f64, \"expected >= {n}\");"
-                    );
+                    let _ = writeln!(out, "    assert!({field_access} >= {n}_f64, \"expected >= {n}\");");
                 }
             }
         }
         "less_than_or_equal" => {
             if let Some(val) = &assertion.value {
                 if let Some(n) = val.as_f64() {
-                    let _ = writeln!(
-                        out,
-                        "    assert!({field_access} <= {n}_f64, \"expected <= {n}\");"
-                    );
+                    let _ = writeln!(out, "    assert!({field_access} <= {n}_f64, \"expected <= {n}\");");
                 }
             }
         }

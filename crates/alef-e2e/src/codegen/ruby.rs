@@ -307,7 +307,10 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
             if let Some(values) = &assertion.values {
                 let items: Vec<String> = values.iter().map(|v| json_to_ruby(v)).collect();
                 let arr_str = items.join(", ");
-                let _ = writeln!(out, "    expect([{arr_str}].any? {{ |v| {field_expr}.include?(v) }}).to be true");
+                let _ = writeln!(
+                    out,
+                    "    expect([{arr_str}].any? {{ |v| {field_expr}.include?(v) }}).to be true"
+                );
             }
         }
         "greater_than" => {

@@ -291,31 +291,46 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
                     })
                     .collect();
                 let joined = checks.join(" || ");
-                let _ = writeln!(out, "        Assert.True({joined}, \"expected to contain at least one of the specified values\");");
+                let _ = writeln!(
+                    out,
+                    "        Assert.True({joined}, \"expected to contain at least one of the specified values\");"
+                );
             }
         }
         "greater_than" => {
             if let Some(val) = &assertion.value {
                 let cs_val = json_to_csharp(val);
-                let _ = writeln!(out, "        Assert.True({field_expr} > {cs_val}, \"expected > {cs_val}\");");
+                let _ = writeln!(
+                    out,
+                    "        Assert.True({field_expr} > {cs_val}, \"expected > {cs_val}\");"
+                );
             }
         }
         "less_than" => {
             if let Some(val) = &assertion.value {
                 let cs_val = json_to_csharp(val);
-                let _ = writeln!(out, "        Assert.True({field_expr} < {cs_val}, \"expected < {cs_val}\");");
+                let _ = writeln!(
+                    out,
+                    "        Assert.True({field_expr} < {cs_val}, \"expected < {cs_val}\");"
+                );
             }
         }
         "greater_than_or_equal" => {
             if let Some(val) = &assertion.value {
                 let cs_val = json_to_csharp(val);
-                let _ = writeln!(out, "        Assert.True({field_expr} >= {cs_val}, \"expected >= {cs_val}\");");
+                let _ = writeln!(
+                    out,
+                    "        Assert.True({field_expr} >= {cs_val}, \"expected >= {cs_val}\");"
+                );
             }
         }
         "less_than_or_equal" => {
             if let Some(val) = &assertion.value {
                 let cs_val = json_to_csharp(val);
-                let _ = writeln!(out, "        Assert.True({field_expr} <= {cs_val}, \"expected <= {cs_val}\");");
+                let _ = writeln!(
+                    out,
+                    "        Assert.True({field_expr} <= {cs_val}, \"expected <= {cs_val}\");"
+                );
             }
         }
         "starts_with" => {

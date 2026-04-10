@@ -242,7 +242,10 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
             if let Some(values) = &assertion.values {
                 let items: Vec<String> = values.iter().map(|v| json_to_r(v)).collect();
                 let vec_str = items.join(", ");
-                let _ = writeln!(out, "  expect_true(any(sapply(c({vec_str}), function(v) grepl(v, {field_expr}, fixed = TRUE))))");
+                let _ = writeln!(
+                    out,
+                    "  expect_true(any(sapply(c({vec_str}), function(v) grepl(v, {field_expr}, fixed = TRUE))))"
+                );
             }
         }
         "greater_than" => {
