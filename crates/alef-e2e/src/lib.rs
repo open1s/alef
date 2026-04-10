@@ -10,6 +10,7 @@ pub mod escape;
 pub mod field_access;
 pub mod fixture;
 pub mod format;
+pub mod scaffold;
 pub mod validate;
 
 use alef_core::backend::GeneratedFile;

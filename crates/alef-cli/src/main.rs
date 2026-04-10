@@ -136,6 +136,20 @@ enum E2eAction {
         #[arg(long, value_delimiter = ',')]
         lang: Option<Vec<String>>,
     },
+    /// Initialize fixture directory with schema and example.
+    Init,
+    /// Scaffold a new fixture file.
+    Scaffold {
+        /// Fixture ID (snake_case).
+        #[arg(long)]
+        id: String,
+        /// Category name.
+        #[arg(long)]
+        category: String,
+        /// Description.
+        #[arg(long)]
+        description: String,
+    },
     /// List all fixtures with counts per category.
     List,
     /// Validate fixture files against the JSON schema.
@@ -385,6 +399,25 @@ fn main() -> Result<()> {
                     alef_e2e::format::run_formatters(&files, e2e_config);
 
                     println!("Generated {count} e2e files");
+                    Ok(())
+                }
+                E2eAction::Init => {
+                    eprintln!("Initializing e2e fixtures directory...");
+                    let created = alef_e2e::scaffold::init_fixtures(e2e_config, &config)?;
+                    for path in &created {
+                        println!("  created {path}");
+                    }
+                    println!("Initialized {} file(s)", created.len());
+                    Ok(())
+                }
+                E2eAction::Scaffold {
+                    id,
+                    category,
+                    description,
+                } => {
+                    let path =
+                        alef_e2e::scaffold::scaffold_fixture(e2e_config, &config, &id, &category, &description)?;
+                    println!("Created {path}");
                     Ok(())
                 }
                 E2eAction::List => {
