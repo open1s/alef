@@ -280,7 +280,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let php_val = json_to_php(expected);
-                let _ = writeln!(out, "        $this->assertEquals({php_val}, trim({field_expr}));");
+                let _ = writeln!(out, "        $this->assertEquals({php_val}, {field_expr});");
             }
         }
         "contains" => {

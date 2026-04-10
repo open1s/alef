@@ -20,6 +20,8 @@ enum PathSegment {
     Field(String),
     /// Map/dict key access: `foo[key]`
     MapAccess { field: String, key: String },
+    /// Length/count of the preceding collection: `.length`
+    Length,
 }
 
 impl FieldResolver {
@@ -90,11 +92,14 @@ impl FieldResolver {
     }
 }
 
-/// Parse a dotted field path into segments, handling map access `foo[key]`.
+/// Parse a dotted field path into segments, handling map access `foo[key]`
+/// and the special `.length` pseudo-property for collection sizes.
 fn parse_path(path: &str) -> Vec<PathSegment> {
     let mut segments = Vec::new();
     for part in path.split('.') {
-        if let Some(bracket_pos) = part.find('[') {
+        if part == "length" || part == "count" || part == "size" {
+            segments.push(PathSegment::Length);
+        } else if let Some(bracket_pos) = part.find('[') {
             let field = part[..bracket_pos].to_string();
             let key = part[bracket_pos + 1..].trim_end_matches(']').to_string();
             segments.push(PathSegment::MapAccess { field, key });
@@ -109,17 +114,17 @@ fn parse_path(path: &str) -> Vec<PathSegment> {
 fn render_accessor(segments: &[PathSegment], language: &str, result_var: &str) -> String {
     match language {
         "rust" => render_rust(segments, result_var),
-        "python" => render_dot_access(segments, result_var, false),
-        "typescript" | "node" => render_typescript(segments, result_var),
+        "python" => render_dot_access(segments, result_var, "python"),
+        "typescript" | "node" | "wasm" => render_typescript(segments, result_var),
         "go" => render_go(segments, result_var),
         "java" => render_java(segments, result_var),
         "csharp" => render_pascal_dot(segments, result_var),
-        "ruby" => render_dot_access(segments, result_var, false),
+        "ruby" => render_dot_access(segments, result_var, "ruby"),
         "php" => render_php(segments, result_var),
-        "elixir" => render_dot_access(segments, result_var, false),
+        "elixir" => render_dot_access(segments, result_var, "elixir"),
         "r" => render_r(segments, result_var),
         "c" => render_c(segments, result_var),
-        _ => render_dot_access(segments, result_var, false),
+        _ => render_dot_access(segments, result_var, language),
     }
 }
 
@@ -141,13 +146,16 @@ fn render_rust(segments: &[PathSegment], result_var: &str) -> String {
                 out.push_str(&field.to_snake_case());
                 out.push_str(&format!(".get(\"{key}\").map(|s| s.as_str())"));
             }
+            PathSegment::Length => {
+                out.push_str(".len()");
+            }
         }
     }
     out
 }
 
 /// Simple dot access (Python, Ruby, Elixir): `result.foo.bar.baz`
-fn render_dot_access(segments: &[PathSegment], result_var: &str, _pascal: bool) -> String {
+fn render_dot_access(segments: &[PathSegment], result_var: &str, language: &str) -> String {
     let mut out = result_var.to_string();
     for seg in segments {
         match seg {
@@ -160,6 +168,18 @@ fn render_dot_access(segments: &[PathSegment], result_var: &str, _pascal: bool) 
                 out.push_str(field);
                 out.push_str(&format!(".get(\"{key}\")"));
             }
+            PathSegment::Length => match language {
+                "ruby" => out.push_str(".length"),
+                "elixir" => {
+                    let current = std::mem::take(&mut out);
+                    out = format!("length({current})");
+                }
+                // Python and default: len()
+                _ => {
+                    let current = std::mem::take(&mut out);
+                    out = format!("len({current})");
+                }
+            },
         }
     }
     out
@@ -180,6 +200,9 @@ fn render_typescript(segments: &[PathSegment], result_var: &str) -> String {
                 out.push_str(&field.to_lower_camel_case());
                 out.push_str(&format!("[\"{key}\"]"));
             }
+            PathSegment::Length => {
+                out.push_str(".length");
+            }
         }
     }
     out
@@ -198,6 +221,10 @@ fn render_go(segments: &[PathSegment], result_var: &str) -> String {
                 out.push('.');
                 out.push_str(&field.to_pascal_case());
                 out.push_str(&format!("[\"{key}\"]"));
+            }
+            PathSegment::Length => {
+                let current = std::mem::take(&mut out);
+                out = format!("len({current})");
             }
         }
     }
@@ -219,6 +246,9 @@ fn render_java(segments: &[PathSegment], result_var: &str) -> String {
                 out.push_str(field);
                 out.push_str(&format!("().get(\"{key}\")"));
             }
+            PathSegment::Length => {
+                out.push_str(".size()");
+            }
         }
     }
     out
@@ -237,6 +267,9 @@ fn render_pascal_dot(segments: &[PathSegment], result_var: &str) -> String {
                 out.push('.');
                 out.push_str(&field.to_pascal_case());
                 out.push_str(&format!("[\"{key}\"]"));
+            }
+            PathSegment::Length => {
+                out.push_str(".Count");
             }
         }
     }
@@ -257,6 +290,10 @@ fn render_php(segments: &[PathSegment], result_var: &str) -> String {
                 out.push_str(field);
                 out.push_str(&format!("[\"{key}\"]"));
             }
+            PathSegment::Length => {
+                let current = std::mem::take(&mut out);
+                out = format!("count({current})");
+            }
         }
     }
     out
@@ -276,6 +313,10 @@ fn render_r(segments: &[PathSegment], result_var: &str) -> String {
                 out.push_str(field);
                 out.push_str(&format!("[[\"{key}\"]]"));
             }
+            PathSegment::Length => {
+                let current = std::mem::take(&mut out);
+                out = format!("length({current})");
+            }
         }
     }
     out
@@ -284,6 +325,7 @@ fn render_r(segments: &[PathSegment], result_var: &str) -> String {
 /// C FFI: `{prefix}_result_foo_bar_baz({result})` accessor function style.
 fn render_c(segments: &[PathSegment], result_var: &str) -> String {
     let mut parts = Vec::new();
+    let mut trailing_length = false;
     for seg in segments {
         match seg {
             PathSegment::Field(f) => parts.push(f.to_snake_case()),
@@ -291,10 +333,17 @@ fn render_c(segments: &[PathSegment], result_var: &str) -> String {
                 parts.push(field.to_snake_case());
                 parts.push(key.clone());
             }
+            PathSegment::Length => {
+                trailing_length = true;
+            }
         }
     }
     let suffix = parts.join("_");
-    format!("result_{suffix}({result_var})")
+    if trailing_length {
+        format!("result_{suffix}_count({result_var})")
+    } else {
+        format!("result_{suffix}({result_var})")
+    }
 }
 
 #[cfg(test)]

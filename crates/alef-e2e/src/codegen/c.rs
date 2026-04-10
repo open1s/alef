@@ -163,6 +163,35 @@ fn render_test_runner_header(active_groups: &[(&FixtureGroup, Vec<&Fixture>)]) -
     let _ = writeln!(out, "#ifndef TEST_RUNNER_H");
     let _ = writeln!(out, "#define TEST_RUNNER_H");
     let _ = writeln!(out);
+    let _ = writeln!(out, "#include <string.h>");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "/**");
+    let _ = writeln!(out, " * Count top-level elements in a JSON array string.");
+    let _ = writeln!(out, " * Returns 0 for empty arrays (\"[]\") or NULL input.");
+    let _ = writeln!(out, " */");
+    let _ = writeln!(out, "static inline int htm_json_array_count(const char *json) {{");
+    let _ = writeln!(out, "    if (json == NULL) return 0;");
+    let _ = writeln!(out, "    /* Skip leading whitespace */");
+    let _ = writeln!(out, "    while (*json == ' ' || *json == '\\t' || *json == '\\n') json++;");
+    let _ = writeln!(out, "    if (*json != '[') return 0;");
+    let _ = writeln!(out, "    json++;");
+    let _ = writeln!(out, "    /* Skip whitespace after '[' */");
+    let _ = writeln!(out, "    while (*json == ' ' || *json == '\\t' || *json == '\\n') json++;");
+    let _ = writeln!(out, "    if (*json == ']') return 0;");
+    let _ = writeln!(out, "    int count = 1;");
+    let _ = writeln!(out, "    int depth = 0;");
+    let _ = writeln!(out, "    int in_string = 0;");
+    let _ = writeln!(out, "    for (; *json && !(*json == ']' && depth == 0 && !in_string); json++) {{");
+    let _ = writeln!(out, "        if (*json == '\\\\' && in_string) {{ json++; continue; }}");
+    let _ = writeln!(out, "        if (*json == '\"') {{ in_string = !in_string; continue; }}");
+    let _ = writeln!(out, "        if (in_string) continue;");
+    let _ = writeln!(out, "        if (*json == '[' || *json == '{{') depth++;");
+    let _ = writeln!(out, "        else if (*json == ']' || *json == '}}') depth--;");
+    let _ = writeln!(out, "        else if (*json == ',' && depth == 0) count++;");
+    let _ = writeln!(out, "    }}");
+    let _ = writeln!(out, "    return count;");
+    let _ = writeln!(out, "}}");
+    let _ = writeln!(out);
 
     for (group, fixtures) in active_groups {
         let _ = writeln!(out, "/* Tests for category: {} */", group.category);
@@ -227,25 +256,7 @@ fn render_test_file(
     let _ = writeln!(out, "#include <stdio.h>");
     let _ = writeln!(out, "#include <stdlib.h>");
     let _ = writeln!(out, "#include \"{header}\"");
-    let _ = writeln!(out);
-
-    // Emit a static helper to trim trailing whitespace for exact-match assertions.
-    let _ = writeln!(out, "/* Trim trailing whitespace in-place and return the string. */");
-    let _ = writeln!(out, "static char* trim_trailing(char* s) {{");
-    let _ = writeln!(out, "    if (!s) return s;");
-    let _ = writeln!(out, "    size_t len = strlen(s);");
-    let _ = writeln!(
-        out,
-        "    while (len > 0 && (s[len - 1] == '\\n' || s[len - 1] == '\\r' ||"
-    );
-    let _ = writeln!(
-        out,
-        "                       s[len - 1] == ' '  || s[len - 1] == '\\t')) {{"
-    );
-    let _ = writeln!(out, "        s[--len] = '\\0';");
-    let _ = writeln!(out, "    }}");
-    let _ = writeln!(out, "    return s;");
-    let _ = writeln!(out, "}}");
+    let _ = writeln!(out, "#include \"test_runner.h\"");
     let _ = writeln!(out);
 
     for (i, fixture) in fixtures.iter().enumerate() {
@@ -517,7 +528,7 @@ fn render_assertion(
                 // actual value does not cause a false negative.
                 let _ = writeln!(
                     out,
-                    "    assert(strcmp(trim_trailing({field_expr}), {c_val}) == 0 && \"equals assertion failed\");"
+                    "    assert(strcmp({field_expr}, {c_val}) == 0 && \"equals assertion failed\");"
                 );
             }
         }
@@ -646,6 +657,21 @@ fn render_assertion(
                         out,
                         "    assert(strlen({field_expr}) <= {n} && \"expected maximum length\");"
                     );
+                }
+            }
+        }
+        "count_min" => {
+            if let Some(val) = &assertion.value {
+                if let Some(n) = val.as_u64() {
+                    let _ = writeln!(out, "    {{");
+                    let _ = writeln!(out, "        /* count_min: count top-level JSON array elements */");
+                    let _ = writeln!(out, "        assert({field_expr} != NULL && \"expected non-null collection JSON\");");
+                    let _ = writeln!(out, "        int elem_count = htm_json_array_count({field_expr});");
+                    let _ = writeln!(
+                        out,
+                        "        assert(elem_count >= {n} && \"expected at least {n} elements\");"
+                    );
+                    let _ = writeln!(out, "    }}");
                 }
             }
         }

@@ -427,14 +427,6 @@ fn json_to_python_literal(value: &serde_json::Value) -> String {
 // ---------------------------------------------------------------------------
 
 fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, field_resolver: &FieldResolver) {
-    // Emit TODO for nested field paths without an explicit alias mapping.
-    if let Some(f) = &assertion.field {
-        if f.contains('.') && !field_resolver.has_alias(f) {
-            let _ = writeln!(out, "    # TODO: unsupported nested field path: {f}");
-            return;
-        }
-    }
-
     let field_access = match &assertion.field {
         Some(f) if !f.is_empty() => field_resolver.accessor(f, "python", result_var),
         _ => result_var.to_string(),
@@ -447,7 +439,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         "equals" => {
             if let Some(val) = &assertion.value {
                 let expected = value_to_python_string(val);
-                let _ = writeln!(out, "    assert {field_access}.strip() == {expected}");
+                let _ = writeln!(out, "    assert {field_access} == {expected}");
             }
         }
         "contains" => {

@@ -306,7 +306,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let js_val = json_to_js(expected);
-                let _ = writeln!(out, "    expect({field_expr}.trim()).toBe({js_val});");
+                let _ = writeln!(out, "    expect({field_expr}).toBe({js_val});");
             }
         }
         "contains" => {

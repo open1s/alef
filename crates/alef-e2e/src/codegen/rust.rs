@@ -132,6 +132,10 @@ publish = false
 [dependencies]
 {dep_spec}
 serde_json = "1"
+tokio = {{ version = "1", features = ["full"] }}
+
+[dev-dependencies]
+wiremock = "0.6"
 "#
     )
 }
@@ -384,15 +388,6 @@ fn render_assertion(
     unwrapped_fields: &[(String, String)], // (fixture_field, local_var)
     field_resolver: &FieldResolver,
 ) {
-    // Emit TODO for nested field paths without an explicit alias mapping.
-    // These cannot be resolved to valid Rust struct paths automatically.
-    if let Some(f) = &assertion.field {
-        if f.contains('.') && !field_resolver.has_alias(f) {
-            let _ = writeln!(out, "    // TODO: unsupported nested field path: {f}");
-            return;
-        }
-    }
-
     // Determine field access expression:
     // 1. If the field was unwrapped to a local var, use that local var name.
     // 2. Otherwise, use the field resolver to generate the accessor.
@@ -435,7 +430,7 @@ fn render_assertion(
                 }
                 let _ = writeln!(
                     out,
-                    "    assert_eq!({field_access}.trim(), {expected}, \"equals assertion failed\");"
+                    "    assert_eq!({field_access}, {expected}, \"equals assertion failed\");"
                 );
             }
         }

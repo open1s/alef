@@ -58,10 +58,15 @@ impl E2eCodegen for CSharpCodegen {
             .and_then(|p| p.name.as_ref())
             .cloned()
             .unwrap_or_else(|| alef_config.crate_config.name.to_upper_camel_case());
+        // The project reference path uses the crate name (with hyphens) for the directory
+        // and the PascalCase name for the .csproj file.
         let pkg_path = cs_pkg
             .and_then(|p| p.path.as_ref())
             .cloned()
-            .unwrap_or_else(|| format!("../../packages/csharp/{pkg_name}.csproj"));
+            .unwrap_or_else(|| {
+                let dir_name = &alef_config.crate_config.name;
+                format!("../../packages/csharp/{dir_name}/{pkg_name}.csproj")
+            });
 
         // Generate E2eTests.csproj.
         files.push(GeneratedFile {

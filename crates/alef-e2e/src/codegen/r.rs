@@ -239,7 +239,10 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
             }
         }
         "not_empty" => {
-            let _ = writeln!(out, "  expect_true(nchar({field_expr}) > 0)");
+            let _ = writeln!(
+                out,
+                "  expect_true(if (is.character({field_expr})) nchar({field_expr}) > 0 else length({field_expr}) > 0)"
+            );
         }
         "is_empty" => {
             let _ = writeln!(out, "  expect_equal({field_expr}, \"\")");
@@ -301,6 +304,16 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
             if let Some(val) = &assertion.value {
                 if let Some(n) = val.as_u64() {
                     let _ = writeln!(out, "  expect_true(nchar({field_expr}) <= {n})");
+                }
+            }
+        }
+        "count_min" => {
+            if let Some(val) = &assertion.value {
+                if let Some(n) = val.as_u64() {
+                    let _ = writeln!(
+                        out,
+                        "  expect_true(length({field_expr}) >= {n})"
+                    );
                 }
             }
         }

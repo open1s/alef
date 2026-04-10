@@ -65,7 +65,7 @@ impl E2eCodegen for ElixirCodegen {
         let dep_atom = elixir_pkg
             .and_then(|p| p.name.as_ref())
             .cloned()
-            .unwrap_or_else(|| raw_module.clone());
+            .unwrap_or_else(|| raw_module.to_snake_case());
 
         // Generate mix.exs.
         files.push(GeneratedFile {
@@ -306,7 +306,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let elixir_val = json_to_elixir(expected);
-                let _ = writeln!(out, "      assert String.trim({field_expr}) == {elixir_val}");
+                let _ = writeln!(out, "      assert {field_expr} == {elixir_val}");
             }
         }
         "contains" => {

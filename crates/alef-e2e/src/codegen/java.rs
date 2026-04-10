@@ -140,6 +140,13 @@ fn render_pom_xml(pkg_name: &str) -> String {
 
     <dependencies>
         <dependency>
+            <groupId>dev.kreuzberg</groupId>
+            <artifactId>{pkg_name}</artifactId>
+            <version>0.1.0</version>
+            <scope>system</scope>
+            <systemPath>${{project.basedir}}/../../packages/java/target/{pkg_name}-0.1.0.jar</systemPath>
+        </dependency>
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <version>${{junit.version}}</version>
@@ -373,7 +380,7 @@ fn render_assertion(
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let java_val = json_to_java(expected);
-                let _ = writeln!(out, "        assertEquals({java_val}, {field_expr}.strip());");
+                let _ = writeln!(out, "        assertEquals({java_val}, {field_expr});");
             }
         }
         "contains" => {

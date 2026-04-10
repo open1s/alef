@@ -201,7 +201,7 @@ fn render_example(
     let description = fixture.description.replace('"', "\\\"");
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
 
-    let args_str = build_args_string(&fixture.input, args, options_type, enum_fields);
+    let args_str = build_args_string(&fixture.input, args, options_type, enum_fields, result_is_simple);
 
     let call_expr = format!("{call_receiver}.{function_name}({args_str})");
 
@@ -227,6 +227,7 @@ fn build_args_string(
     args: &[crate::config::ArgMapping],
     options_type: Option<&str>,
     enum_fields: &HashMap<String, String>,
+    result_is_simple: bool,
 ) -> String {
     if args.is_empty() {
         return json_to_ruby(input);
@@ -240,6 +241,7 @@ fn build_args_string(
                 return None;
             }
             // For json_object args with options_type, construct a typed options object.
+            // When result_is_simple, the binding accepts a plain Hash (no wrapper class).
             if arg.arg_type == "json_object" && !val.is_null() {
                 if let (Some(opts_type), Some(obj)) = (options_type, val.as_object()) {
                     let kwargs: Vec<String> = obj
@@ -259,6 +261,10 @@ fn build_args_string(
                             format!("{snake_key}: {rb_val}")
                         })
                         .collect();
+                    if result_is_simple {
+                        // Pass as keyword-style Hash (binding accepts plain Hash).
+                        return Some(format!("{{{}}}", kwargs.join(", ")));
+                    }
                     return Some(format!("{opts_type}.new({})", kwargs.join(", ")));
                 }
             }
@@ -276,6 +282,23 @@ fn render_assertion(
     field_resolver: &FieldResolver,
     result_is_simple: bool,
 ) {
+    // When result_is_simple, skip assertions that reference non-content fields
+    // (e.g., metadata, document, structure) since the binding returns a plain value.
+    if result_is_simple {
+        if let Some(f) = &assertion.field {
+            let f_lower = f.to_lowercase();
+            if !f.is_empty()
+                && f_lower != "content"
+                && (f_lower.starts_with("metadata")
+                    || f_lower.starts_with("document")
+                    || f_lower.starts_with("structure"))
+            {
+                let _ = writeln!(out, "    # TODO: skipped (result_is_simple, field: {f})");
+                return;
+            }
+        }
+    }
+
     let field_expr = if result_is_simple {
         result_var.to_string()
     } else {
@@ -289,7 +312,7 @@ fn render_assertion(
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let rb_val = json_to_ruby(expected);
-                let _ = writeln!(out, "    expect({field_expr}.strip).to eq({rb_val})");
+                let _ = writeln!(out, "    expect({field_expr}).to eq({rb_val})");
             }
         }
         "contains" => {

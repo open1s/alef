@@ -340,7 +340,7 @@ fn render_assertion(
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let go_val = json_to_go(expected);
-                let _ = writeln!(out, "\tif strings.TrimSpace({field_expr}) != {go_val} {{");
+                let _ = writeln!(out, "\tif {field_expr} != {go_val} {{");
                 let _ = writeln!(out, "\t\tt.Errorf(\"equals mismatch: got %q\", {field_expr})");
                 let _ = writeln!(out, "\t}}");
             }
