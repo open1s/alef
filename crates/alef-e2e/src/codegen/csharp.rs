@@ -41,7 +41,7 @@ impl E2eCodegen for CSharpCodegen {
         let class_name = overrides
             .and_then(|o| o.class.as_ref())
             .cloned()
-            .unwrap_or_else(|| alef_config.crate_config.name.to_upper_camel_case());
+            .unwrap_or_else(|| format!("{}Lib", alef_config.crate_config.name.to_upper_camel_case()));
         let namespace = overrides.and_then(|o| o.module.as_ref()).cloned().unwrap_or_else(|| {
             if call.module.is_empty() {
                 "Kreuzberg".to_string()

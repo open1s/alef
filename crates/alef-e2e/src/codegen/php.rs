@@ -173,14 +173,11 @@ fn render_bootstrap(pkg_path: &str) -> String {
 
 declare(strict_types=1);
 
+// Load the PHP package autoloader first (binding wrapper classes).
+require_once __DIR__ . '/{pkg_path}/vendor/autoload.php';
+
 // Load the e2e project autoloader (PHPUnit, test helpers).
 require_once __DIR__ . '/vendor/autoload.php';
-
-// Load the PHP package autoloader (binding wrapper classes).
-$pkgAutoloader = __DIR__ . '/{pkg_path}/vendor/autoload.php';
-if (file_exists($pkgAutoloader)) {{
-    require_once $pkgAutoloader;
-}}
 "#
     )
 }

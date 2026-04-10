@@ -232,18 +232,19 @@ fn render_go(segments: &[PathSegment], result_var: &str) -> String {
 }
 
 /// Java: `result.foo().bar().baz()` or `result.foo().bar().get("key")`
+/// Field names are converted to lowerCamelCase (Java convention).
 fn render_java(segments: &[PathSegment], result_var: &str) -> String {
     let mut out = result_var.to_string();
     for seg in segments {
         match seg {
             PathSegment::Field(f) => {
                 out.push('.');
-                out.push_str(f);
+                out.push_str(&f.to_lower_camel_case());
                 out.push_str("()");
             }
             PathSegment::MapAccess { field, key } => {
                 out.push('.');
-                out.push_str(field);
+                out.push_str(&field.to_lower_camel_case());
                 out.push_str(&format!("().get(\"{key}\")"));
             }
             PathSegment::Length => {

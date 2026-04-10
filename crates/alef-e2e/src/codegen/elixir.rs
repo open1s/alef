@@ -268,7 +268,7 @@ fn build_args_string(
                 return None;
             }
             // For json_object args with options_type, pass as a plain map with
-            // atom keys. The Elixir binding accepts a map for options.
+            // string keys. The Elixir Rustler NIF expects string-keyed maps.
             if arg.arg_type == "json_object" && !val.is_null() {
                 if let (Some(_opts_type), Some(obj)) = (options_type, val.as_object()) {
                     let fields: Vec<String> = obj
@@ -276,17 +276,17 @@ fn build_args_string(
                         .map(|(k, v)| {
                             let snake_key = k.to_snake_case();
                             let elixir_val = if let Some(_enum_type) = enum_fields.get(k) {
-                                // Map string value to Elixir atom.
+                                // Enum fields: pass as snake_case string (NIF expects strings).
                                 if let Some(s) = v.as_str() {
                                     let snake_val = s.to_snake_case();
-                                    format!(":{snake_val}")
+                                    format!("\"{snake_val}\"")
                                 } else {
                                     json_to_elixir(v)
                                 }
                             } else {
                                 json_to_elixir(v)
                             };
-                            format!("{snake_key}: {elixir_val}")
+                            format!("\"{snake_key}\" => {elixir_val}")
                         })
                         .collect();
                     return Some(format!("%{{{}}}", fields.join(", ")));

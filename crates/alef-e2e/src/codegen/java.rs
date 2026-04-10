@@ -58,9 +58,7 @@ impl E2eCodegen for JavaCodegen {
 
         // Resolve Java package info for the dependency.
         let java_group_id = alef_config.java_package();
-        let pkg_version = alef_config
-            .resolved_version()
-            .unwrap_or_else(|| "0.1.0".to_string());
+        let pkg_version = alef_config.resolved_version().unwrap_or_else(|| "0.1.0".to_string());
 
         // Generate pom.xml.
         files.push(GeneratedFile {
@@ -309,7 +307,8 @@ fn render_test_method(
             .iter()
             .any(|arg| arg.arg_type == "json_object" && fixture.input.get(&arg.field).is_some_and(|v| !v.is_null()));
 
-    let throws_clause = if needs_deser { " throws Exception" } else { "" };
+    // Always add throws Exception since the convert method may throw checked exceptions.
+    let throws_clause = " throws Exception";
 
     let _ = writeln!(out, "    @Test");
     let _ = writeln!(out, "    void test{method_name}(){throws_clause} {{");
