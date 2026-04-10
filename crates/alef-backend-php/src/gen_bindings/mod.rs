@@ -300,11 +300,12 @@ impl Backend for PhpBackend {
             }
             content.push_str("     *\n");
             for p in &func.params {
-                let ptype = php_type(&p.ty);
+                let ptype = php_phpdoc_type(&p.ty);
                 let nullable_prefix = if p.optional { "?" } else { "" };
                 content.push_str(&format!("     * @param {}{} ${}\n", nullable_prefix, ptype, p.name));
             }
-            content.push_str(&format!("     * @return {}\n", return_php_type));
+            let return_phpdoc = php_phpdoc_type(&func.return_type);
+            content.push_str(&format!("     * @return {}\n", return_phpdoc));
             if func.error_type.is_some() {
                 content.push_str(&format!("     * @throws \\{}\\{}Exception\n", namespace, class_name));
             }
@@ -485,19 +486,15 @@ impl Backend for PhpBackend {
 
         for func in &api.functions {
             let return_type = php_type_fq(&func.return_type, &namespace);
-            content.push_str(&format!("/**\n * @param "));
+            let return_phpdoc = php_phpdoc_type_fq(&func.return_type, &namespace);
+            content.push_str("/**\n");
             // PHPDoc params with fully-qualified types
-            let phpdoc_params: Vec<String> = func
-                .params
-                .iter()
-                .map(|p| {
-                    let ptype = php_type_fq(&p.ty, &namespace);
-                    let nullable_prefix = if p.optional { "?" } else { "" };
-                    format!("{}{} ${}", nullable_prefix, ptype, p.name)
-                })
-                .collect();
-            content.push_str(&phpdoc_params.join("\n * @param "));
-            content.push_str(&format!("\n * @return {}\n */\n", return_type));
+            for p in &func.params {
+                let ptype = php_phpdoc_type_fq(&p.ty, &namespace);
+                let nullable_prefix = if p.optional { "?" } else { "" };
+                content.push_str(&format!(" * @param {}{} ${}\n", nullable_prefix, ptype, p.name));
+            }
+            content.push_str(&format!(" * @return {}\n */\n", return_phpdoc));
 
             let params: Vec<String> = func
                 .params
@@ -543,6 +540,32 @@ impl Backend for PhpBackend {
             depends_on_ffi: false,
             post_build: vec![],
         })
+    }
+}
+
+/// Map an IR [`TypeRef`] to a PHPDoc type string with generic parameters (e.g., `array<string>`).
+/// PHPStan at level `max` requires iterable value types in PHPDoc annotations.
+fn php_phpdoc_type(ty: &TypeRef) -> String {
+    match ty {
+        TypeRef::Vec(inner) => format!("array<{}>", php_phpdoc_type(inner)),
+        TypeRef::Map(k, v) => format!("array<{}, {}>", php_phpdoc_type(k), php_phpdoc_type(v)),
+        TypeRef::Optional(inner) => format!("?{}", php_phpdoc_type(inner)),
+        _ => php_type(ty),
+    }
+}
+
+/// Map an IR [`TypeRef`] to a fully-qualified PHPDoc type string with generics (e.g., `array<\Ns\T>`).
+fn php_phpdoc_type_fq(ty: &TypeRef, namespace: &str) -> String {
+    match ty {
+        TypeRef::Vec(inner) => format!("array<{}>", php_phpdoc_type_fq(inner, namespace)),
+        TypeRef::Map(k, v) => format!(
+            "array<{}, {}>",
+            php_phpdoc_type_fq(k, namespace),
+            php_phpdoc_type_fq(v, namespace)
+        ),
+        TypeRef::Named(name) => format!("\\{}\\{}", namespace, name),
+        TypeRef::Optional(inner) => format!("?{}", php_phpdoc_type_fq(inner, namespace)),
+        _ => php_type(ty),
     }
 }
 

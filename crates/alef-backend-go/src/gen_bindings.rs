@@ -70,11 +70,22 @@ impl Backend for GoBackend {
             .and_then(|p| {
                 let path = p.as_path();
                 path.ancestors()
-                    .find(|a| a.file_name().is_some_and(|n| n != "src" && n != "lib" && n != "include"))
+                    .find(|a| {
+                        a.file_name()
+                            .is_some_and(|n| n != "src" && n != "lib" && n != "include")
+                    })
                     .map(|a| a.to_string_lossy().to_string())
             })
             .unwrap_or_else(|| format!("crates/{ffi_lib_name}"));
-        let content = strip_trailing_whitespace(&gen_go_file(api, &ffi_prefix, &pkg_name, &ffi_lib_name, &ffi_header, &ffi_crate_dir, &output_dir));
+        let content = strip_trailing_whitespace(&gen_go_file(
+            api,
+            &ffi_prefix,
+            &pkg_name,
+            &ffi_lib_name,
+            &ffi_header,
+            &ffi_crate_dir,
+            &output_dir,
+        ));
 
         // Build adapter body map (consumed by generators via body substitution)
         let _adapter_bodies = alef_adapters::build_adapter_bodies(config, Language::Go)?;
@@ -118,7 +129,15 @@ fn strip_trailing_whitespace(content: &str) -> String {
 }
 
 /// Generate the complete Go binding file wrapping the C FFI layer.
-fn gen_go_file(api: &ApiSurface, ffi_prefix: &str, pkg_name: &str, ffi_lib_name: &str, ffi_header: &str, ffi_crate_dir: &str, go_output_dir: &str) -> String {
+fn gen_go_file(
+    api: &ApiSurface,
+    ffi_prefix: &str,
+    pkg_name: &str,
+    ffi_lib_name: &str,
+    ffi_header: &str,
+    ffi_crate_dir: &str,
+    go_output_dir: &str,
+) -> String {
     let mut out = String::with_capacity(4096);
 
     // Compute relative path from Go output dir to project root.
@@ -130,7 +149,11 @@ fn gen_go_file(api: &ApiSurface, ffi_prefix: &str, pkg_name: &str, ffi_lib_name:
     writeln!(out, "package {}\n", pkg_name).ok();
     writeln!(out, "/*").ok();
     writeln!(out, "#cgo CFLAGS: -I${{SRCDIR}}/{to_root}{ffi_crate_dir}/include").ok();
-    writeln!(out, "#cgo LDFLAGS: -L${{SRCDIR}}/{to_root}target/release -l{ffi_lib_name}").ok();
+    writeln!(
+        out,
+        "#cgo LDFLAGS: -L${{SRCDIR}}/{to_root}target/release -l{ffi_lib_name}"
+    )
+    .ok();
     writeln!(out, "#include \"{}\"", ffi_header).ok();
     writeln!(out, "*/\nimport \"C\"").ok();
     writeln!(out).ok();
@@ -161,8 +184,11 @@ fn gen_go_file(api: &ApiSurface, ffi_prefix: &str, pkg_name: &str, ffi_lib_name:
     // Generate struct types
     for typ in &api.types {
         writeln!(out, "{}\n", gen_struct_type(typ)).ok();
-        // Generate functional options pattern if type has defaults
-        if typ.has_default {
+        // Generate functional options pattern if type has defaults.
+        // Skip "Update" types (e.g., ConversionOptionsUpdate) — they are partial update
+        // structs that share field names with the primary config type, producing duplicate
+        // With* function declarations.
+        if typ.has_default && !typ.name.ends_with("Update") {
             writeln!(out, "{}\n", gen_config_options(typ)).ok();
         }
     }
