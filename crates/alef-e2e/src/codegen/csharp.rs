@@ -164,7 +164,15 @@ fn render_test_file(
     let _ = writeln!(out, "{{");
 
     for (i, fixture) in fixtures.iter().enumerate() {
-        render_test_method(&mut out, fixture, class_name, function_name, result_var, args, field_resolver);
+        render_test_method(
+            &mut out,
+            fixture,
+            class_name,
+            function_name,
+            result_var,
+            args,
+            field_resolver,
+        );
         if i + 1 < fixtures.len() {
             let _ = writeln!(out);
         }

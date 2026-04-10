@@ -157,7 +157,15 @@ fn render_test_file(
     let _ = writeln!(out, "describe('{category}', () => {{");
 
     for (i, fixture) in fixtures.iter().enumerate() {
-        render_test_case(&mut out, fixture, function_name, result_var, is_async, args, field_resolver);
+        render_test_case(
+            &mut out,
+            fixture,
+            function_name,
+            result_var,
+            is_async,
+            args,
+            field_resolver,
+        );
         if i + 1 < fixtures.len() {
             let _ = writeln!(out);
         }

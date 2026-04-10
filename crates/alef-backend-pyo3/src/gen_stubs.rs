@@ -15,15 +15,16 @@ fn python_safe_name(name: &str) -> String {
     }
 }
 
-/// For constructor parameters, convert enum types to `str` since PyO3 accepts any string.
-/// This avoids mypy errors when passing string values to Literal-typed parameters.
+/// For constructor parameters, use the enum type name for enum fields.
+/// The enum stub has `__init__(self, value: int | str)` so callers can pass
+/// either a raw string/int or an enum instance.
 fn constructor_param_type(ty: &TypeRef, api: &ApiSurface) -> String {
     let enum_names: std::collections::HashSet<String> = api.enums.iter().map(|e| e.name.clone()).collect();
 
     match ty {
-        TypeRef::Named(name) if enum_names.contains(name) => "str".to_string(),
+        TypeRef::Named(name) if enum_names.contains(name) => format!("{} | str", name),
         TypeRef::Optional(inner) => match inner.as_ref() {
-            TypeRef::Named(name) if enum_names.contains(name) => "str | None".to_string(),
+            TypeRef::Named(name) if enum_names.contains(name) => format!("{} | str | None", name),
             _ => python_type(ty),
         },
         _ => python_type(ty),
@@ -267,6 +268,8 @@ fn gen_enum_stub(enum_def: &EnumDef) -> String {
     for (idx, variant) in enum_def.variants.iter().enumerate() {
         lines.push(format!("    {}: int = {}", variant.name, idx));
     }
+
+    lines.push("    def __init__(self, value: int | str) -> None: ...".to_string());
 
     lines.join("\n")
 }

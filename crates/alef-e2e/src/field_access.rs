@@ -35,7 +35,10 @@ impl FieldResolver {
     /// Resolve a fixture field path to the actual struct path.
     /// Falls back to the field itself if no alias exists.
     pub fn resolve<'a>(&'a self, fixture_field: &'a str) -> &'a str {
-        self.aliases.get(fixture_field).map(String::as_str).unwrap_or(fixture_field)
+        self.aliases
+            .get(fixture_field)
+            .map(String::as_str)
+            .unwrap_or(fixture_field)
     }
 
     /// Check if a resolved field path is optional.
@@ -59,7 +62,7 @@ impl FieldResolver {
             return None;
         }
         let segments = parse_path(resolved);
-        let local_var = resolved.replace('.', "_").replace('[', "_").replace(']', "");
+        let local_var = resolved.replace(['.', '['], "_").replace(']', "");
         let accessor = render_accessor(&segments, "rust", result_var);
         let binding = format!("let {local_var} = {accessor}.as_deref().unwrap_or(\"\");");
         Some((binding, local_var))
@@ -309,10 +312,7 @@ mod tests {
     #[test]
     fn test_accessor_rust_struct() {
         let r = make_resolver();
-        assert_eq!(
-            r.accessor("title", "rust", "result"),
-            "result.metadata.document.title"
-        );
+        assert_eq!(r.accessor("title", "rust", "result"), "result.metadata.document.title");
     }
 
     #[test]
@@ -336,10 +336,7 @@ mod tests {
     #[test]
     fn test_accessor_go() {
         let r = make_resolver();
-        assert_eq!(
-            r.accessor("title", "go", "result"),
-            "result.Metadata.Document.Title"
-        );
+        assert_eq!(r.accessor("title", "go", "result"), "result.Metadata.Document.Title");
     }
 
     #[test]
@@ -381,10 +378,7 @@ mod tests {
     #[test]
     fn test_accessor_r() {
         let r = make_resolver();
-        assert_eq!(
-            r.accessor("title", "r", "result"),
-            "result$metadata$document$title"
-        );
+        assert_eq!(r.accessor("title", "r", "result"), "result$metadata$document$title");
     }
 
     #[test]

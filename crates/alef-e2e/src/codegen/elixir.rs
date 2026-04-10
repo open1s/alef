@@ -143,7 +143,15 @@ fn render_test_file(
     let _ = writeln!(out);
 
     for (i, fixture) in fixtures.iter().enumerate() {
-        render_test_case(&mut out, fixture, module_path, function_name, result_var, args, field_resolver);
+        render_test_case(
+            &mut out,
+            fixture,
+            module_path,
+            function_name,
+            result_var,
+            args,
+            field_resolver,
+        );
         if i + 1 < fixtures.len() {
             let _ = writeln!(out);
         }

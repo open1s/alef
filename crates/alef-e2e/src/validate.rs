@@ -27,8 +27,7 @@ impl fmt::Display for ValidationError {
 pub fn validate_fixtures(fixtures_dir: &Path) -> Result<Vec<ValidationError>> {
     let schema_value: serde_json::Value =
         serde_json::from_str(FIXTURE_SCHEMA).context("failed to parse embedded fixture schema")?;
-    let validator =
-        jsonschema::validator_for(&schema_value).context("failed to compile fixture schema")?;
+    let validator = jsonschema::validator_for(&schema_value).context("failed to compile fixture schema")?;
 
     let mut errors = Vec::new();
     validate_recursive(fixtures_dir, fixtures_dir, &validator, &mut errors)?;
@@ -41,8 +40,7 @@ fn validate_recursive(
     validator: &jsonschema::Validator,
     errors: &mut Vec<ValidationError>,
 ) -> Result<()> {
-    let entries = std::fs::read_dir(dir)
-        .with_context(|| format!("failed to read directory: {}", dir.display()))?;
+    let entries = std::fs::read_dir(dir).with_context(|| format!("failed to read directory: {}", dir.display()))?;
 
     let mut paths: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
     paths.sort();
@@ -57,11 +55,7 @@ fn validate_recursive(
                 continue;
             }
 
-            let relative = path
-                .strip_prefix(base)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .to_string();
+            let relative = path.strip_prefix(base).unwrap_or(&path).to_string_lossy().to_string();
 
             let content = match std::fs::read_to_string(&path) {
                 Ok(c) => c,

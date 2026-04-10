@@ -653,6 +653,23 @@ fn python_zero_value(ty: &alef_core::ir::TypeRef, enum_names: &std::collections:
     }
 }
 
+/// Like `python_type` but prefixes Named types with `_rust.` for return type annotations.
+/// This ensures the generated api.py return types match the native module types.
+fn rust_prefixed_python_type(ty: &alef_core::ir::TypeRef) -> String {
+    use alef_core::ir::TypeRef;
+    match ty {
+        TypeRef::Named(name) => format!("_rust.{name}"),
+        TypeRef::Optional(inner) => format!("{} | None", rust_prefixed_python_type(inner)),
+        TypeRef::Vec(inner) => format!("list[{}]", rust_prefixed_python_type(inner)),
+        TypeRef::Map(k, v) => format!(
+            "dict[{}, {}]",
+            rust_prefixed_python_type(k),
+            rust_prefixed_python_type(v)
+        ),
+        _ => crate::type_map::python_type(ty),
+    }
+}
+
 /// Recursively collect all Named type references from a TypeRef.
 fn collect_named_types(ty: &alef_core::ir::TypeRef, out: &mut std::collections::BTreeSet<String>) {
     use alef_core::ir::TypeRef;
@@ -754,9 +771,8 @@ fn gen_api_py(api: &ApiSurface, module_name: &str) -> String {
         all_type_imports.insert(type_name.clone());
     }
     for func in &api.functions {
-        // Collect return type references
-        collect_named_types(&func.return_type, &mut all_type_imports);
-        // Collect param type references (non-converter types like opaque handles)
+        // Collect param type references (non-converter types like opaque handles).
+        // Return types use `_rust.` prefix and don't need imports.
         for param in &func.params {
             collect_named_types(&param.ty, &mut all_type_imports);
         }
@@ -806,7 +822,9 @@ fn gen_api_py(api: &ApiSurface, module_name: &str) -> String {
         let typ = default_types[type_name];
         let snake = type_name.to_snake_case();
 
-        out.push_str(&format!("def _to_rust_{snake}(value: {type_name} | None) -> object:\n"));
+        out.push_str(&format!(
+            "def _to_rust_{snake}(value: {type_name} | None) -> _rust.{type_name} | None:\n"
+        ));
         out.push_str(&format!(
             "    \"\"\"Convert Python {type_name} to Rust binding type.\"\"\"\n"
         ));
@@ -831,15 +849,22 @@ fn gen_api_py(api: &ApiSurface, module_name: &str) -> String {
             if let Some(nested_name) = inner_named {
                 if default_types.contains_key(nested_name) {
                     let nested_snake = nested_name.to_snake_case();
+                    // Non-optional fields: converter returns T | None but field expects T.
+                    // Add type: ignore since the value is guaranteed non-None at runtime.
+                    let ignore = if !field.optional && !matches!(&field.ty, TypeRef::Optional(_)) {
+                        "  # type: ignore[arg-type]"
+                    } else {
+                        ""
+                    };
                     out.push_str(&format!(
-                        "        {}=_to_rust_{nested_snake}(value.{}),\n",
+                        "        {}=_to_rust_{nested_snake}(value.{}),{ignore}\n",
                         field.name, field.name
                     ));
                     continue;
                 }
                 // Single enum field: convert str -> Rust enum
                 if enum_names.contains(nested_name) {
-                    if matches!(&field.ty, TypeRef::Optional(_)) {
+                    if matches!(&field.ty, TypeRef::Optional(_)) || field.optional {
                         out.push_str(&format!(
                             "        {name}=_rust.{enum_name}(value.{name}) if value.{name} is not None else None,\n",
                             name = field.name,
@@ -889,7 +914,7 @@ fn gen_api_py(api: &ApiSurface, module_name: &str) -> String {
             sig_parts.push(format!("{}: {}", param.name, py_type));
         }
 
-        let return_type_str = crate::type_map::python_type(&func.return_type);
+        let return_type_str = rust_prefixed_python_type(&func.return_type);
         out.push_str(&format!(
             "def {}({}) -> {}:\n",
             func.name,

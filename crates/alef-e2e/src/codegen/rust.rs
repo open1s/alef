@@ -250,7 +250,15 @@ fn render_test_function(
             // Already handled by .expect() above.
             continue;
         }
-        render_assertion(out, assertion, result_var, dep_name, false, &unwrapped_fields, field_resolver);
+        render_assertion(
+            out,
+            assertion,
+            result_var,
+            dep_name,
+            false,
+            &unwrapped_fields,
+            field_resolver,
+        );
     }
 
     let _ = writeln!(out, "}}");
@@ -479,10 +487,7 @@ fn render_assertion(
                 let resolved = field_resolver.resolve(f);
                 if !is_unwrapped && field_resolver.is_optional(resolved) {
                     let accessor = field_resolver.accessor(f, "rust", result_var);
-                    let _ = writeln!(
-                        out,
-                        "    assert!({accessor}.is_none(), \"expected {f} to be absent\");"
-                    );
+                    let _ = writeln!(out, "    assert!({accessor}.is_none(), \"expected {f} to be absent\");");
                 } else {
                     let _ = writeln!(out, "    assert!({field_access}.is_empty(), \"expected empty value\");");
                 }

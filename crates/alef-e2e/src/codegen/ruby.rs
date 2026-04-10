@@ -144,7 +144,15 @@ fn render_spec_file(
     let _ = writeln!(out, "RSpec.describe \"{category}\" do");
 
     for (i, fixture) in fixtures.iter().enumerate() {
-        render_example(&mut out, fixture, function_name, class_name, result_var, args, field_resolver);
+        render_example(
+            &mut out,
+            fixture,
+            function_name,
+            class_name,
+            result_var,
+            args,
+            field_resolver,
+        );
         if i + 1 < fixtures.len() {
             let _ = writeln!(out);
         }
