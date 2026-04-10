@@ -164,6 +164,52 @@ fn render_test_runner_header(active_groups: &[(&FixtureGroup, Vec<&Fixture>)]) -
     let _ = writeln!(out, "#define TEST_RUNNER_H");
     let _ = writeln!(out);
     let _ = writeln!(out, "#include <string.h>");
+    let _ = writeln!(out, "#include <stdlib.h>");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "/**");
+    let _ = writeln!(
+        out,
+        " * Extract a string value for a given key from a JSON object string."
+    );
+    let _ = writeln!(
+        out,
+        " * Returns a heap-allocated copy of the value, or NULL if not found."
+    );
+    let _ = writeln!(out, " * Caller must free() the returned string.");
+    let _ = writeln!(out, " */");
+    let _ = writeln!(
+        out,
+        "static inline char *htm_json_get_string(const char *json, const char *key) {{"
+    );
+    let _ = writeln!(out, "    if (json == NULL || key == NULL) return NULL;");
+    let _ = writeln!(out, "    /* Build search pattern: \"key\":  */");
+    let _ = writeln!(out, "    size_t key_len = strlen(key);");
+    let _ = writeln!(out, "    char *pattern = (char *)malloc(key_len + 5);");
+    let _ = writeln!(out, "    if (!pattern) return NULL;");
+    let _ = writeln!(out, "    pattern[0] = '\"';");
+    let _ = writeln!(out, "    memcpy(pattern + 1, key, key_len);");
+    let _ = writeln!(out, "    pattern[key_len + 1] = '\"';");
+    let _ = writeln!(out, "    pattern[key_len + 2] = ':';");
+    let _ = writeln!(out, "    pattern[key_len + 3] = '\\0';");
+    let _ = writeln!(out, "    const char *found = strstr(json, pattern);");
+    let _ = writeln!(out, "    free(pattern);");
+    let _ = writeln!(out, "    if (!found) return NULL;");
+    let _ = writeln!(out, "    found += key_len + 3; /* skip past \"key\": */");
+    let _ = writeln!(out, "    while (*found == ' ' || *found == '\\t') found++;");
+    let _ = writeln!(out, "    if (*found != '\"') return NULL; /* not a string value */");
+    let _ = writeln!(out, "    found++; /* skip opening quote */");
+    let _ = writeln!(out, "    const char *end = found;");
+    let _ = writeln!(out, "    while (*end && *end != '\"') {{");
+    let _ = writeln!(out, "        if (*end == '\\\\') {{ end++; if (*end) end++; }}");
+    let _ = writeln!(out, "        else end++;");
+    let _ = writeln!(out, "    }}");
+    let _ = writeln!(out, "    size_t val_len = (size_t)(end - found);");
+    let _ = writeln!(out, "    char *result_str = (char *)malloc(val_len + 1);");
+    let _ = writeln!(out, "    if (!result_str) return NULL;");
+    let _ = writeln!(out, "    memcpy(result_str, found, val_len);");
+    let _ = writeln!(out, "    result_str[val_len] = '\\0';");
+    let _ = writeln!(out, "    return result_str;");
+    let _ = writeln!(out, "}}");
     let _ = writeln!(out);
     let _ = writeln!(out, "/**");
     let _ = writeln!(out, " * Count top-level elements in a JSON array string.");
@@ -172,18 +218,30 @@ fn render_test_runner_header(active_groups: &[(&FixtureGroup, Vec<&Fixture>)]) -
     let _ = writeln!(out, "static inline int htm_json_array_count(const char *json) {{");
     let _ = writeln!(out, "    if (json == NULL) return 0;");
     let _ = writeln!(out, "    /* Skip leading whitespace */");
-    let _ = writeln!(out, "    while (*json == ' ' || *json == '\\t' || *json == '\\n') json++;");
+    let _ = writeln!(
+        out,
+        "    while (*json == ' ' || *json == '\\t' || *json == '\\n') json++;"
+    );
     let _ = writeln!(out, "    if (*json != '[') return 0;");
     let _ = writeln!(out, "    json++;");
     let _ = writeln!(out, "    /* Skip whitespace after '[' */");
-    let _ = writeln!(out, "    while (*json == ' ' || *json == '\\t' || *json == '\\n') json++;");
+    let _ = writeln!(
+        out,
+        "    while (*json == ' ' || *json == '\\t' || *json == '\\n') json++;"
+    );
     let _ = writeln!(out, "    if (*json == ']') return 0;");
     let _ = writeln!(out, "    int count = 1;");
     let _ = writeln!(out, "    int depth = 0;");
     let _ = writeln!(out, "    int in_string = 0;");
-    let _ = writeln!(out, "    for (; *json && !(*json == ']' && depth == 0 && !in_string); json++) {{");
+    let _ = writeln!(
+        out,
+        "    for (; *json && !(*json == ']' && depth == 0 && !in_string); json++) {{"
+    );
     let _ = writeln!(out, "        if (*json == '\\\\' && in_string) {{ json++; continue; }}");
-    let _ = writeln!(out, "        if (*json == '\"') {{ in_string = !in_string; continue; }}");
+    let _ = writeln!(
+        out,
+        "        if (*json == '\"') {{ in_string = !in_string; continue; }}"
+    );
     let _ = writeln!(out, "        if (in_string) continue;");
     let _ = writeln!(out, "        if (*json == '[' || *json == '{{') depth++;");
     let _ = writeln!(out, "        else if (*json == ']' || *json == '}}') depth--;");
@@ -345,16 +403,20 @@ fn render_test_function(
     // C FFI uses the opaque handle pattern: {prefix}_conversion_result_{field}(handle).
     // For nested paths we generate chained FFI accessor calls using the type
     // chain from `fields_c_types`.
-    let mut accessed_fields: Vec<(String, String)> = Vec::new();
+    // Each entry: (fixture_field, local_var, from_json_extract).
+    // `from_json_extract` is true when the variable was extracted from a JSON
+    // map via htm_json_get_string and needs free() instead of {prefix}_free_string().
+    let mut accessed_fields: Vec<(String, String, bool)> = Vec::new();
     // Track intermediate handles emitted so we can free them and avoid duplicates.
     // Each entry: (handle_var_name, snake_type_name) — freed in reverse order.
     let mut intermediate_handles: Vec<(String, String)> = Vec::new();
 
     for assertion in &fixture.assertions {
         if let Some(f) = &assertion.field {
-            if !f.is_empty() && !accessed_fields.iter().any(|(k, _)| k == f) {
+            if !f.is_empty() && !accessed_fields.iter().any(|(k, _, _)| k == f) {
                 let resolved = field_resolver.resolve(f);
                 let local_var = f.replace(['.', '['], "_").replace(']', "");
+                let has_map_access = resolved.contains('[');
 
                 if resolved.contains('.') {
                     emit_nested_accessor(
@@ -370,7 +432,7 @@ fn render_test_function(
                     let accessor_fn = format!("{prefix}_conversion_result_{resolved}");
                     let _ = writeln!(out, "    char* {local_var} = {accessor_fn}({result_var});");
                 }
-                accessed_fields.push((f.clone(), local_var.clone()));
+                accessed_fields.push((f.clone(), local_var.clone(), has_map_access));
             }
         }
     }
@@ -380,8 +442,12 @@ fn render_test_function(
     }
 
     // Free extracted leaf strings.
-    for (_f, local_var) in &accessed_fields {
-        let _ = writeln!(out, "    {prefix}_free_string({local_var});");
+    for (_f, local_var, from_json) in &accessed_fields {
+        if *from_json {
+            let _ = writeln!(out, "    free({local_var});");
+        } else {
+            let _ = writeln!(out, "    {prefix}_free_string({local_var});");
+        }
     }
     // Free intermediate handles in reverse order.
     for (handle_var, snake_type) in intermediate_handles.iter().rev() {
@@ -425,6 +491,31 @@ fn emit_nested_accessor(
 
     for (i, segment) in segments.iter().enumerate() {
         let is_leaf = i + 1 == segments.len();
+
+        // Check for map access: "field[key]"
+        if let Some(bracket_pos) = segment.find('[') {
+            let field_name = &segment[..bracket_pos];
+            let key = segment[bracket_pos + 1..].trim_end_matches(']');
+            let field_snake = field_name.to_snake_case();
+            let accessor_fn = format!("{prefix}_{current_snake_type}_{field_snake}");
+
+            // The map accessor returns a char* (JSON object string).
+            // Use htm_json_get_string to extract the key value.
+            let json_var = format!("{field_snake}_json");
+            if !intermediate_handles.iter().any(|(h, _)| h == &json_var) {
+                let _ = writeln!(out, "    char* {json_var} = {accessor_fn}({current_handle});");
+                let _ = writeln!(out, "    assert({json_var} != NULL);");
+                // Track for freeing — use prefix_free_string since it's a char*.
+                intermediate_handles.push((json_var.clone(), "free_string".to_string()));
+            }
+            // Extract the key from the JSON map.
+            let _ = writeln!(
+                out,
+                "    char* {local_var} = htm_json_get_string({json_var}, \"{key}\");"
+            );
+            return; // Map access is always the leaf.
+        }
+
         let seg_snake = segment.to_snake_case();
         let accessor_fn = format!("{prefix}_{current_snake_type}_{seg_snake}");
 
@@ -506,15 +597,15 @@ fn render_assertion(
     assertion: &Assertion,
     result_var: &str,
     _field_resolver: &FieldResolver,
-    accessed_fields: &[(String, String)],
+    accessed_fields: &[(String, String, bool)],
 ) {
     let field_expr = match &assertion.field {
         Some(f) if !f.is_empty() => {
             // Use the local variable extracted from the opaque handle.
             accessed_fields
                 .iter()
-                .find(|(k, _)| k == f)
-                .map(|(_, local)| local.clone())
+                .find(|(k, _, _)| k == f)
+                .map(|(_, local, _)| local.clone())
                 .unwrap_or_else(|| result_var.to_string())
         }
         _ => result_var.to_string(),
@@ -665,7 +756,10 @@ fn render_assertion(
                 if let Some(n) = val.as_u64() {
                     let _ = writeln!(out, "    {{");
                     let _ = writeln!(out, "        /* count_min: count top-level JSON array elements */");
-                    let _ = writeln!(out, "        assert({field_expr} != NULL && \"expected non-null collection JSON\");");
+                    let _ = writeln!(
+                        out,
+                        "        assert({field_expr} != NULL && \"expected non-null collection JSON\");"
+                    );
                     let _ = writeln!(out, "        int elem_count = htm_json_array_count({field_expr});");
                     let _ = writeln!(
                         out,

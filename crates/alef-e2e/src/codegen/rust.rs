@@ -133,8 +133,6 @@ publish = false
 {dep_spec}
 serde_json = "1"
 tokio = {{ version = "1", features = ["full"] }}
-
-[dev-dependencies]
 wiremock = "0.6"
 "#
     )
@@ -577,6 +575,16 @@ fn render_assertion(
                     let _ = writeln!(
                         out,
                         "    assert!({field_access}.len() <= {n}, \"expected length <= {n}, got {{}}\", {field_access}.len());"
+                    );
+                }
+            }
+        }
+        "count_min" => {
+            if let Some(val) = &assertion.value {
+                if let Some(n) = val.as_u64() {
+                    let _ = writeln!(
+                        out,
+                        "    assert!({field_access}.len() >= {n}, \"expected at least {n} elements, got {{}}\", {field_access}.len());"
                     );
                 }
             }

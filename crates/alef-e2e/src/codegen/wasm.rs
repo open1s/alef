@@ -401,6 +401,13 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
                 let _ = writeln!(out, "    expect({field_expr}.startsWith({js_val})).toBe(true);");
             }
         }
+        "count_min" => {
+            if let Some(val) = &assertion.value {
+                if let Some(n) = val.as_u64() {
+                    let _ = writeln!(out, "    expect({field_expr}.length).toBeGreaterThanOrEqual({n});");
+                }
+            }
+        }
         "not_error" => {
             // No-op — if we got here, the call succeeded.
         }

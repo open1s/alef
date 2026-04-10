@@ -222,11 +222,14 @@ fn render_test_case(
         enum_fields,
     );
 
+    // Use the bang variant (convert!) to unwrap {:ok, result} tuples.
+    let bang_function = format!("{function_name}!");
+
     if expects_error {
         let _ = writeln!(out, "  describe \"{test_name}\" do");
         let _ = writeln!(out, "    test \"{description}\" do");
         let _ = writeln!(out, "      assert_raise RuntimeError, fn ->");
-        let _ = writeln!(out, "        {module_path}.{function_name}({args_str})");
+        let _ = writeln!(out, "        {module_path}.{bang_function}({args_str})");
         let _ = writeln!(out, "      end");
         let _ = writeln!(out, "    end");
         let _ = writeln!(out, "  end");
@@ -235,7 +238,7 @@ fn render_test_case(
 
     let _ = writeln!(out, "  describe \"{test_name}\" do");
     let _ = writeln!(out, "    test \"{description}\" do");
-    let _ = writeln!(out, "      {result_var} = {module_path}.{function_name}({args_str})");
+    let _ = writeln!(out, "      {result_var} = {module_path}.{bang_function}({args_str})");
 
     for assertion in &fixture.assertions {
         render_assertion(out, assertion, result_var, field_resolver);
@@ -248,9 +251,9 @@ fn render_test_case(
 fn build_args_string(
     input: &serde_json::Value,
     args: &[crate::config::ArgMapping],
-    module_path: &str,
+    _module_path: &str,
     options_type: Option<&str>,
-    options_default_fn: Option<&str>,
+    _options_default_fn: Option<&str>,
     enum_fields: &HashMap<String, String>,
 ) -> String {
     if args.is_empty() {
@@ -264,10 +267,10 @@ fn build_args_string(
             if val.is_null() && arg.optional {
                 return None;
             }
-            // For json_object args with options_type, use struct update on default.
+            // For json_object args with options_type, pass as a plain map with
+            // atom keys. The Elixir binding accepts a map for options.
             if arg.arg_type == "json_object" && !val.is_null() {
                 if let (Some(_opts_type), Some(obj)) = (options_type, val.as_object()) {
-                    let default_fn = options_default_fn.unwrap_or("conversionoptions_default");
                     let fields: Vec<String> = obj
                         .iter()
                         .map(|(k, v)| {
@@ -286,7 +289,7 @@ fn build_args_string(
                             format!("{snake_key}: {elixir_val}")
                         })
                         .collect();
-                    return Some(format!("%{{{module_path}.{default_fn}() | {}}}", fields.join(", ")));
+                    return Some(format!("%{{{}}}", fields.join(", ")));
                 }
             }
             Some(json_to_elixir(val))
@@ -302,11 +305,15 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         _ => result_var.to_string(),
     };
 
+    // For string equality, trim trailing whitespace to handle trailing newlines
+    // from the converter.
+    let trimmed_field_expr = format!("String.trim({field_expr})");
+
     match assertion.assertion_type.as_str() {
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let elixir_val = json_to_elixir(expected);
-                let _ = writeln!(out, "      assert {field_expr} == {elixir_val}");
+                let _ = writeln!(out, "      assert {trimmed_field_expr} == {elixir_val}");
             }
         }
         "contains" => {
@@ -333,7 +340,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
             let _ = writeln!(out, "      assert {field_expr} != \"\"");
         }
         "is_empty" => {
-            let _ = writeln!(out, "      assert {field_expr} == \"\"");
+            let _ = writeln!(out, "      assert {trimmed_field_expr} == \"\"");
         }
         "contains_any" => {
             if let Some(values) = &assertion.values {
@@ -392,6 +399,13 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
             if let Some(val) = &assertion.value {
                 if let Some(n) = val.as_u64() {
                     let _ = writeln!(out, "      assert String.length({field_expr}) <= {n}");
+                }
+            }
+        }
+        "count_min" => {
+            if let Some(val) = &assertion.value {
+                if let Some(n) = val.as_u64() {
+                    let _ = writeln!(out, "      assert length({field_expr}) >= {n}");
                 }
             }
         }

@@ -60,13 +60,10 @@ impl E2eCodegen for CSharpCodegen {
             .unwrap_or_else(|| alef_config.crate_config.name.to_upper_camel_case());
         // The project reference path uses the crate name (with hyphens) for the directory
         // and the PascalCase name for the .csproj file.
-        let pkg_path = cs_pkg
-            .and_then(|p| p.path.as_ref())
-            .cloned()
-            .unwrap_or_else(|| {
-                let dir_name = &alef_config.crate_config.name;
-                format!("../../packages/csharp/{dir_name}/{pkg_name}.csproj")
-            });
+        let pkg_path = cs_pkg.and_then(|p| p.path.as_ref()).cloned().unwrap_or_else(|| {
+            let dir_name = &alef_config.crate_config.name;
+            format!("../../packages/csharp/{dir_name}/{pkg_name}.csproj")
+        });
 
         // Generate E2eTests.csproj.
         files.push(GeneratedFile {
@@ -381,6 +378,16 @@ fn render_assertion(
                     let _ = writeln!(
                         out,
                         "        Assert.True({field_expr}.Length <= {n}, \"expected length <= {n}\");"
+                    );
+                }
+            }
+        }
+        "count_min" => {
+            if let Some(val) = &assertion.value {
+                if let Some(n) = val.as_u64() {
+                    let _ = writeln!(
+                        out,
+                        "        Assert.True({field_expr}.Count >= {n}, \"expected at least {n} elements\");"
                     );
                 }
             }

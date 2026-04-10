@@ -249,9 +249,10 @@ fn build_args_string(
                         .map(|(k, v)| {
                             let snake_key = k.to_snake_case();
                             let rb_val = if enum_fields.contains_key(k) {
-                                // Enum fields: pass the string value as-is for Ruby.
+                                // Enum fields: convert to snake_case for Ruby bindings.
                                 if let Some(s) = v.as_str() {
-                                    format!("\"{s}\"")
+                                    let snake_val = s.to_snake_case();
+                                    format!("\"{snake_val}\"")
                                 } else {
                                     json_to_ruby(v)
                                 }
@@ -308,11 +309,19 @@ fn render_assertion(
         }
     };
 
+    // For string equality, strip trailing whitespace to handle trailing newlines
+    // from the converter.
+    let stripped_field_expr = if result_is_simple {
+        format!("{field_expr}.strip")
+    } else {
+        field_expr.clone()
+    };
+
     match assertion.assertion_type.as_str() {
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let rb_val = json_to_ruby(expected);
-                let _ = writeln!(out, "    expect({field_expr}).to eq({rb_val})");
+                let _ = writeln!(out, "    expect({stripped_field_expr}).to eq({rb_val})");
             }
         }
         "contains" => {
@@ -398,6 +407,13 @@ fn render_assertion(
             if let Some(val) = &assertion.value {
                 if let Some(n) = val.as_u64() {
                     let _ = writeln!(out, "    expect({field_expr}.length).to be <= {n}");
+                }
+            }
+        }
+        "count_min" => {
+            if let Some(val) = &assertion.value {
+                if let Some(n) = val.as_u64() {
+                    let _ = writeln!(out, "    expect({field_expr}.length).to be >= {n}");
                 }
             }
         }

@@ -456,6 +456,20 @@ mod tests {
     }
 
     #[test]
+    fn test_accessor_wasm_camel_case() {
+        let r = make_resolver();
+        assert_eq!(r.accessor("og", "wasm", "result"), "result.metadata.document.openGraph");
+        assert_eq!(
+            r.accessor("twitter", "wasm", "result"),
+            "result.metadata.document.twitterCard"
+        );
+        assert_eq!(
+            r.accessor("canonical", "wasm", "result"),
+            "result.metadata.document.canonicalUrl"
+        );
+    }
+
+    #[test]
     fn test_accessor_java() {
         let r = make_resolver();
         assert_eq!(

@@ -56,10 +56,16 @@ impl E2eCodegen for JavaCodegen {
             .cloned()
             .unwrap_or_else(|| alef_config.crate_config.name.clone());
 
+        // Resolve Java package info for the dependency.
+        let java_group_id = alef_config.java_package();
+        let pkg_version = alef_config
+            .resolved_version()
+            .unwrap_or_else(|| "0.1.0".to_string());
+
         // Generate pom.xml.
         files.push(GeneratedFile {
             path: output_base.join("pom.xml"),
-            content: render_pom_xml(&pkg_name),
+            content: render_pom_xml(&pkg_name, &java_group_id, &pkg_version),
             generated_header: false,
         });
 
@@ -118,7 +124,7 @@ impl E2eCodegen for JavaCodegen {
 // Rendering
 // ---------------------------------------------------------------------------
 
-fn render_pom_xml(pkg_name: &str) -> String {
+fn render_pom_xml(pkg_name: &str, java_group_id: &str, pkg_version: &str) -> String {
     let artifact_id = format!("{pkg_name}-e2e-java");
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -138,13 +144,18 @@ fn render_pom_xml(pkg_name: &str) -> String {
         <junit.version>5.11.4</junit.version>
     </properties>
 
+    <!-- The Java package JAR must be pre-installed in the local Maven repo.
+         Run: mvn install -f ../../packages/java/pom.xml -DskipTests before testing. -->
     <dependencies>
         <dependency>
-            <groupId>dev.kreuzberg</groupId>
+            <groupId>{java_group_id}</groupId>
             <artifactId>{pkg_name}</artifactId>
-            <version>0.1.0</version>
-            <scope>system</scope>
-            <systemPath>${{project.basedir}}/../../packages/java/target/{pkg_name}-0.1.0.jar</systemPath>
+            <version>{pkg_version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.18.2</version>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -231,6 +242,19 @@ fn render_test_file(
     }
     if needs_object_mapper {
         let _ = writeln!(out, "import com.fasterxml.jackson.databind.ObjectMapper;");
+    }
+    // Import the options type if tests use it (it's in the same package as the main class).
+    if let Some(opts_type) = options_type {
+        if needs_object_mapper {
+            // Derive the fully-qualified name from the main class import path.
+            let opts_package = if !import_path.is_empty() {
+                let pkg = import_path.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
+                format!("{pkg}.{opts_type}")
+            } else {
+                opts_type.to_string()
+            };
+            let _ = writeln!(out, "import {opts_package};");
+        }
     }
     let _ = writeln!(out);
 
@@ -371,7 +395,16 @@ fn render_assertion(
         result_var.to_string()
     } else {
         match &assertion.field {
-            Some(f) if !f.is_empty() => field_resolver.accessor(f, "java", result_var),
+            Some(f) if !f.is_empty() => {
+                let accessor = field_resolver.accessor(f, "java", result_var);
+                let resolved = field_resolver.resolve(f);
+                // Unwrap Optional fields with .orElse("") for string comparisons.
+                if field_resolver.is_optional(resolved) {
+                    format!("{accessor}.orElse(\"\")")
+                } else {
+                    accessor
+                }
+            }
             _ => result_var.to_string(),
         }
     };
@@ -510,6 +543,16 @@ fn render_assertion(
                     let _ = writeln!(
                         out,
                         "        assertTrue({field_expr}.length() <= {n}, \"expected length <= {n}\");"
+                    );
+                }
+            }
+        }
+        "count_min" => {
+            if let Some(val) = &assertion.value {
+                if let Some(n) = val.as_u64() {
+                    let _ = writeln!(
+                        out,
+                        "        assertThat({field_expr}).hasSizeGreaterThanOrEqualTo((int) {n});"
                     );
                 }
             }

@@ -450,6 +450,16 @@ fn render_assertion(
                 let _ = writeln!(out, "\t}}");
             }
         }
+        "count_min" => {
+            if let Some(val) = &assertion.value {
+                if let Some(n) = val.as_u64() {
+                    let _ = writeln!(
+                        out,
+                        "\tassert.GreaterOrEqual(t, len({field_expr}), {n}, \"expected at least {n} elements\")"
+                    );
+                }
+            }
+        }
         "not_error" => {
             // Already handled by the `if err != nil` check above.
         }

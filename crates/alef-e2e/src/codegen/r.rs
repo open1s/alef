@@ -310,10 +310,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         "count_min" => {
             if let Some(val) = &assertion.value {
                 if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "  expect_true(length({field_expr}) >= {n})"
-                    );
+                    let _ = writeln!(out, "  expect_true(length({field_expr}) >= {n})");
                 }
             }
         }

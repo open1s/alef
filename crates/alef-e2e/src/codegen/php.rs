@@ -77,6 +77,13 @@ impl E2eCodegen for PhpCodegen {
             generated_header: false,
         });
 
+        // Generate bootstrap.php.
+        files.push(GeneratedFile {
+            path: output_base.join("bootstrap.php"),
+            content: render_bootstrap(&pkg_path),
+            generated_header: true,
+        });
+
         // Generate test files per category.
         let tests_base = output_base.join("tests");
         let field_resolver = FieldResolver::new(&e2e_config.fields, &e2e_config.fields_optional);
@@ -124,37 +131,29 @@ impl E2eCodegen for PhpCodegen {
 // Rendering
 // ---------------------------------------------------------------------------
 
-fn render_composer_json(pkg_name: &str, pkg_path: &str) -> String {
-    format!(
-        r#"{{
+fn render_composer_json(_pkg_name: &str, _pkg_path: &str) -> String {
+    r#"{
   "name": "kreuzberg/e2e-php",
   "description": "E2e tests for PHP bindings",
   "type": "project",
-  "require-dev": {{
-    "phpunit/phpunit": "^11.0",
-    "{pkg_name}": "*"
-  }},
-  "repositories": [
-    {{
-      "type": "path",
-      "url": "{pkg_path}"
-    }}
-  ],
-  "autoload-dev": {{
-    "psr-4": {{
+  "require-dev": {
+    "phpunit/phpunit": "^11.0"
+  },
+  "autoload-dev": {
+    "psr-4": {
       "Kreuzberg\\E2e\\": "tests/"
-    }}
-  }}
-}}
+    }
+  }
+}
 "#
-    )
+    .to_string()
 }
 
 fn render_phpunit_xml() -> String {
     r#"<?xml version="1.0" encoding="UTF-8"?>
 <phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/11.0/phpunit.xsd"
-         bootstrap="vendor/autoload.php"
+         bootstrap="bootstrap.php"
          colors="true"
          failOnRisky="true"
          failOnWarning="true">
@@ -166,6 +165,24 @@ fn render_phpunit_xml() -> String {
 </phpunit>
 "#
     .to_string()
+}
+
+fn render_bootstrap(pkg_path: &str) -> String {
+    format!(
+        r#"<?php
+
+declare(strict_types=1);
+
+// Load the e2e project autoloader (PHPUnit, test helpers).
+require_once __DIR__ . '/vendor/autoload.php';
+
+// Load the PHP package autoloader (binding wrapper classes).
+$pkgAutoloader = __DIR__ . '/{pkg_path}/vendor/autoload.php';
+if (file_exists($pkgAutoloader)) {{
+    require_once $pkgAutoloader;
+}}
+"#
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -384,6 +401,16 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
             if let Some(val) = &assertion.value {
                 if let Some(n) = val.as_u64() {
                     let _ = writeln!(out, "        $this->assertLessThanOrEqual({n}, strlen({field_expr}));");
+                }
+            }
+        }
+        "count_min" => {
+            if let Some(val) = &assertion.value {
+                if let Some(n) = val.as_u64() {
+                    let _ = writeln!(
+                        out,
+                        "        $this->assertGreaterThanOrEqual({n}, count({field_expr}));"
+                    );
                 }
             }
         }

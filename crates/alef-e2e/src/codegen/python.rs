@@ -35,6 +35,13 @@ impl super::E2eCodegen for PythonE2eCodegen {
             generated_header: true,
         });
 
+        // Root __init__.py (prevents ruff INP001).
+        files.push(GeneratedFile {
+            path: output_base.join("__init__.py"),
+            content: String::new(),
+            generated_header: false,
+        });
+
         // tests/__init__.py
         files.push(GeneratedFile {
             path: output_base.join("tests").join("__init__.py"),
@@ -141,7 +148,6 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
     let mut out = String::new();
     let _ = writeln!(out, "\"\"\"E2e tests for category: {category}.");
     let _ = writeln!(out, "\"\"\"");
-    let _ = writeln!(out, "# ruff: noqa: S101");
 
     let module = resolve_module(e2e_config);
     let function_name = resolve_function_name(e2e_config);
@@ -155,9 +161,7 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
         .any(|f| f.assertions.iter().any(|a| a.assertion_type == "error"));
     let has_skipped = fixtures.iter().any(|f| is_skipped(f, "python"));
 
-    if has_error_test || has_skipped {
-        let _ = writeln!(out, "import pytest");
-    }
+    let needs_pytest = has_error_test || has_skipped;
 
     // "json" mode needs `import json`.
     let needs_json_import = options_via == "json"
@@ -168,10 +172,6 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
                 .iter()
                 .any(|arg| arg.arg_type == "json_object" && !resolve_field(&f.input, &arg.field).is_null())
         });
-
-    if needs_json_import {
-        let _ = writeln!(out, "import json");
-    }
 
     // Only import options_type when using "kwargs" mode.
     let needs_options_type = options_via == "kwargs"
@@ -203,8 +203,23 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
         }
     }
 
+    // Collect imports sorted per isort/ruff I001: stdlib group, then
+    // third-party group, separated by a blank line. Within each group
+    // `import X` lines come before `from X import Y` lines, both sorted.
+    let mut stdlib_imports: Vec<String> = Vec::new();
+    let mut thirdparty_bare: Vec<String> = Vec::new();
+    let mut thirdparty_from: Vec<String> = Vec::new();
+
+    if needs_json_import {
+        stdlib_imports.push("import json".to_string());
+    }
+
+    if needs_pytest {
+        thirdparty_bare.push("import pytest".to_string());
+    }
+
     if let (true, Some(opts_type)) = (needs_options_type, &options_type) {
-        let _ = writeln!(out, "from {module} import {function_name}, {opts_type}");
+        thirdparty_from.push(format!("from {module} import {function_name}, {opts_type}"));
         // Import enum types from enum_module (if specified) or main module.
         if !used_enum_types.is_empty() {
             let enum_mod = e2e_config
@@ -214,15 +229,35 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
                 .and_then(|o| o.enum_module.as_deref())
                 .unwrap_or(&module);
             let enum_names: Vec<&String> = used_enum_types.iter().collect();
-            let _ = writeln!(
-                out,
+            thirdparty_from.push(format!(
                 "from {enum_mod} import {}",
                 enum_names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
-            );
+            ));
         }
     } else {
-        let _ = writeln!(out, "from {module} import {function_name}");
+        thirdparty_from.push(format!("from {module} import {function_name}"));
     }
+
+    stdlib_imports.sort();
+    thirdparty_bare.sort();
+    thirdparty_from.sort();
+
+    // Emit sorted import groups with blank lines between groups per PEP 8.
+    if !stdlib_imports.is_empty() {
+        for imp in &stdlib_imports {
+            let _ = writeln!(out, "{imp}");
+        }
+        let _ = writeln!(out);
+    }
+    // Third-party: bare imports then from-imports, no blank line between them.
+    for imp in &thirdparty_bare {
+        let _ = writeln!(out, "{imp}");
+    }
+    for imp in &thirdparty_from {
+        let _ = writeln!(out, "{imp}");
+    }
+    // Two blank lines after imports (PEP 8 / ruff I001).
+    let _ = writeln!(out);
     let _ = writeln!(out);
 
     for fixture in fixtures {
@@ -368,12 +403,8 @@ fn render_test_function(
             let _ = writeln!(out, "        {call_expr}");
         }
 
-        // Render any non-error assertions (unlikely but handle gracefully).
-        for assertion in &fixture.assertions {
-            if assertion.assertion_type != "error" {
-                render_assertion(out, assertion, result_var, field_resolver);
-            }
-        }
+        // Skip non-error assertions: `result` is not defined outside the
+        // `pytest.raises` block, so referencing it would trigger ruff F821.
         return;
     }
 
@@ -407,7 +438,7 @@ fn json_to_python_literal(value: &serde_json::Value) -> String {
         serde_json::Value::Bool(true) => "True".to_string(),
         serde_json::Value::Bool(false) => "False".to_string(),
         serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::String(s) => format!("\"{}\"", escape_python(s)),
+        serde_json::Value::String(s) => python_string_literal(s),
         serde_json::Value::Array(arr) => {
             let items: Vec<String> = arr.iter().map(json_to_python_literal).collect();
             format!("[{}]", items.join(", "))
@@ -439,7 +470,9 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         "equals" => {
             if let Some(val) = &assertion.value {
                 let expected = value_to_python_string(val);
-                let _ = writeln!(out, "    assert {field_access} == {expected}");
+                // Use `is` for boolean/None comparisons (ruff E712).
+                let op = if val.is_boolean() || val.is_null() { "is" } else { "==" };
+                let _ = writeln!(out, "    assert {field_access} {op} {expected}");
             }
         }
         "contains" => {
@@ -470,7 +503,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         }
         "contains_any" => {
             if let Some(values) = &assertion.values {
-                let items: Vec<String> = values.iter().map(|v| value_to_python_string(v)).collect();
+                let items: Vec<String> = values.iter().map(value_to_python_string).collect();
                 let list_str = items.join(", ");
                 let _ = writeln!(out, "    assert any(v in {field_access} for v in [{list_str}])");
             }
@@ -525,6 +558,13 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
                 }
             }
         }
+        "count_min" => {
+            if let Some(val) = &assertion.value {
+                if let Some(n) = val.as_u64() {
+                    let _ = writeln!(out, "    assert len({field_access}) >= {n}");
+                }
+            }
+        }
         other => {
             let _ = writeln!(out, "    # TODO: unsupported assertion type: {other}");
         }
@@ -533,11 +573,28 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
 
 fn value_to_python_string(value: &serde_json::Value) -> String {
     match value {
-        serde_json::Value::String(s) => format!("\"{}\"", escape_python(s)),
+        serde_json::Value::String(s) => python_string_literal(s),
         serde_json::Value::Bool(true) => "True".to_string(),
         serde_json::Value::Bool(false) => "False".to_string(),
         serde_json::Value::Number(n) => n.to_string(),
         serde_json::Value::Null => "None".to_string(),
-        other => format!("\"{}\"", escape_python(&other.to_string())),
+        other => python_string_literal(&other.to_string()),
+    }
+}
+
+/// Produce a quoted Python string literal, choosing single or double quotes
+/// to avoid unnecessary escaping (ruff Q003).
+fn python_string_literal(s: &str) -> String {
+    if s.contains('"') && !s.contains('\'') {
+        // Use single quotes to avoid escaping double quotes.
+        let escaped = s
+            .replace('\\', "\\\\")
+            .replace('\'', "\\'")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t");
+        format!("'{escaped}'")
+    } else {
+        format!("\"{}\"", escape_python(s))
     }
 }
