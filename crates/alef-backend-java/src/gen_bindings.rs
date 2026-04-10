@@ -3,6 +3,7 @@ use alef_codegen::naming::{to_class_name, to_java_name};
 use alef_core::backend::{Backend, BuildConfig, Capabilities, GeneratedFile};
 use alef_core::config::{AlefConfig, Language, resolve_output_dir};
 use alef_core::ir::{ApiSurface, EnumDef, FunctionDef, PrimitiveType, TypeDef, TypeRef};
+use ahash::AHashSet;
 use heck::ToSnakeCase;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -368,6 +369,14 @@ fn gen_native_lib(api: &ApiSurface, config: &AlefConfig, package: &str, prefix: 
 // ---------------------------------------------------------------------------
 
 fn gen_main_class(api: &ApiSurface, _config: &AlefConfig, package: &str, class_name: &str, prefix: &str) -> String {
+    // Build the set of opaque type names so we can distinguish opaque handles from records
+    let opaque_types: AHashSet<String> = api
+        .types
+        .iter()
+        .filter(|t| t.is_opaque)
+        .map(|t| t.name.clone())
+        .collect();
+
     // Generate the class body first, then scan it to determine which imports are needed.
     let mut body = String::with_capacity(4096);
 
@@ -378,7 +387,7 @@ fn gen_main_class(api: &ApiSurface, _config: &AlefConfig, package: &str, class_n
     // Generate static methods for free functions
     for func in &api.functions {
         // Always generate sync method
-        gen_sync_function_method(&mut body, func, prefix, class_name);
+        gen_sync_function_method(&mut body, func, prefix, class_name, &opaque_types);
         writeln!(body).ok();
 
         // Also generate async wrapper if marked as async
@@ -445,7 +454,7 @@ fn gen_main_class(api: &ApiSurface, _config: &AlefConfig, package: &str, class_n
     out
 }
 
-fn gen_sync_function_method(out: &mut String, func: &FunctionDef, prefix: &str, class_name: &str) {
+fn gen_sync_function_method(out: &mut String, func: &FunctionDef, prefix: &str, class_name: &str, opaque_types: &AHashSet<String>) {
     let params: Vec<String> = func
         .params
         .iter()
@@ -471,7 +480,7 @@ fn gen_sync_function_method(out: &mut String, func: &FunctionDef, prefix: &str, 
 
     // Marshal parameters (use camelCase Java names)
     for param in &func.params {
-        marshal_param_to_ffi(out, &to_java_name(&param.name), &param.ty);
+        marshal_param_to_ffi(out, &to_java_name(&param.name), &param.ty, opaque_types);
     }
 
     // Call FFI
@@ -480,7 +489,7 @@ fn gen_sync_function_method(out: &mut String, func: &FunctionDef, prefix: &str, 
     let call_args: Vec<String> = func
         .params
         .iter()
-        .map(|p| ffi_param_name(&to_java_name(&p.name), &p.ty))
+        .map(|p| ffi_param_name(&to_java_name(&p.name), &p.ty, opaque_types))
         .collect();
 
     if matches!(func.return_type, TypeRef::Unit) {
