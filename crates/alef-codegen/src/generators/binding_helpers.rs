@@ -508,15 +508,23 @@ pub fn gen_async_body(
             } else {
                 format!("let result = {core_call}.await;")
             };
-            let ok_expr = if is_unit_return && !has_error {
-                "()"
+            if !has_error && !is_unit_return {
+                // No error type: return value directly without Ok() wrapper
+                format!(
+                    "{result_handling}\n            \
+                     {return_wrap}"
+                )
             } else {
-                return_wrap
-            };
-            format!(
-                "{result_handling}\n            \
-                 Ok({ok_expr})"
-            )
+                let ok_expr = if is_unit_return && !has_error {
+                    "()"
+                } else {
+                    return_wrap
+                };
+                format!(
+                    "{result_handling}\n            \
+                     Ok({ok_expr})"
+                )
+            }
         }
         AsyncPattern::TokioBlockOn => {
             if has_error {

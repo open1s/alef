@@ -111,7 +111,7 @@ pub fn gen_go_functional_options(typ: &TypeDef, type_mapper: &dyn Fn(&TypeRef) -
         if is_tuple_field(field) {
             continue;
         }
-        let option_name = format!("With{}", field.name.to_pascal_case());
+        let option_name = format!("With{}{}", typ.name, field.name.to_pascal_case());
         let go_type = type_mapper(&field.ty);
         lines.push(format!("// {} sets the {}.", option_name, field.name));
         lines.push(format!("func {}(val {}) {}Option {{", option_name, go_type, typ.name));
@@ -320,7 +320,7 @@ pub fn default_value_for_field(field: &FieldDef, language: &str) -> String {
             DefaultValue::EnumVariant(v) => match language {
                 "python" => format!("{}.{}", field.ty.type_name(), v.to_shouty_snake_case()),
                 "ruby" => format!("{}::{}", field.ty.type_name(), v.to_pascal_case()),
-                "go" => format!("{}{}()", field.ty.type_name(), v.to_pascal_case()),
+                "go" => format!("{}{}", field.ty.type_name(), v.to_pascal_case()),
                 "java" => format!("{}.{}", field.ty.type_name(), v.to_shouty_snake_case()),
                 "csharp" => format!("{}.{}", field.ty.type_name(), v.to_pascal_case()),
                 "php" => format!("{}::{}", field.ty.type_name(), v.to_pascal_case()),
@@ -886,9 +886,9 @@ mod tests {
 
         assert!(output.contains("type Config struct {"));
         assert!(output.contains("type ConfigOption func(*Config)"));
-        assert!(output.contains("func WithTimeout(val uint64) ConfigOption"));
-        assert!(output.contains("func WithEnabled(val bool) ConfigOption"));
-        assert!(output.contains("func WithName(val string) ConfigOption"));
+        assert!(output.contains("func WithConfigTimeout(val uint64) ConfigOption"));
+        assert!(output.contains("func WithConfigEnabled(val bool) ConfigOption"));
+        assert!(output.contains("func WithConfigName(val string) ConfigOption"));
         assert!(output.contains("func NewConfig(opts ...ConfigOption) *Config"));
     }
 

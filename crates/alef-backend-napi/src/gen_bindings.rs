@@ -125,18 +125,7 @@ impl Backend for NapiBackend {
         }
 
         for func in &api.functions {
-            // Skip functions with opaque type params — NAPI opaque structs don't implement FromNapiValue.
-            // These functions are todo!() stubs and need manual wiring via class methods instead.
-            let has_opaque_param = func.params.iter().any(|p| {
-                if let alef_core::ir::TypeRef::Named(n) = &p.ty {
-                    opaque_types.contains(n)
-                } else {
-                    false
-                }
-            });
-            if !has_opaque_param {
-                builder.add_item(&gen_function(func, &mapper, &cfg, &opaque_types));
-            }
+            builder.add_item(&gen_function(func, &mapper, &cfg, &opaque_types));
         }
 
         let binding_to_core = alef_codegen::conversions::convertible_types(api);
@@ -633,7 +622,16 @@ fn gen_function(
     cfg: &RustBindingConfig,
     opaque_types: &AHashSet<String>,
 ) -> String {
-    let params = function_params(&func.params, &|ty| mapper.map_type(ty));
+    let params = function_params(&func.params, &|ty| {
+        // Opaque Named params must be received by reference since NAPI opaque
+        // structs don't implement FromNapiValue (they use Arc<T> internally).
+        if let TypeRef::Named(n) = ty {
+            if opaque_types.contains(n.as_str()) {
+                return format!("&Js{n}");
+            }
+        }
+        mapper.map_type(ty)
+    });
     let return_type = mapper.map_type(&func.return_type);
     let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
 

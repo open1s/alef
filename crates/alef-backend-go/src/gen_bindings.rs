@@ -435,8 +435,10 @@ fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
     }
 
     // Convert parameters
+    let returns_value_and_error =
+        func.error_type.is_some() && !matches!(func.return_type, TypeRef::Unit);
     for param in &func.params {
-        write!(out, "{}", gen_param_to_c(param)).ok();
+        write!(out, "{}", gen_param_to_c(param, returns_value_and_error)).ok();
     }
 
     // Build the C call with converted parameters
@@ -596,8 +598,10 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str) -> St
         writeln!(out, "    return resultCh, errCh").ok();
     } else {
         // Synchronous method - just convert params and call FFI
+        let returns_value_and_error =
+            method.error_type.is_some() && !matches!(method.return_type, TypeRef::Unit);
         for param in &method.params {
-            write!(out, "{}", gen_param_to_c(param)).ok();
+            write!(out, "{}", gen_param_to_c(param, returns_value_and_error)).ok();
         }
 
         let c_params: Vec<String> = method
@@ -664,9 +668,12 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str) -> St
 }
 
 /// Generate parameter conversion code from Go to C.
-fn gen_param_to_c(param: &alef_core::ir::ParamDef) -> String {
+/// `returns_value_and_error` should be true when the enclosing function returns `(*T, error)`,
+/// so that error paths emit `return nil, fmt.Errorf(...)` instead of `return fmt.Errorf(...)`.
+fn gen_param_to_c(param: &alef_core::ir::ParamDef, returns_value_and_error: bool) -> String {
     let mut out = String::with_capacity(512);
     let c_name = format!("c{}", param.name.to_pascal_case());
+    let err_return_prefix = if returns_value_and_error { "nil, " } else { "" };
 
     match &param.ty {
         TypeRef::String | TypeRef::Char => {
@@ -692,9 +699,9 @@ fn gen_param_to_c(param: &alef_core::ir::ParamDef) -> String {
             writeln!(
                 out,
                 "    jsonBytes, err := json.Marshal({})\n    if err != nil {{\n        \
-                 return fmt.Errorf(\"failed to marshal: %w\", err)\n    \
+                 return {}fmt.Errorf(\"failed to marshal: %w\", err)\n    \
                  }}\n    {} := C.CString(string(jsonBytes))\n    defer C.free(unsafe.Pointer({}))",
-                param.name, c_name, c_name
+                param.name, err_return_prefix, c_name, c_name
             )
             .ok();
         }
@@ -790,11 +797,11 @@ fn gen_config_options(typ: &TypeDef) -> String {
         // For the function parameter, always accept the direct type (not wrapped in optional)
         let param_type = go_type(&field.ty);
 
-        writeln!(out, "// With{} sets the {} field.", field_go_name, field.name).ok();
+        writeln!(out, "// With{}{} sets the {} field.", typ.name, field_go_name, field.name).ok();
         writeln!(
             out,
-            "func With{}(v {}) {}Option {{",
-            field_go_name, param_type, typ.name
+            "func With{}{}(v {}) {}Option {{",
+            typ.name, field_go_name, param_type, typ.name
         )
         .ok();
         // Optional fields use pointer types in the struct (e.g., *string), so we need
@@ -822,10 +829,13 @@ fn gen_config_options(typ: &TypeDef) -> String {
         }
 
         let field_go_name = to_go_name(&field.name);
-        let default_val = if let Some(default) = &field.default {
+        let default_val = if field.optional {
+            // Optional fields always default to nil in Go (they are pointer types)
+            "nil".to_string()
+        } else if let Some(default) = &field.default {
             default.clone()
         } else {
-            // Use type-appropriate zero value
+            // Use type-appropriate zero value for non-optional fields
             match &field.ty {
                 TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => "\"\"".to_string(),
                 TypeRef::Bytes => "[]byte{}".to_string(),
@@ -834,10 +844,10 @@ fn gen_config_options(typ: &TypeDef) -> String {
                     alef_core::ir::PrimitiveType::F32 | alef_core::ir::PrimitiveType::F64 => "0.0".to_string(),
                     _ => "0".to_string(),
                 },
-                TypeRef::Vec(_) => "[]".to_string() + &go_type(&field.ty),
-                TypeRef::Map(_, _) => "make(".to_string() + &go_type(&field.ty) + ")",
+                TypeRef::Vec(_) => "nil".to_string(),
+                TypeRef::Map(_, _) => "nil".to_string(),
                 TypeRef::Optional(_) => "nil".to_string(),
-                TypeRef::Named(name) => format!("&{}{{}}", name),
+                TypeRef::Named(_) => "nil".to_string(),
                 TypeRef::Unit => "".to_string(),
                 TypeRef::Duration => "0".to_string(),
             }
