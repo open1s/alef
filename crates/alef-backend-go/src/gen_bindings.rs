@@ -856,7 +856,7 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str, opaqu
                 writeln!(
                     out,
                     "    return {}, nil",
-                    go_return_expr_builder(&method.return_type, "ptr", ffi_prefix)
+                    go_return_expr_builder(&method.return_type, "ptr", ffi_prefix, opaque_names)
                 )
                 .ok();
             }
@@ -874,7 +874,7 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str, opaqu
             writeln!(
                 out,
                 "    return {}",
-                go_return_expr_builder(&method.return_type, "ptr", ffi_prefix)
+                go_return_expr_builder(&method.return_type, "ptr", ffi_prefix, opaque_names)
             )
             .ok();
         }
@@ -894,6 +894,7 @@ fn gen_param_to_c(
     returns_value_and_error: bool,
     can_return_error: bool,
     ffi_prefix: &str,
+    opaque_names: &std::collections::HashSet<&str>,
 ) -> String {
     let mut out = String::with_capacity(512);
     let c_name = format!("c{}", param.name.to_pascal_case());
@@ -920,31 +921,42 @@ fn gen_param_to_c(
             writeln!(out, "    {} := (*C.uchar)(unsafe.Pointer(&{}[0]))", c_name, param.name).ok();
         }
         TypeRef::Named(name) => {
-            // Named types are opaque handles in the FFI layer. Marshal to JSON,
-            // create an opaque handle via _from_json, and pass that to the C function.
-            let type_snake = name.to_snake_case();
-            let err_action = if can_return_error {
-                format!("return {err_return_prefix}fmt.Errorf(\"failed to marshal: %w\", err)")
+            if opaque_names.contains(name.as_str()) {
+                // Opaque types are pointer wrappers — pass the raw pointer directly.
+                writeln!(
+                    out,
+                    "    {c_name} := {param}.ptr",
+                    c_name = c_name,
+                    param = param.name,
+                )
+                .ok();
             } else {
-                "panic(fmt.Sprintf(\"failed to marshal: %v\", err))".to_string()
-            };
-            writeln!(
-                out,
-                "    jsonBytes{c_name}, err := json.Marshal({param})\n    \
-                 if err != nil {{\n        \
-                 {err_action}\n    \
-                 }}\n    \
-                 tmpStr{c_name} := C.CString(string(jsonBytes{c_name}))\n    \
-                 {c_name} := C.{ffi_prefix}_{type_snake}_from_json(tmpStr{c_name})\n    \
-                 C.free(unsafe.Pointer(tmpStr{c_name}))\n    \
-                 defer C.{ffi_prefix}_{type_snake}_free({c_name})",
-                c_name = c_name,
-                param = param.name,
-                err_action = err_action,
-                ffi_prefix = ffi_prefix,
-                type_snake = type_snake,
-            )
-            .ok();
+                // Non-opaque Named types: marshal to JSON, create a handle via _from_json,
+                // and pass that to the C function.
+                let type_snake = name.to_snake_case();
+                let err_action = if can_return_error {
+                    format!("return {err_return_prefix}fmt.Errorf(\"failed to marshal: %w\", err)")
+                } else {
+                    "panic(fmt.Sprintf(\"failed to marshal: %v\", err))".to_string()
+                };
+                writeln!(
+                    out,
+                    "    jsonBytes{c_name}, err := json.Marshal({param})\n    \
+                     if err != nil {{\n        \
+                     {err_action}\n    \
+                     }}\n    \
+                     tmpStr{c_name} := C.CString(string(jsonBytes{c_name}))\n    \
+                     {c_name} := C.{ffi_prefix}_{type_snake}_from_json(tmpStr{c_name})\n    \
+                     C.free(unsafe.Pointer(tmpStr{c_name}))\n    \
+                     defer C.{ffi_prefix}_{type_snake}_free({c_name})",
+                    c_name = c_name,
+                    param = param.name,
+                    err_action = err_action,
+                    ffi_prefix = ffi_prefix,
+                    type_snake = type_snake,
+                )
+                .ok();
+            }
         }
         TypeRef::Vec(_) | TypeRef::Map(_, _) => {
             // Vec and Map types are serialized as JSON strings across the FFI boundary.
