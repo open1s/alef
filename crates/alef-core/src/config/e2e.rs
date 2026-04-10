@@ -147,6 +147,11 @@ pub struct CallOverride {
     /// E.g., "html_to_markdown._html_to_markdown" for PyO3 native enums.
     #[serde(default)]
     pub enum_module: Option<String>,
+    /// When `true`, the function returns a simple type (e.g., `String`) rather
+    /// than a struct.  Generators that would normally emit `result.content`
+    /// (or equivalent field access) will use the result variable directly.
+    #[serde(default)]
+    pub result_is_simple: bool,
 }
 
 /// Per-language package reference configuration.

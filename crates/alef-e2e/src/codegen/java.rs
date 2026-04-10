@@ -34,7 +34,7 @@ impl E2eCodegen for JavaCodegen {
         // Resolve call config with overrides.
         let call = &e2e_config.call;
         let overrides = call.overrides.get(lang);
-        let module_path = overrides
+        let _module_path = overrides
             .and_then(|o| o.module.as_ref())
             .cloned()
             .unwrap_or_else(|| call.module.clone());
@@ -46,6 +46,7 @@ impl E2eCodegen for JavaCodegen {
             .and_then(|o| o.class.as_ref())
             .cloned()
             .unwrap_or_else(|| alef_config.crate_config.name.to_upper_camel_case());
+        let result_is_simple = overrides.is_some_and(|o| o.result_is_simple);
         let result_var = &call.result_var;
 
         // Resolve package config.
@@ -90,13 +91,13 @@ impl E2eCodegen for JavaCodegen {
             let content = render_test_file(
                 &group.category,
                 &active,
-                &module_path,
                 &class_name,
                 &function_name,
                 result_var,
                 &e2e_config.call.args,
                 options_type.as_deref(),
                 &field_resolver,
+                result_is_simple,
             );
             files.push(GeneratedFile {
                 path: test_base.join(class_file_name),
@@ -186,16 +187,25 @@ fn render_pom_xml(pkg_name: &str) -> String {
 fn render_test_file(
     category: &str,
     fixtures: &[&Fixture],
-    import_class: &str,
     class_name: &str,
     function_name: &str,
     result_var: &str,
     args: &[crate::config::ArgMapping],
     options_type: Option<&str>,
     field_resolver: &FieldResolver,
+    result_is_simple: bool,
 ) -> String {
     let mut out = String::new();
     let test_class_name = format!("{}Test", sanitize_filename(category).to_upper_camel_case());
+
+    // If the class_name is fully qualified (contains '.'), import it and use
+    // only the simple name for method calls.  Otherwise use it as-is.
+    let (import_path, simple_class) = if class_name.contains('.') {
+        let simple = class_name.rsplit('.').next().unwrap_or(class_name);
+        (class_name, simple)
+    } else {
+        ("", class_name)
+    };
 
     let _ = writeln!(out, "package dev.kreuzberg.e2e;");
     let _ = writeln!(out);
@@ -209,8 +219,8 @@ fn render_test_file(
 
     let _ = writeln!(out, "import org.junit.jupiter.api.Test;");
     let _ = writeln!(out, "import static org.junit.jupiter.api.Assertions.*;");
-    if !import_class.is_empty() {
-        let _ = writeln!(out, "import {import_class};");
+    if !import_path.is_empty() {
+        let _ = writeln!(out, "import {import_path};");
     }
     if needs_object_mapper {
         let _ = writeln!(out, "import com.fasterxml.jackson.databind.ObjectMapper;");
@@ -232,12 +242,13 @@ fn render_test_file(
         render_test_method(
             &mut out,
             fixture,
-            class_name,
+            simple_class,
             function_name,
             result_var,
             args,
             options_type,
             field_resolver,
+            result_is_simple,
         );
         let _ = writeln!(out);
     }
@@ -255,6 +266,7 @@ fn render_test_method(
     args: &[crate::config::ArgMapping],
     options_type: Option<&str>,
     field_resolver: &FieldResolver,
+    result_is_simple: bool,
 ) {
     let method_name = fixture.id.to_upper_camel_case();
     let description = &fixture.description;
@@ -308,7 +320,7 @@ fn render_test_method(
     );
 
     for assertion in &fixture.assertions {
-        render_assertion(out, assertion, result_var, field_resolver);
+        render_assertion(out, assertion, result_var, field_resolver, result_is_simple);
     }
 
     let _ = writeln!(out, "    }}");
@@ -341,10 +353,20 @@ fn build_args_string(
     parts.join(", ")
 }
 
-fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, field_resolver: &FieldResolver) {
-    let field_expr = match &assertion.field {
-        Some(f) if !f.is_empty() => field_resolver.accessor(f, "java", result_var),
-        _ => result_var.to_string(),
+fn render_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    result_var: &str,
+    field_resolver: &FieldResolver,
+    result_is_simple: bool,
+) {
+    let field_expr = if result_is_simple {
+        result_var.to_string()
+    } else {
+        match &assertion.field {
+            Some(f) if !f.is_empty() => field_resolver.accessor(f, "java", result_var),
+            _ => result_var.to_string(),
+        }
     };
 
     match assertion.assertion_type.as_str() {

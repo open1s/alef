@@ -47,6 +47,7 @@ impl E2eCodegen for RubyCodegen {
         let options_type = overrides.and_then(|o| o.options_type.clone());
         let empty_enum_fields = HashMap::new();
         let enum_fields = overrides.map(|o| &o.enum_fields).unwrap_or(&empty_enum_fields);
+        let result_is_simple = overrides.is_some_and(|o| o.result_is_simple);
         let result_var = &call.result_var;
 
         // Resolve package config.
@@ -95,6 +96,7 @@ impl E2eCodegen for RubyCodegen {
                 &field_resolver,
                 options_type.as_deref(),
                 enum_fields,
+                result_is_simple,
             );
             files.push(GeneratedFile {
                 path: spec_base.join(filename),
@@ -140,6 +142,7 @@ fn render_spec_file(
     field_resolver: &FieldResolver,
     options_type: Option<&str>,
     enum_fields: &HashMap<String, String>,
+    result_is_simple: bool,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# frozen_string_literal: true");
@@ -170,6 +173,7 @@ fn render_spec_file(
             field_resolver,
             options_type,
             enum_fields,
+            result_is_simple,
         );
         if i + 1 < fixtures.len() {
             let _ = writeln!(out);
@@ -191,6 +195,7 @@ fn render_example(
     field_resolver: &FieldResolver,
     options_type: Option<&str>,
     enum_fields: &HashMap<String, String>,
+    result_is_simple: bool,
 ) {
     let test_name = sanitize_ident(&fixture.id);
     let description = fixture.description.replace('"', "\\\"");
@@ -211,7 +216,7 @@ fn render_example(
     let _ = writeln!(out, "    {result_var} = {call_expr}");
 
     for assertion in &fixture.assertions {
-        render_assertion(out, assertion, result_var, field_resolver);
+        render_assertion(out, assertion, result_var, field_resolver, result_is_simple);
     }
 
     let _ = writeln!(out, "  end");
@@ -264,10 +269,20 @@ fn build_args_string(
     parts.join(", ")
 }
 
-fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, field_resolver: &FieldResolver) {
-    let field_expr = match &assertion.field {
-        Some(f) if !f.is_empty() => field_resolver.accessor(f, "ruby", result_var),
-        _ => result_var.to_string(),
+fn render_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    result_var: &str,
+    field_resolver: &FieldResolver,
+    result_is_simple: bool,
+) {
+    let field_expr = if result_is_simple {
+        result_var.to_string()
+    } else {
+        match &assertion.field {
+            Some(f) if !f.is_empty() => field_resolver.accessor(f, "ruby", result_var),
+            _ => result_var.to_string(),
+        }
     };
 
     match assertion.assertion_type.as_str() {

@@ -49,6 +49,7 @@ impl E2eCodegen for CSharpCodegen {
                 call.module.to_upper_camel_case()
             }
         });
+        let result_is_simple = overrides.is_some_and(|o| o.result_is_simple);
         let result_var = &call.result_var;
 
         // Resolve package config.
@@ -96,6 +97,7 @@ impl E2eCodegen for CSharpCodegen {
                 &test_class,
                 &e2e_config.call.args,
                 &field_resolver,
+                result_is_simple,
             );
             files.push(GeneratedFile {
                 path: tests_base.join(filename),
@@ -152,6 +154,7 @@ fn render_test_file(
     test_class: &str,
     args: &[crate::config::ArgMapping],
     field_resolver: &FieldResolver,
+    result_is_simple: bool,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "using Xunit;");
@@ -172,6 +175,7 @@ fn render_test_file(
             result_var,
             args,
             field_resolver,
+            result_is_simple,
         );
         if i + 1 < fixtures.len() {
             let _ = writeln!(out);
@@ -190,6 +194,7 @@ fn render_test_method(
     result_var: &str,
     args: &[crate::config::ArgMapping],
     field_resolver: &FieldResolver,
+    result_is_simple: bool,
 ) {
     let method_name = fixture.id.to_upper_camel_case();
     let description = &fixture.description;
@@ -217,7 +222,7 @@ fn render_test_method(
     );
 
     for assertion in &fixture.assertions {
-        render_assertion(out, assertion, result_var, field_resolver);
+        render_assertion(out, assertion, result_var, field_resolver, result_is_simple);
     }
 
     let _ = writeln!(out, "    }}");
@@ -242,10 +247,20 @@ fn build_args_string(input: &serde_json::Value, args: &[crate::config::ArgMappin
     parts.join(", ")
 }
 
-fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, field_resolver: &FieldResolver) {
-    let field_expr = match &assertion.field {
-        Some(f) if !f.is_empty() => field_resolver.accessor(f, "csharp", result_var),
-        _ => result_var.to_string(),
+fn render_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    result_var: &str,
+    field_resolver: &FieldResolver,
+    result_is_simple: bool,
+) {
+    let field_expr = if result_is_simple {
+        result_var.to_string()
+    } else {
+        match &assertion.field {
+            Some(f) if !f.is_empty() => field_resolver.accessor(f, "csharp", result_var),
+            _ => result_var.to_string(),
+        }
     };
 
     match assertion.assertion_type.as_str() {
