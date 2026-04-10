@@ -378,7 +378,8 @@ impl Backend for PhpBackend {
         content.push_str("// provided at runtime by the compiled Rust extension (.so/.dll).\n");
         content.push_str("// Include this in phpstan.neon scanFiles for static analysis.\n\n");
         content.push_str("declare(strict_types=1);\n\n");
-        content.push_str(&format!("namespace {};\n\n", namespace));
+        // Use bracketed namespace syntax so we can add global-namespace function stubs later.
+        content.push_str(&format!("namespace {} {{\n\n", namespace));
 
         // Exception class
         content.push_str(&format!(
@@ -475,6 +476,51 @@ impl Backend for PhpBackend {
             content.push_str("}\n\n");
         }
 
+        // Close the namespaced block
+        content.push_str("} // end namespace\n\n");
+
+        // Extension function stubs (global namespace).
+        // The facade class delegates to these via `\func_name(...)`.
+        content.push_str("namespace {\n\n");
+
+        for func in &api.functions {
+            let return_type = php_type_fq(&func.return_type, &namespace);
+            content.push_str(&format!("/**\n * @param "));
+            // PHPDoc params with fully-qualified types
+            let phpdoc_params: Vec<String> = func
+                .params
+                .iter()
+                .map(|p| {
+                    let ptype = php_type_fq(&p.ty, &namespace);
+                    let nullable_prefix = if p.optional { "?" } else { "" };
+                    format!("{}{} ${}", nullable_prefix, ptype, p.name)
+                })
+                .collect();
+            content.push_str(&phpdoc_params.join("\n * @param "));
+            content.push_str(&format!("\n * @return {}\n */\n", return_type));
+
+            let params: Vec<String> = func
+                .params
+                .iter()
+                .map(|p| {
+                    let ptype = php_type_fq(&p.ty, &namespace);
+                    if p.optional {
+                        format!("?{} ${} = null", ptype, p.name)
+                    } else {
+                        format!("{} ${}", ptype, p.name)
+                    }
+                })
+                .collect();
+            content.push_str(&format!(
+                "function {}({}): {} {{ }}\n\n",
+                func.name,
+                params.join(", "),
+                return_type
+            ));
+        }
+
+        content.push_str("}\n");
+
         // Use stubs output path if configured, otherwise packages/php/stubs/
         let output_dir = config
             .php
@@ -497,6 +543,18 @@ impl Backend for PhpBackend {
             depends_on_ffi: false,
             post_build: vec![],
         })
+    }
+}
+
+/// Map an IR [`TypeRef`] to a fully-qualified PHP type-hint string for use outside the namespace.
+fn php_type_fq(ty: &TypeRef, namespace: &str) -> String {
+    match ty {
+        TypeRef::Named(name) => format!("\\{}\\{}", namespace, name),
+        TypeRef::Optional(inner) => {
+            let inner_type = php_type_fq(inner, namespace);
+            format!("?{}", inner_type)
+        }
+        _ => php_type(ty),
     }
 }
 

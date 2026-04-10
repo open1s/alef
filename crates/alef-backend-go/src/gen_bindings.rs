@@ -62,7 +62,19 @@ impl Backend for GoBackend {
 
         let ffi_lib_name = config.ffi_lib_name();
         let ffi_header = config.ffi_header_name();
-        let content = strip_trailing_whitespace(&gen_go_file(api, &ffi_prefix, &pkg_name, &ffi_lib_name, &ffi_header));
+        // Derive the FFI crate directory from the output path (e.g., "crates/html-to-markdown-ffi/src/" → "crates/html-to-markdown-ffi")
+        let ffi_crate_dir = config
+            .output
+            .ffi
+            .as_ref()
+            .and_then(|p| {
+                let path = p.as_path();
+                path.ancestors()
+                    .find(|a| a.file_name().is_some_and(|n| n != "src" && n != "lib" && n != "include"))
+                    .map(|a| a.to_string_lossy().to_string())
+            })
+            .unwrap_or_else(|| format!("crates/{ffi_lib_name}"));
+        let content = strip_trailing_whitespace(&gen_go_file(api, &ffi_prefix, &pkg_name, &ffi_lib_name, &ffi_header, &ffi_crate_dir, &output_dir));
 
         // Build adapter body map (consumed by generators via body substitution)
         let _adapter_bodies = alef_adapters::build_adapter_bodies(config, Language::Go)?;
@@ -106,14 +118,19 @@ fn strip_trailing_whitespace(content: &str) -> String {
 }
 
 /// Generate the complete Go binding file wrapping the C FFI layer.
-fn gen_go_file(api: &ApiSurface, ffi_prefix: &str, pkg_name: &str, ffi_lib_name: &str, ffi_header: &str) -> String {
+fn gen_go_file(api: &ApiSurface, ffi_prefix: &str, pkg_name: &str, ffi_lib_name: &str, ffi_header: &str, ffi_crate_dir: &str, go_output_dir: &str) -> String {
     let mut out = String::with_capacity(4096);
+
+    // Compute relative path from Go output dir to project root.
+    // go_output_dir is like "packages/go/", so we need "../../" to reach root.
+    let depth = go_output_dir.trim_end_matches('/').matches('/').count() + 1;
+    let to_root = "../".repeat(depth);
 
     // Package header and cgo directives
     writeln!(out, "package {}\n", pkg_name).ok();
     writeln!(out, "/*").ok();
-    writeln!(out, "#cgo CFLAGS: -I${{SRCDIR}}/../../crates/{ffi_lib_name}/include").ok();
-    writeln!(out, "#cgo LDFLAGS: -L${{SRCDIR}}/../../target/release -l{ffi_lib_name}").ok();
+    writeln!(out, "#cgo CFLAGS: -I${{SRCDIR}}/{to_root}{ffi_crate_dir}/include").ok();
+    writeln!(out, "#cgo LDFLAGS: -L${{SRCDIR}}/{to_root}target/release -l{ffi_lib_name}").ok();
     writeln!(out, "#include \"{}\"", ffi_header).ok();
     writeln!(out, "*/\nimport \"C\"").ok();
     writeln!(out).ok();
