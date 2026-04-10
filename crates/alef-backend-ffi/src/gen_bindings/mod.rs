@@ -11,7 +11,9 @@ use std::path::PathBuf;
 
 use functions::{gen_free_function, gen_method_wrapper};
 use helpers::{gen_build_rs, gen_cbindgen_toml, gen_ffi_tokio_runtime, gen_free_string, gen_last_error, gen_version};
-use types::{gen_enum_from_i32, gen_enum_to_i32, gen_field_accessor, gen_type_free, gen_type_from_json, gen_type_to_json};
+use types::{
+    gen_enum_from_i32, gen_enum_to_i32, gen_field_accessor, gen_type_free, gen_type_from_json, gen_type_to_json,
+};
 
 pub struct FfiBackend;
 

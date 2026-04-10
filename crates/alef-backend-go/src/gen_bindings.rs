@@ -469,7 +469,7 @@ fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
             };
             param_strs.push(format!("{} {}", p.name, param_type));
         }
-    };
+    }
     write!(out, "{}", param_strs.join(", ")).ok();
 
     if return_type.is_empty() {
@@ -488,7 +488,8 @@ fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
             "    var {name}Val {ty}\n    if len({name}) > 0 {{\n        {name}Val = {name}[0]\n    }}",
             name = first_opt.name,
             ty = first_opt_type,
-        ).ok();
+        )
+        .ok();
         // For param conversion, use the extracted value
     }
 
@@ -500,9 +501,19 @@ fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
             // For variadic optional params, create a modified param that uses the extracted value
             let mut mod_param = param.clone();
             mod_param.name = format!("{}Val", param.name);
-            write!(out, "{}", gen_param_to_c(&mod_param, returns_value_and_error, can_return_error, ffi_prefix)).ok();
+            write!(
+                out,
+                "{}",
+                gen_param_to_c(&mod_param, returns_value_and_error, can_return_error, ffi_prefix)
+            )
+            .ok();
         } else {
-            write!(out, "{}", gen_param_to_c(param, returns_value_and_error, can_return_error, ffi_prefix)).ok();
+            write!(
+                out,
+                "{}",
+                gen_param_to_c(param, returns_value_and_error, can_return_error, ffi_prefix)
+            )
+            .ok();
         }
     }
 
@@ -559,7 +570,12 @@ fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
                 let type_snake = name.to_snake_case();
                 writeln!(out, "    defer C.{}_{}_free(ptr)", ffi_prefix, type_snake).ok();
             }
-            writeln!(out, "    return {}, nil", go_return_expr(&func.return_type, "ptr", ffi_prefix)).ok();
+            writeln!(
+                out,
+                "    return {}, nil",
+                go_return_expr(&func.return_type, "ptr", ffi_prefix)
+            )
+            .ok();
         }
     } else if matches!(func.return_type, TypeRef::Unit) {
         writeln!(out, "    {}", c_call).ok();
@@ -577,7 +593,12 @@ fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
             let type_snake = name.to_snake_case();
             writeln!(out, "    defer C.{}_{}_free(ptr)", ffi_prefix, type_snake).ok();
         }
-        writeln!(out, "    return {}", go_return_expr(&func.return_type, "ptr", ffi_prefix)).ok();
+        writeln!(
+            out,
+            "    return {}",
+            go_return_expr(&func.return_type, "ptr", ffi_prefix)
+        )
+        .ok();
     }
 
     writeln!(out, "}}").ok();
@@ -693,7 +714,12 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str) -> St
         let can_return_error = method.error_type.is_some();
         let returns_value_and_error = can_return_error && !matches!(method.return_type, TypeRef::Unit);
         for param in &method.params {
-            write!(out, "{}", gen_param_to_c(param, returns_value_and_error, can_return_error, ffi_prefix)).ok();
+            write!(
+                out,
+                "{}",
+                gen_param_to_c(param, returns_value_and_error, can_return_error, ffi_prefix)
+            )
+            .ok();
         }
 
         let c_params: Vec<String> = method
@@ -724,10 +750,7 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str) -> St
                 typ.name.to_pascal_case(),
                 receiver_name
             );
-            format!(
-                "C.{}_{}_{} ({})",
-                ffi_prefix, type_snake, method_snake, c_receiver
-            )
+            format!("C.{}_{}_{} ({})", ffi_prefix, type_snake, method_snake, c_receiver)
         } else {
             let c_receiver = format!(
                 "(*C.{}{})(unsafe.Pointer({}))",
@@ -770,7 +793,12 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str) -> St
                 ) {
                     writeln!(out, "    defer C.{}_free_string(ptr)", ffi_prefix).ok();
                 }
-                writeln!(out, "    return {}, nil", go_return_expr_builder(&method.return_type, "ptr", ffi_prefix)).ok();
+                writeln!(
+                    out,
+                    "    return {}, nil",
+                    go_return_expr_builder(&method.return_type, "ptr", ffi_prefix)
+                )
+                .ok();
             }
         } else if matches!(method.return_type, TypeRef::Unit) {
             writeln!(out, "    {}", c_call).ok();
@@ -783,7 +811,12 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str) -> St
             ) {
                 writeln!(out, "    defer C.{}_free_string(ptr)", ffi_prefix).ok();
             }
-            writeln!(out, "    return {}", go_return_expr_builder(&method.return_type, "ptr", ffi_prefix)).ok();
+            writeln!(
+                out,
+                "    return {}",
+                go_return_expr_builder(&method.return_type, "ptr", ffi_prefix)
+            )
+            .ok();
         }
     }
 
@@ -980,11 +1013,7 @@ fn go_return_expr_inner(ty: &TypeRef, var_name: &str, ffi_prefix: &str, is_build
         TypeRef::Named(name) => {
             if is_builder {
                 // Builder pattern: same opaque handle, just cast the pointer
-                format!(
-                    "(*{})(unsafe.Pointer({}))",
-                    name.to_pascal_case(),
-                    var_name
-                )
+                format!("(*{})(unsafe.Pointer({}))", name.to_pascal_case(), var_name)
             } else {
                 // Full conversion: serialize C handle to JSON, then unmarshal into Go struct
                 let type_snake = name.to_snake_case();

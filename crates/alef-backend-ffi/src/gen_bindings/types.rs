@@ -95,11 +95,7 @@ pub(super) fn gen_type_to_json(typ: &TypeDef, prefix: &str, core_import: &str) -
     .ok();
     writeln!(out, "    clear_last_error();").ok();
     writeln!(out, "    if ptr.is_null() {{").ok();
-    writeln!(
-        out,
-        "        set_last_error(1, \"Null pointer passed to to_json\");"
-    )
-    .ok();
+    writeln!(out, "        set_last_error(1, \"Null pointer passed to to_json\");").ok();
     writeln!(out, "        return std::ptr::null_mut();").ok();
     writeln!(out, "    }}").ok();
     writeln!(out, "    let val = unsafe {{ &*ptr }};").ok();

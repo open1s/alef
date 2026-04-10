@@ -218,8 +218,43 @@ fn build_command_for(
                 .as_ref()
                 .and_then(|p| p.to_str())
                 .unwrap_or("packages/csharp");
+            // Find the directory containing the .csproj (may be in a subdirectory)
+            let build_dir = {
+                let dir_path = std::path::Path::new(dir);
+                // Check if .csproj exists directly in dir
+                let has_direct = dir_path
+                    .read_dir()
+                    .ok()
+                    .map(|entries| {
+                        entries
+                            .filter_map(|e| e.ok())
+                            .any(|e| e.path().extension().is_some_and(|ext| ext == "csproj"))
+                    })
+                    .unwrap_or(false);
+                if has_direct {
+                    dir.to_string()
+                } else {
+                    // Search one level of subdirectories
+                    dir_path
+                        .read_dir()
+                        .ok()
+                        .and_then(|entries| {
+                            entries
+                                .filter_map(|e| e.ok())
+                                .find(|e| {
+                                    e.path().is_dir()
+                                        && e.path().read_dir().ok().is_some_and(|sub| {
+                                            sub.filter_map(|s| s.ok())
+                                                .any(|s| s.path().extension().is_some_and(|ext| ext == "csproj"))
+                                        })
+                                })
+                                .map(|e| e.path().to_string_lossy().to_string())
+                        })
+                        .unwrap_or_else(|| dir.to_string())
+                }
+            };
             let dotnet_config = if release { "Release" } else { "Debug" };
-            format!("cd {dir} && dotnet build --configuration {dotnet_config} -q")
+            format!("cd {build_dir} && dotnet build --configuration {dotnet_config} -q")
         }
         "go" => {
             let dir = config
