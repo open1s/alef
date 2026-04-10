@@ -51,6 +51,15 @@ impl FieldResolver {
         self.aliases.contains_key(fixture_field)
     }
 
+    /// Check if a resolved field path ends with a map access (e.g., `foo[key]`).
+    /// This is needed because Go map access returns a value type (not a pointer),
+    /// so nil checks and pointer dereferences don't apply.
+    pub fn has_map_access(&self, fixture_field: &str) -> bool {
+        let resolved = self.resolve(fixture_field);
+        let segments = parse_path(resolved);
+        segments.iter().any(|s| matches!(s, PathSegment::MapAccess { .. }))
+    }
+
     /// Generate a language-specific accessor expression.
     /// `result_var` is the variable holding the function return value.
     pub fn accessor(&self, fixture_field: &str, language: &str, result_var: &str) -> String {

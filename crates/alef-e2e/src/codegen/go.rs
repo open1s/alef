@@ -227,10 +227,16 @@ fn render_test_function(
                 if field_resolver.is_optional(resolved) && !optional_locals.contains_key(f.as_str()) {
                     let field_expr = field_resolver.accessor(f, "go", result_var);
                     let local_var = resolved.replace(['.', '['], "_").replace(']', "");
-                    let _ = writeln!(out, "\tvar {local_var} string");
-                    let _ = writeln!(out, "\tif {field_expr} != nil {{");
-                    let _ = writeln!(out, "\t\t{local_var} = *{field_expr}");
-                    let _ = writeln!(out, "\t}}");
+                    if field_resolver.has_map_access(f) {
+                        // Go map access returns a value type (string), not a pointer.
+                        // Use the value directly — empty string means not present.
+                        let _ = writeln!(out, "\t{local_var} := {field_expr}");
+                    } else {
+                        let _ = writeln!(out, "\tvar {local_var} string");
+                        let _ = writeln!(out, "\tif {field_expr} != nil {{");
+                        let _ = writeln!(out, "\t\t{local_var} = *{field_expr}");
+                        let _ = writeln!(out, "\t}}");
+                    }
                     optional_locals.insert(f.clone(), local_var);
                 }
             }
