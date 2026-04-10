@@ -5,8 +5,8 @@ use crate::type_resolver;
 
 use super::helpers::{
     build_rust_path, extract_cfg_condition, extract_doc_comments, extract_enum_variant, extract_error_message_template,
-    extract_field, extract_field_type_rust_path, has_cfg_attribute, has_derive, has_field_attr, is_pub,
-    syn_type_is_boxed, unwrap_optional,
+    extract_field, extract_field_type_rust_path, extract_serde_rename_all, has_cfg_attribute, has_derive,
+    has_field_attr, is_pub, syn_type_is_boxed, unwrap_optional,
 };
 
 /// Extract a public struct into a `TypeDef`.
@@ -50,6 +50,7 @@ pub(crate) fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_pa
 
     let is_clone = has_derive(item.attrs.as_slice(), "Clone");
     let has_default = has_derive(item.attrs.as_slice(), "Default");
+    let serde_rename_all = extract_serde_rename_all(&item.attrs);
     let doc = extract_doc_comments(&item.attrs);
     let is_opaque = fields.is_empty();
     let rust_path = build_rust_path(crate_name, module_path, &name);
@@ -76,6 +77,7 @@ pub(crate) fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_pa
         is_return_type: false,
         doc,
         cfg,
+        serde_rename_all,
     })
 }
 

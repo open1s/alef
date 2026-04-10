@@ -504,6 +504,62 @@ fn render_assertion(
                 let _ = writeln!(out, "    assert!({field_access}.is_empty(), \"expected empty value\");");
             }
         }
+        "contains_any" => {
+            if let Some(values) = &assertion.values {
+                let checks: Vec<String> = values
+                    .iter()
+                    .map(|v| {
+                        let expected = value_to_rust_string(v);
+                        format!("{field_access}.contains({expected})")
+                    })
+                    .collect();
+                let joined = checks.join(" || ");
+                let _ = writeln!(
+                    out,
+                    "    assert!({joined}, \"expected to contain at least one of the specified values\");"
+                );
+            }
+        }
+        "greater_than" => {
+            if let Some(val) = &assertion.value {
+                if let Some(n) = val.as_f64() {
+                    let _ = writeln!(
+                        out,
+                        "    assert!({field_access} > {n}_f64, \"expected > {n}\");"
+                    );
+                }
+            }
+        }
+        "less_than" => {
+            if let Some(val) = &assertion.value {
+                if let Some(n) = val.as_f64() {
+                    let _ = writeln!(
+                        out,
+                        "    assert!({field_access} < {n}_f64, \"expected < {n}\");"
+                    );
+                }
+            }
+        }
+        "greater_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                if let Some(n) = val.as_f64() {
+                    let _ = writeln!(
+                        out,
+                        "    assert!({field_access} >= {n}_f64, \"expected >= {n}\");"
+                    );
+                }
+            }
+        }
+        "less_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                if let Some(n) = val.as_f64() {
+                    let _ = writeln!(
+                        out,
+                        "    assert!({field_access} <= {n}_f64, \"expected <= {n}\");"
+                    );
+                }
+            }
+        }
         "starts_with" => {
             if let Some(val) = &assertion.value {
                 let expected = value_to_rust_string(val);

@@ -303,6 +303,37 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         "is_empty" => {
             let _ = writeln!(out, "    expect({field_expr}).to be_empty");
         }
+        "contains_any" => {
+            if let Some(values) = &assertion.values {
+                let items: Vec<String> = values.iter().map(|v| json_to_ruby(v)).collect();
+                let arr_str = items.join(", ");
+                let _ = writeln!(out, "    expect([{arr_str}].any? {{ |v| {field_expr}.include?(v) }}).to be true");
+            }
+        }
+        "greater_than" => {
+            if let Some(val) = &assertion.value {
+                let rb_val = json_to_ruby(val);
+                let _ = writeln!(out, "    expect({field_expr}).to be > {rb_val}");
+            }
+        }
+        "less_than" => {
+            if let Some(val) = &assertion.value {
+                let rb_val = json_to_ruby(val);
+                let _ = writeln!(out, "    expect({field_expr}).to be < {rb_val}");
+            }
+        }
+        "greater_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let rb_val = json_to_ruby(val);
+                let _ = writeln!(out, "    expect({field_expr}).to be >= {rb_val}");
+            }
+        }
+        "less_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let rb_val = json_to_ruby(val);
+                let _ = writeln!(out, "    expect({field_expr}).to be <= {rb_val}");
+            }
+        }
         "starts_with" => {
             if let Some(expected) = &assertion.value {
                 let rb_val = json_to_ruby(expected);

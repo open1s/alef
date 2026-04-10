@@ -67,6 +67,31 @@ pub(crate) fn extract_cfg_condition(attrs: &[syn::Attribute]) -> Option<String> 
     None
 }
 
+/// Extract `rename_all` value from `#[serde(rename_all = "...")]` or
+/// `#[cfg_attr(..., serde(rename_all = "..."))]` attributes.
+pub(crate) fn extract_serde_rename_all(attrs: &[syn::Attribute]) -> Option<String> {
+    for attr in attrs {
+        let tokens = if let Ok(list) = attr.meta.require_list() {
+            format!("{}", list.tokens)
+        } else {
+            continue;
+        };
+        if let Some(pos) = tokens.find("rename_all") {
+            let rest = &tokens[pos..];
+            if let Some(eq_pos) = rest.find('=') {
+                let after_eq = rest[eq_pos + 1..].trim();
+                if let Some(start) = after_eq.find('"') {
+                    let after_start = &after_eq[start + 1..];
+                    if let Some(end) = after_start.find('"') {
+                        return Some(after_start[..end].to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Build the fully qualified rust_path for an item, taking into account
 /// the accumulated module path.
 pub(crate) fn build_rust_path(crate_name: &str, module_path: &str, name: &str) -> String {

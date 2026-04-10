@@ -238,6 +238,37 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         "is_empty" => {
             let _ = writeln!(out, "  expect_equal({field_expr}, \"\")");
         }
+        "contains_any" => {
+            if let Some(values) = &assertion.values {
+                let items: Vec<String> = values.iter().map(|v| json_to_r(v)).collect();
+                let vec_str = items.join(", ");
+                let _ = writeln!(out, "  expect_true(any(sapply(c({vec_str}), function(v) grepl(v, {field_expr}, fixed = TRUE))))");
+            }
+        }
+        "greater_than" => {
+            if let Some(val) = &assertion.value {
+                let r_val = json_to_r(val);
+                let _ = writeln!(out, "  expect_true({field_expr} > {r_val})");
+            }
+        }
+        "less_than" => {
+            if let Some(val) = &assertion.value {
+                let r_val = json_to_r(val);
+                let _ = writeln!(out, "  expect_true({field_expr} < {r_val})");
+            }
+        }
+        "greater_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let r_val = json_to_r(val);
+                let _ = writeln!(out, "  expect_true({field_expr} >= {r_val})");
+            }
+        }
+        "less_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let r_val = json_to_r(val);
+                let _ = writeln!(out, "  expect_true({field_expr} <= {r_val})");
+            }
+        }
         "starts_with" => {
             if let Some(expected) = &assertion.value {
                 let r_val = json_to_r(expected);

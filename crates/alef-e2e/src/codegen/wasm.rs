@@ -353,6 +353,43 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         "not_empty" => {
             let _ = writeln!(out, "    expect({field_expr}.length).toBeGreaterThan(0);");
         }
+        "is_empty" => {
+            let _ = writeln!(out, "    expect({field_expr}).toHaveLength(0);");
+        }
+        "contains_any" => {
+            if let Some(values) = &assertion.values {
+                let items: Vec<String> = values.iter().map(|v| json_to_js(v)).collect();
+                let arr_str = items.join(", ");
+                let _ = writeln!(
+                    out,
+                    "    expect([{arr_str}].some((v) => {field_expr}.includes(v))).toBe(true);"
+                );
+            }
+        }
+        "greater_than" => {
+            if let Some(val) = &assertion.value {
+                let js_val = json_to_js(val);
+                let _ = writeln!(out, "    expect({field_expr}).toBeGreaterThan({js_val});");
+            }
+        }
+        "less_than" => {
+            if let Some(val) = &assertion.value {
+                let js_val = json_to_js(val);
+                let _ = writeln!(out, "    expect({field_expr}).toBeLessThan({js_val});");
+            }
+        }
+        "greater_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let js_val = json_to_js(val);
+                let _ = writeln!(out, "    expect({field_expr}).toBeGreaterThanOrEqual({js_val});");
+            }
+        }
+        "less_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let js_val = json_to_js(val);
+                let _ = writeln!(out, "    expect({field_expr}).toBeLessThanOrEqual({js_val});");
+            }
+        }
         "starts_with" => {
             if let Some(expected) = &assertion.value {
                 let js_val = json_to_js(expected);

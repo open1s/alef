@@ -139,6 +139,7 @@ fn inject_declared_opaque_types(api: &mut ApiSurface, config: &AlefConfig) {
                 is_return_type: false,
                 doc: String::new(),
                 cfg: None,
+                serde_rename_all: None,
             });
             debug!("Injected declared opaque type: {name} -> {rust_path}");
         }

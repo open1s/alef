@@ -325,6 +325,40 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         "is_empty" => {
             let _ = writeln!(out, "      assert {field_expr} == \"\"");
         }
+        "contains_any" => {
+            if let Some(values) = &assertion.values {
+                let items: Vec<String> = values.iter().map(|v| json_to_elixir(v)).collect();
+                let list_str = items.join(", ");
+                let _ = writeln!(
+                    out,
+                    "      assert Enum.any?([{list_str}], fn v -> String.contains?({field_expr}, v) end)"
+                );
+            }
+        }
+        "greater_than" => {
+            if let Some(val) = &assertion.value {
+                let elixir_val = json_to_elixir(val);
+                let _ = writeln!(out, "      assert {field_expr} > {elixir_val}");
+            }
+        }
+        "less_than" => {
+            if let Some(val) = &assertion.value {
+                let elixir_val = json_to_elixir(val);
+                let _ = writeln!(out, "      assert {field_expr} < {elixir_val}");
+            }
+        }
+        "greater_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let elixir_val = json_to_elixir(val);
+                let _ = writeln!(out, "      assert {field_expr} >= {elixir_val}");
+            }
+        }
+        "less_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let elixir_val = json_to_elixir(val);
+                let _ = writeln!(out, "      assert {field_expr} <= {elixir_val}");
+            }
+        }
         "starts_with" => {
             if let Some(expected) = &assertion.value {
                 let elixir_val = json_to_elixir(expected);

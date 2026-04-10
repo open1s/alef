@@ -36,7 +36,7 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["not_error", "error", "equals", "not_equals", "contains", "contains_all", "contains_any", "not_contains", "not_empty", "is_empty", "starts_with", "ends_with", "min_length", "max_length", "count_min", "count_equals", "matches_regex", "is_true", "is_false"],
+          "enum": ["not_error", "error", "equals", "not_equals", "contains", "contains_all", "contains_any", "not_contains", "not_empty", "is_empty", "starts_with", "ends_with", "min_length", "max_length", "count_min", "count_equals", "matches_regex", "is_true", "is_false", "greater_than", "less_than", "greater_than_or_equal", "less_than_or_equal"],
           "description": "Assertion type"
         },
         "field": { "type": "string", "description": "Dot-separated field path on the result object" },

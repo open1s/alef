@@ -281,6 +281,43 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         "is_empty" => {
             let _ = writeln!(out, "        Assert.Empty({field_expr});");
         }
+        "contains_any" => {
+            if let Some(values) = &assertion.values {
+                let checks: Vec<String> = values
+                    .iter()
+                    .map(|v| {
+                        let cs_val = json_to_csharp(v);
+                        format!("{field_expr}.Contains({cs_val})")
+                    })
+                    .collect();
+                let joined = checks.join(" || ");
+                let _ = writeln!(out, "        Assert.True({joined}, \"expected to contain at least one of the specified values\");");
+            }
+        }
+        "greater_than" => {
+            if let Some(val) = &assertion.value {
+                let cs_val = json_to_csharp(val);
+                let _ = writeln!(out, "        Assert.True({field_expr} > {cs_val}, \"expected > {cs_val}\");");
+            }
+        }
+        "less_than" => {
+            if let Some(val) = &assertion.value {
+                let cs_val = json_to_csharp(val);
+                let _ = writeln!(out, "        Assert.True({field_expr} < {cs_val}, \"expected < {cs_val}\");");
+            }
+        }
+        "greater_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let cs_val = json_to_csharp(val);
+                let _ = writeln!(out, "        Assert.True({field_expr} >= {cs_val}, \"expected >= {cs_val}\");");
+            }
+        }
+        "less_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let cs_val = json_to_csharp(val);
+                let _ = writeln!(out, "        Assert.True({field_expr} <= {cs_val}, \"expected <= {cs_val}\");");
+            }
+        }
         "starts_with" => {
             if let Some(expected) = &assertion.value {
                 let cs_val = json_to_csharp(expected);

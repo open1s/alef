@@ -562,6 +562,42 @@ fn render_assertion(
                 "    assert(strlen({field_expr}) == 0 && \"expected empty value\");"
             );
         }
+        "contains_any" => {
+            if let Some(values) = &assertion.values {
+                let _ = writeln!(out, "    {{");
+                let _ = writeln!(out, "        int found = 0;");
+                for val in values {
+                    let c_val = json_to_c(val);
+                    let _ = writeln!(out, "        if (strstr({field_expr}, {c_val}) != NULL) {{ found = 1; }}");
+                }
+                let _ = writeln!(out, "        assert(found && \"expected to contain at least one of the specified values\");");
+                let _ = writeln!(out, "    }}");
+            }
+        }
+        "greater_than" => {
+            if let Some(val) = &assertion.value {
+                let c_val = json_to_c(val);
+                let _ = writeln!(out, "    assert({field_expr} > {c_val} && \"expected greater than\");");
+            }
+        }
+        "less_than" => {
+            if let Some(val) = &assertion.value {
+                let c_val = json_to_c(val);
+                let _ = writeln!(out, "    assert({field_expr} < {c_val} && \"expected less than\");");
+            }
+        }
+        "greater_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let c_val = json_to_c(val);
+                let _ = writeln!(out, "    assert({field_expr} >= {c_val} && \"expected greater than or equal\");");
+            }
+        }
+        "less_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let c_val = json_to_c(val);
+                let _ = writeln!(out, "    assert({field_expr} <= {c_val} && \"expected less than or equal\");");
+            }
+        }
         "starts_with" => {
             if let Some(expected) = &assertion.value {
                 let c_val = json_to_c(expected);

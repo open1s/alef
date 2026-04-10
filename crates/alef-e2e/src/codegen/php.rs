@@ -318,6 +318,40 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         "is_empty" => {
             let _ = writeln!(out, "        $this->assertEmpty({field_expr});");
         }
+        "contains_any" => {
+            if let Some(values) = &assertion.values {
+                let _ = writeln!(out, "        $found = false;");
+                for val in values {
+                    let php_val = json_to_php(val);
+                    let _ = writeln!(out, "        if (str_contains({field_expr}, {php_val})) {{ $found = true; }}");
+                }
+                let _ = writeln!(out, "        $this->assertTrue($found, 'expected to contain at least one of the specified values');");
+            }
+        }
+        "greater_than" => {
+            if let Some(val) = &assertion.value {
+                let php_val = json_to_php(val);
+                let _ = writeln!(out, "        $this->assertGreaterThan({php_val}, {field_expr});");
+            }
+        }
+        "less_than" => {
+            if let Some(val) = &assertion.value {
+                let php_val = json_to_php(val);
+                let _ = writeln!(out, "        $this->assertLessThan({php_val}, {field_expr});");
+            }
+        }
+        "greater_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let php_val = json_to_php(val);
+                let _ = writeln!(out, "        $this->assertGreaterThanOrEqual({php_val}, {field_expr});");
+            }
+        }
+        "less_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let php_val = json_to_php(val);
+                let _ = writeln!(out, "        $this->assertLessThanOrEqual({php_val}, {field_expr});");
+            }
+        }
         "starts_with" => {
             if let Some(expected) = &assertion.value {
                 let php_val = json_to_php(expected);

@@ -476,6 +476,37 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         "is_empty" => {
             let _ = writeln!(out, "    assert not {field_access}");
         }
+        "contains_any" => {
+            if let Some(values) = &assertion.values {
+                let items: Vec<String> = values.iter().map(|v| value_to_python_string(v)).collect();
+                let list_str = items.join(", ");
+                let _ = writeln!(out, "    assert any(v in {field_access} for v in [{list_str}])");
+            }
+        }
+        "greater_than" => {
+            if let Some(val) = &assertion.value {
+                let expected = value_to_python_string(val);
+                let _ = writeln!(out, "    assert {field_access} > {expected}");
+            }
+        }
+        "less_than" => {
+            if let Some(val) = &assertion.value {
+                let expected = value_to_python_string(val);
+                let _ = writeln!(out, "    assert {field_access} < {expected}");
+            }
+        }
+        "greater_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let expected = value_to_python_string(val);
+                let _ = writeln!(out, "    assert {field_access} >= {expected}");
+            }
+        }
+        "less_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let expected = value_to_python_string(val);
+                let _ = writeln!(out, "    assert {field_access} <= {expected}");
+            }
+        }
         "starts_with" => {
             if let Some(val) = &assertion.value {
                 let expected = value_to_python_string(val);

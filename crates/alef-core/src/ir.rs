@@ -54,6 +54,10 @@ pub struct TypeDef {
     /// Used to select output DTO style (e.g., TypedDict for Python return types).
     #[serde(default)]
     pub is_return_type: bool,
+    /// Serde `rename_all` strategy for this type (e.g., `"camelCase"`, `"snake_case"`).
+    /// Used by Go/Java/C# backends to emit correct JSON tags matching Rust serde config.
+    #[serde(default)]
+    pub serde_rename_all: Option<String>,
 }
 
 /// A field on a public struct.

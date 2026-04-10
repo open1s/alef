@@ -3,7 +3,7 @@ use alef_codegen::naming::to_go_name;
 use alef_core::backend::{Backend, BuildConfig, Capabilities, GeneratedFile};
 use alef_core::config::{AlefConfig, Language, resolve_output_dir};
 use alef_core::ir::{ApiSurface, EnumDef, FieldDef, FunctionDef, MethodDef, TypeDef, TypeRef};
-use heck::{ToPascalCase, ToSnakeCase};
+use heck::{ToLowerCamelCase, ToPascalCase, ToSnakeCase};
 use std::fmt::Write;
 use std::path::PathBuf;
 
@@ -12,6 +12,19 @@ use std::path::PathBuf;
 fn is_tuple_field(field: &FieldDef) -> bool {
     (field.name.starts_with('_') && field.name[1..].chars().all(|c| c.is_ascii_digit()))
         || field.name.chars().next().is_none_or(|c| c.is_ascii_digit())
+}
+
+/// Apply a serde `rename_all` strategy to a field name.
+/// Returns the field name transformed according to the strategy, or the
+/// original name if no strategy is set.
+fn apply_serde_rename(field_name: &str, rename_all: Option<&str>) -> String {
+    match rename_all {
+        Some("camelCase") => field_name.to_lower_camel_case(),
+        Some("PascalCase") => field_name.to_pascal_case(),
+        Some("SCREAMING_SNAKE_CASE") => field_name.to_uppercase(),
+        // snake_case is the Rust default — field names are already snake_case.
+        _ => field_name.to_string(),
+    }
 }
 
 pub struct GoBackend;
@@ -395,11 +408,15 @@ fn gen_struct_type(typ: &TypeDef) -> String {
             go_type(&field.ty)
         };
 
-        // Determine json tag - use omitempty for optional fields
-        let json_tag = if field.optional {
-            format!("json:\"{},omitempty\"", field.name)
+        // Determine json tag - apply serde rename_all strategy.
+        // Use omitempty for optional fields and slice/map types (nil slices serialize to null
+        // in Go, which breaks Rust serde deserialization expecting an array).
+        let json_name = apply_serde_rename(&field.name, typ.serde_rename_all.as_deref());
+        let is_collection = matches!(&field.ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
+        let json_tag = if field.optional || is_collection {
+            format!("json:\"{},omitempty\"", json_name)
         } else {
-            format!("json:\"{}\"", field.name)
+            format!("json:\"{}\"", json_name)
         };
 
         if !field.doc.is_empty() {

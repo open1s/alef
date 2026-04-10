@@ -243,8 +243,31 @@ fn render_test_function(
         }
     }
 
-    // Emit assertions.
+    // Emit assertions, wrapping in nil guards when an intermediate path segment is optional.
     for assertion in &fixture.assertions {
+        if let Some(f) = &assertion.field {
+            if !f.is_empty() && !optional_locals.contains_key(f.as_str()) {
+                // Check if any prefix of the dotted path is optional (pointer in Go).
+                // e.g., "document.nodes" — if "document" is optional, guard the whole block.
+                let parts: Vec<&str> = f.split('.').collect();
+                let mut guard_expr: Option<String> = None;
+                for i in 1..parts.len() {
+                    let prefix = parts[..i].join(".");
+                    let resolved_prefix = field_resolver.resolve(&prefix);
+                    if field_resolver.is_optional(resolved_prefix) {
+                        let accessor = field_resolver.accessor(&prefix, "go", result_var);
+                        guard_expr = Some(accessor);
+                        break;
+                    }
+                }
+                if let Some(guard) = guard_expr {
+                    let _ = writeln!(out, "\tif {guard} != nil {{");
+                    render_assertion(out, assertion, result_var, field_resolver, &optional_locals);
+                    let _ = writeln!(out, "\t}}");
+                    continue;
+                }
+            }
+        }
         render_assertion(out, assertion, result_var, field_resolver, &optional_locals);
     }
 
@@ -358,6 +381,63 @@ fn render_assertion(
             let _ = writeln!(out, "\tif len({field_expr}) == 0 {{");
             let _ = writeln!(out, "\t\tt.Errorf(\"expected non-empty value\")");
             let _ = writeln!(out, "\t}}");
+        }
+        "is_empty" => {
+            let _ = writeln!(out, "\tif len({field_expr}) != 0 {{");
+            let _ = writeln!(out, "\t\tt.Errorf(\"expected empty value, got %q\", {field_expr})");
+            let _ = writeln!(out, "\t}}");
+        }
+        "contains_any" => {
+            if let Some(values) = &assertion.values {
+                let _ = writeln!(out, "\t{{");
+                let _ = writeln!(out, "\t\tfound := false");
+                for val in values {
+                    let go_val = json_to_go(val);
+                    let _ = writeln!(
+                        out,
+                        "\t\tif strings.Contains({field_expr}, {go_val}) {{ found = true }}"
+                    );
+                }
+                let _ = writeln!(out, "\t\tif !found {{");
+                let _ = writeln!(
+                    out,
+                    "\t\t\tt.Errorf(\"expected to contain at least one of the specified values\")"
+                );
+                let _ = writeln!(out, "\t\t}}");
+                let _ = writeln!(out, "\t}}");
+            }
+        }
+        "greater_than" => {
+            if let Some(val) = &assertion.value {
+                let go_val = json_to_go(val);
+                let _ = writeln!(out, "\tif {field_expr} <= {go_val} {{");
+                let _ = writeln!(out, "\t\tt.Errorf(\"expected > {go_val}, got %v\", {field_expr})");
+                let _ = writeln!(out, "\t}}");
+            }
+        }
+        "less_than" => {
+            if let Some(val) = &assertion.value {
+                let go_val = json_to_go(val);
+                let _ = writeln!(out, "\tif {field_expr} >= {go_val} {{");
+                let _ = writeln!(out, "\t\tt.Errorf(\"expected < {go_val}, got %v\", {field_expr})");
+                let _ = writeln!(out, "\t}}");
+            }
+        }
+        "greater_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let go_val = json_to_go(val);
+                let _ = writeln!(out, "\tif {field_expr} < {go_val} {{");
+                let _ = writeln!(out, "\t\tt.Errorf(\"expected >= {go_val}, got %v\", {field_expr})");
+                let _ = writeln!(out, "\t}}");
+            }
+        }
+        "less_than_or_equal" => {
+            if let Some(val) = &assertion.value {
+                let go_val = json_to_go(val);
+                let _ = writeln!(out, "\tif {field_expr} > {go_val} {{");
+                let _ = writeln!(out, "\t\tt.Errorf(\"expected <= {go_val}, got %v\", {field_expr})");
+                let _ = writeln!(out, "\t}}");
+            }
         }
         "starts_with" => {
             if let Some(expected) = &assertion.value {
