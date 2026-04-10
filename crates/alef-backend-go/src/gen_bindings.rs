@@ -106,12 +106,16 @@ fn strip_trailing_whitespace(content: &str) -> String {
 }
 
 /// Generate the complete Go binding file wrapping the C FFI layer.
-fn gen_go_file(api: &ApiSurface, ffi_prefix: &str, pkg_name: &str, _ffi_lib_name: &str, ffi_header: &str) -> String {
+fn gen_go_file(api: &ApiSurface, ffi_prefix: &str, pkg_name: &str, ffi_lib_name: &str, ffi_header: &str) -> String {
     let mut out = String::with_capacity(4096);
 
-    // Package header and imports
+    // Package header and cgo directives
     writeln!(out, "package {}\n", pkg_name).ok();
-    writeln!(out, "/*\n#include \"{}\"\n*/\nimport \"C\"", ffi_header).ok();
+    writeln!(out, "/*").ok();
+    writeln!(out, "#cgo CFLAGS: -I${{SRCDIR}}/../../crates/{ffi_lib_name}/include").ok();
+    writeln!(out, "#cgo LDFLAGS: -L${{SRCDIR}}/../../target/release -l{ffi_lib_name}").ok();
+    writeln!(out, "#include \"{}\"", ffi_header).ok();
+    writeln!(out, "*/\nimport \"C\"").ok();
     writeln!(out).ok();
     // Determine imports — add "errors" if we have error types
     if api.errors.is_empty() {

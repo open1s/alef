@@ -222,27 +222,27 @@ fn gen_native_lib(api: &ApiSurface, config: &AlefConfig, package: &str, prefix: 
     writeln!(body, "    }}").ok();
     writeln!(body).ok();
 
-    // Generate method handles for free functions
+    // Generate method handles for free functions.
+    // All functions get handles regardless of is_async — the FFI layer always exposes
+    // synchronous C functions, and the Java async wrapper delegates to the sync method.
     for func in &api.functions {
-        if !func.is_async {
-            let ffi_name = format!("{}_{}", prefix, func.name.to_lowercase());
-            let return_layout = gen_ffi_layout(&func.return_type);
-            let param_layouts: Vec<String> = func.params.iter().map(|p| gen_ffi_layout(&p.ty)).collect();
+        let ffi_name = format!("{}_{}", prefix, func.name.to_lowercase());
+        let return_layout = gen_ffi_layout(&func.return_type);
+        let param_layouts: Vec<String> = func.params.iter().map(|p| gen_ffi_layout(&p.ty)).collect();
 
-            let layout_str = gen_function_descriptor(&return_layout, &param_layouts);
+        let layout_str = gen_function_descriptor(&return_layout, &param_layouts);
 
-            let handle_name = format!("{}_{}", prefix.to_uppercase(), func.name.to_uppercase());
+        let handle_name = format!("{}_{}", prefix.to_uppercase(), func.name.to_uppercase());
 
-            writeln!(
-                body,
-                "    static final MethodHandle {} = LINKER.downcallHandle(",
-                handle_name
-            )
-            .ok();
-            writeln!(body, "        LIB.find(\"{}\").orElseThrow(),", ffi_name).ok();
-            writeln!(body, "        {}", layout_str).ok();
-            writeln!(body, "    );").ok();
-        }
+        writeln!(
+            body,
+            "    static final MethodHandle {} = LINKER.downcallHandle(",
+            handle_name
+        )
+        .ok();
+        writeln!(body, "        LIB.find(\"{}\").orElseThrow(),", ffi_name).ok();
+        writeln!(body, "        {}", layout_str).ok();
+        writeln!(body, "    );").ok();
     }
 
     // free_string handle for releasing FFI-allocated strings
@@ -585,6 +585,44 @@ fn gen_sync_function_method(out: &mut String, func: &FunctionDef, prefix: &str, 
             .ok();
         }
 
+        writeln!(out, "        }} catch (Throwable e) {{").ok();
+        writeln!(
+            out,
+            "            throw new {}Exception(\"FFI call failed\", e);",
+            class_name
+        )
+        .ok();
+        writeln!(out, "        }}").ok();
+    } else if matches!(func.return_type, TypeRef::Vec(_)) {
+        // Vec return types: FFI returns a JSON string pointer; deserialize into List<T>.
+        let free_handle = format!("NativeLib.{}_FREE_STRING", prefix.to_uppercase());
+        writeln!(
+            out,
+            "            var resultPtr = (MemorySegment) {}.invoke({});",
+            ffi_handle,
+            call_args.join(", ")
+        )
+        .ok();
+        writeln!(out, "            if (resultPtr.equals(MemorySegment.NULL)) {{").ok();
+        writeln!(out, "                return java.util.List.of();").ok();
+        writeln!(out, "            }}").ok();
+        writeln!(
+            out,
+            "            String json = resultPtr.reinterpret(Long.MAX_VALUE).getString(0);"
+        )
+        .ok();
+        writeln!(out, "            {}.invoke(resultPtr);", free_handle).ok();
+        // Determine the element type for deserialization
+        let element_type = match &func.return_type {
+            TypeRef::Vec(inner) => java_type(inner),
+            _ => unreachable!(),
+        };
+        writeln!(
+            out,
+            "            return new ObjectMapper().readValue(json, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<{}>>() {{}});",
+            element_type
+        )
+        .ok();
         writeln!(out, "        }} catch (Throwable e) {{").ok();
         writeln!(
             out,
