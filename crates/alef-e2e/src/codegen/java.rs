@@ -443,7 +443,8 @@ fn render_assertion(
                 let accessor = field_resolver.accessor(f, "java", result_var);
                 let resolved = field_resolver.resolve(f);
                 // Unwrap Optional fields with .orElse("") for string comparisons.
-                if field_resolver.is_optional(resolved) {
+                // Map.get() returns nullable, not Optional, so skip .orElse() for map access.
+                if field_resolver.is_optional(resolved) && !field_resolver.has_map_access(f) {
                     format!("{accessor}.orElse(\"\")")
                 } else {
                     accessor
@@ -596,7 +597,7 @@ fn render_assertion(
                 if let Some(n) = val.as_u64() {
                     let _ = writeln!(
                         out,
-                        "        assertThat({field_expr}).hasSizeGreaterThanOrEqualTo((int) {n});"
+                        "        assertTrue({field_expr}.size() >= {n}, \"expected at least {n} elements\");"
                     );
                 }
             }

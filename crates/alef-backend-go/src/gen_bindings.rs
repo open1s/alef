@@ -215,22 +215,30 @@ fn gen_go_file(
         writeln!(out, "{}\n", gen_enum_type(enum_def)).ok();
     }
 
+    // Collect opaque type names — these are pointer-wrapped handles, not JSON-serializable structs.
+    let opaque_names: std::collections::HashSet<&str> =
+        api.types.iter().filter(|t| t.is_opaque).map(|t| t.name.as_str()).collect();
+
     // Generate struct types
     for typ in &api.types {
-        writeln!(out, "{}\n", gen_struct_type(typ)).ok();
-        // Generate functional options pattern if type has defaults.
-        // Skip "Update" types (e.g., ConversionOptionsUpdate) — they are partial update
-        // structs that share field names with the primary config type, producing duplicate
-        // With* function declarations.
-        if typ.has_default && !typ.name.ends_with("Update") {
-            writeln!(out, "{}\n", gen_config_options(typ, &enum_names)).ok();
+        if typ.is_opaque {
+            writeln!(out, "{}\n", gen_opaque_type(typ, ffi_prefix)).ok();
+        } else {
+            writeln!(out, "{}\n", gen_struct_type(typ)).ok();
+            // Generate functional options pattern if type has defaults.
+            // Skip "Update" types (e.g., ConversionOptionsUpdate) — they are partial update
+            // structs that share field names with the primary config type, producing duplicate
+            // With* function declarations.
+            if typ.has_default && !typ.name.ends_with("Update") {
+                writeln!(out, "{}\n", gen_config_options(typ, &enum_names)).ok();
+            }
         }
     }
 
     // Generate free function wrappers.
     // Async functions are included — the underlying FFI uses block_on() for synchronous C calls.
     for func in &api.functions {
-        writeln!(out, "{}\n", gen_function_wrapper(func, ffi_prefix)).ok();
+        writeln!(out, "{}\n", gen_function_wrapper(func, ffi_prefix, &opaque_names)).ok();
     }
 
     // Generate struct methods.
@@ -242,7 +250,7 @@ fn gen_go_file(
             if method.is_static && matches!(method.return_type, TypeRef::Named(_)) {
                 continue;
             }
-            writeln!(out, "{}\n", gen_method_wrapper(typ, method, ffi_prefix)).ok();
+            writeln!(out, "{}\n", gen_method_wrapper(typ, method, ffi_prefix, &opaque_names)).ok();
         }
     }
 
@@ -381,6 +389,38 @@ fn gen_data_enum_type(enum_def: &EnumDef) -> String {
     out
 }
 
+/// Generate a Go opaque handle type wrapping an `unsafe.Pointer`.
+///
+/// Opaque types are not JSON-serializable — they are raw C pointers passed through
+/// the FFI layer. The Go struct holds a pointer and exposes a `Free()` method.
+fn gen_opaque_type(typ: &TypeDef, ffi_prefix: &str) -> String {
+    let mut out = String::with_capacity(512);
+    let type_snake = typ.name.to_snake_case();
+
+    if !typ.doc.is_empty() {
+        for line in typ.doc.lines() {
+            writeln!(out, "// {}", line.trim()).ok();
+        }
+    } else {
+        writeln!(out, "// {} is an opaque handle type.", typ.name).ok();
+    }
+    writeln!(out, "type {} struct {{", typ.name).ok();
+    writeln!(out, "    ptr unsafe.Pointer").ok();
+    writeln!(out, "}}").ok();
+    writeln!(out).ok();
+
+    // Free method
+    writeln!(out, "// Free releases the resources held by this handle.").ok();
+    writeln!(out, "func (h *{}) Free() {{", typ.name).ok();
+    writeln!(out, "    if h.ptr != nil {{").ok();
+    writeln!(out, "        C.{}_{}_free(h.ptr)", ffi_prefix, type_snake).ok();
+    writeln!(out, "        h.ptr = nil").ok();
+    writeln!(out, "    }}").ok();
+    writeln!(out, "}}").ok();
+
+    out
+}
+
 /// Generate a Go struct type definition with json tags for marshaling.
 fn gen_struct_type(typ: &TypeDef) -> String {
     let mut out = String::with_capacity(1024);
@@ -429,7 +469,7 @@ fn gen_struct_type(typ: &TypeDef) -> String {
 }
 
 /// Generate a wrapper function for a free function.
-fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
+fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str, opaque_names: &std::collections::HashSet<&str>) -> String {
     let mut out = String::with_capacity(2048);
 
     let func_go_name = to_go_name(&func.name);
@@ -518,14 +558,14 @@ fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
             write!(
                 out,
                 "{}",
-                gen_param_to_c(&mod_param, returns_value_and_error, can_return_error, ffi_prefix)
+                gen_param_to_c(&mod_param, returns_value_and_error, can_return_error, ffi_prefix, opaque_names)
             )
             .ok();
         } else {
             write!(
                 out,
                 "{}",
-                gen_param_to_c(param, returns_value_and_error, can_return_error, ffi_prefix)
+                gen_param_to_c(param, returns_value_and_error, can_return_error, ffi_prefix, opaque_names)
             )
             .ok();
         }
@@ -579,15 +619,18 @@ fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
             ) {
                 writeln!(out, "    defer C.{}_free_string(ptr)", ffi_prefix).ok();
             }
-            // Free the opaque handle after extracting data via to_json
+            // For non-opaque Named types, free the handle after JSON extraction.
+            // Opaque types are NOT freed here — the caller owns them via the Go wrapper.
             if let TypeRef::Named(name) = &func.return_type {
-                let type_snake = name.to_snake_case();
-                writeln!(out, "    defer C.{}_{}_free(ptr)", ffi_prefix, type_snake).ok();
+                if !opaque_names.contains(name.as_str()) {
+                    let type_snake = name.to_snake_case();
+                    writeln!(out, "    defer C.{}_{}_free(ptr)", ffi_prefix, type_snake).ok();
+                }
             }
             writeln!(
                 out,
                 "    return {}, nil",
-                go_return_expr(&func.return_type, "ptr", ffi_prefix)
+                go_return_expr(&func.return_type, "ptr", ffi_prefix, opaque_names)
             )
             .ok();
         }
@@ -602,15 +645,18 @@ fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
         ) {
             writeln!(out, "    defer C.{}_free_string(ptr)", ffi_prefix).ok();
         }
-        // Free the opaque handle after extracting data via to_json
+        // For non-opaque Named types, free the handle after JSON extraction.
+        // Opaque types are NOT freed here — the caller owns them via the Go wrapper.
         if let TypeRef::Named(name) = &func.return_type {
-            let type_snake = name.to_snake_case();
-            writeln!(out, "    defer C.{}_{}_free(ptr)", ffi_prefix, type_snake).ok();
+            if !opaque_names.contains(name.as_str()) {
+                let type_snake = name.to_snake_case();
+                writeln!(out, "    defer C.{}_{}_free(ptr)", ffi_prefix, type_snake).ok();
+            }
         }
         writeln!(
             out,
             "    return {}",
-            go_return_expr(&func.return_type, "ptr", ffi_prefix)
+            go_return_expr(&func.return_type, "ptr", ffi_prefix, opaque_names)
         )
         .ok();
     }
@@ -620,7 +666,7 @@ fn gen_function_wrapper(func: &FunctionDef, ffi_prefix: &str) -> String {
 }
 
 /// Generate a wrapper method for a struct method.
-fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str) -> String {
+fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str, opaque_names: &std::collections::HashSet<&str>) -> String {
     let mut out = String::with_capacity(2048);
 
     let method_go_name = to_go_name(&method.name);
@@ -731,7 +777,7 @@ fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, ffi_prefix: &str) -> St
             write!(
                 out,
                 "{}",
-                gen_param_to_c(param, returns_value_and_error, can_return_error, ffi_prefix)
+                gen_param_to_c(param, returns_value_and_error, can_return_error, ffi_prefix, opaque_names)
             )
             .ok();
         }
