@@ -146,7 +146,8 @@ pub(super) fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, prefix: &str
         .ok();
     }
 
-    // Build the call expression — pass &ref for String/Bytes/Named params, owned for Path
+    // Build the call expression — pass &ref for String/Bytes params, owned for Path/Named
+    let is_owned_receiver = method.receiver.as_ref() == Some(&ReceiverKind::Owned);
     let arg_names: Vec<String> = method
         .params
         .iter()
@@ -154,7 +155,11 @@ pub(super) fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, prefix: &str
             let rs = format!("{}_rs", p.name);
             match &p.ty {
                 TypeRef::Path if !p.optional => rs, // PathBuf is passed owned
-                TypeRef::String | TypeRef::Char | TypeRef::Bytes | TypeRef::Named(_) if !p.optional => {
+                TypeRef::Named(_) if !p.optional => {
+                    // Builder methods (Owned receiver) take params by value
+                    if is_owned_receiver { rs } else { format!("&{rs}") }
+                }
+                TypeRef::String | TypeRef::Char | TypeRef::Bytes if !p.optional => {
                     format!("&{rs}")
                 }
                 TypeRef::String | TypeRef::Char | TypeRef::Bytes if p.optional => {
