@@ -327,6 +327,7 @@ pub(crate) fn extract_field(field: &syn::Field, crate_name: Option<&str>) -> Fie
         typed_default: None,
         core_wrapper,
         vec_inner_core_wrapper,
+        newtype_wrapper: None,
     }
 }
 
@@ -354,6 +355,7 @@ pub(crate) fn extract_enum_variant(v: &syn::Variant) -> EnumVariant {
                     typed_default: None,
                     core_wrapper: CoreWrapper::None,
                     vec_inner_core_wrapper: CoreWrapper::None,
+                    newtype_wrapper: None,
                 }
             })
             .collect(),

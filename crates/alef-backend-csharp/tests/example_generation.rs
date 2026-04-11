@@ -27,6 +27,7 @@ fn test_generated_code_example() {
                     typed_default: None,
                     core_wrapper: alef_core::ir::CoreWrapper::None,
                     vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
                 FieldDef {
                     name: "timeout".to_string(),
@@ -41,6 +42,7 @@ fn test_generated_code_example() {
                     typed_default: None,
                     core_wrapper: alef_core::ir::CoreWrapper::None,
                     vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
             ],
             methods: vec![],
@@ -86,6 +88,7 @@ fn test_generated_code_example() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![EnumDef {
             name: "OcrBackend".to_string(),
@@ -108,6 +111,8 @@ fn test_generated_code_example() {
             ],
             doc: "Available OCR backends".to_string(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![],
     };

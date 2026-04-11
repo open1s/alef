@@ -192,7 +192,29 @@ pub fn gen_method(
             let result_wrap = match &method.return_type {
                 TypeRef::Named(n) if n == type_name => ".into()".to_string(),
                 TypeRef::Named(_) => ".into()".to_string(),
-                TypeRef::String | TypeRef::Bytes | TypeRef::Path => ".into()".to_string(),
+                TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
+                    if method.returns_ref {
+                        ".to_owned()".to_string()
+                    } else {
+                        ".into()".to_string()
+                    }
+                }
+                // Optional<Named>: when core returns Option<&T>, need .map(|v| v.clone().into())
+                TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Named(_)) => {
+                    if method.returns_ref {
+                        ".map(|v| v.clone().into())".to_string()
+                    } else {
+                        ".map(Into::into)".to_string()
+                    }
+                }
+                // Optional<String>: when core returns Option<&str>, need .map(|v| v.to_owned())
+                TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::String | TypeRef::Bytes) => {
+                    if method.returns_ref {
+                        ".map(|v| v.to_owned())".to_string()
+                    } else {
+                        String::new()
+                    }
+                }
                 _ => String::new(),
             };
             if method.error_type.is_some() {

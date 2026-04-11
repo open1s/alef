@@ -45,6 +45,7 @@ pub(crate) fn extract_function(item: &syn::ItemFn, crate_name: &str, module_path
         cfg,
         sanitized: false,
         returns_ref,
+        return_newtype_wrapper: None,
     })
 }
 
@@ -269,6 +270,7 @@ pub(crate) fn extract_method(
         sanitized: false,
         trait_source,
         returns_ref,
+        return_newtype_wrapper: None,
     }
 }
 
@@ -395,6 +397,23 @@ pub(crate) fn detect_receiver(
     (None, true)
 }
 
+/// Returns true when `ty` is `Option<&T>` — i.e., the outer type is `Option` and its
+/// single generic argument is a reference (`&str`, `&[u8]`, `&Path`, etc.).
+/// Used to set `is_ref = true` on optional params even though `&*pat_type.ty` is not a
+/// reference (the outer type is `Option`, not `&`).
+fn option_inner_is_ref(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(seg) = type_path.path.segments.last() {
+            if seg.ident == "Option" {
+                if let Some(inner) = type_resolver::extract_single_generic_arg_syn(seg) {
+                    return matches!(*inner, syn::Type::Reference(_));
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Extract function/method parameters, skipping `self` receivers.
 pub(crate) fn extract_params(inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>) -> Vec<ParamDef> {
     inputs
@@ -405,7 +424,10 @@ pub(crate) fn extract_params(inputs: &syn::punctuated::Punctuated<syn::FnArg, sy
                     syn::Pat::Ident(ident) => ident.ident.to_string(),
                     _ => "_".to_string(),
                 };
-                let is_ref = matches!(&*pat_type.ty, syn::Type::Reference(_));
+                // `is_ref` is true for `&T` params AND for `Option<&T>` params.
+                // The latter is needed to distinguish `Option<&str>` (core takes &str slice)
+                // from `Option<String>` (core takes owned String).
+                let is_ref = matches!(&*pat_type.ty, syn::Type::Reference(_)) || option_inner_is_ref(&pat_type.ty);
                 let resolved = type_resolver::resolve_type(&pat_type.ty);
                 let (ty, optional) = unwrap_optional(resolved);
                 Some(ParamDef {

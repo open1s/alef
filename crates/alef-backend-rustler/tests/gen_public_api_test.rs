@@ -69,6 +69,7 @@ fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
         typed_default: None,
         core_wrapper: alef_core::ir::CoreWrapper::None,
         vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+        newtype_wrapper: None,
     }
 }
 
@@ -87,6 +88,7 @@ fn make_field_with_default(name: &str, ty: TypeRef, default: DefaultValue) -> Fi
         typed_default: Some(default),
         core_wrapper: CoreWrapper::None,
         vec_inner_core_wrapper: CoreWrapper::None,
+        newtype_wrapper: None,
     }
 }
 
@@ -104,6 +106,7 @@ fn make_static_method(name: &str, return_type: TypeRef) -> MethodDef {
         sanitized: false,
         trait_source: None,
         returns_ref: false,
+        return_newtype_wrapper: None,
     }
 }
 
@@ -121,6 +124,7 @@ fn make_instance_method(name: &str, params: Vec<ParamDef>, return_type: TypeRef)
         sanitized: false,
         trait_source: None,
         returns_ref: false,
+        return_newtype_wrapper: None,
     }
 }
 
@@ -185,6 +189,7 @@ fn test_generate_public_api_creates_all_files() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![EnumDef {
             name: "HeadingStyle".to_string(),
@@ -207,6 +212,8 @@ fn test_generate_public_api_creates_all_files() {
             ],
             doc: String::new(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![],
     };
@@ -283,6 +290,7 @@ fn test_native_ex_has_all_nif_stubs() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![],
         errors: vec![],
@@ -396,6 +404,8 @@ fn test_struct_module_has_defstruct() {
             ],
             doc: String::new(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![],
     };
@@ -576,6 +586,7 @@ fn test_generate_bindings_nif_init_uses_native_module() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![],
         errors: vec![],

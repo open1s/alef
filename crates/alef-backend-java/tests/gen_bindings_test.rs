@@ -29,6 +29,7 @@ fn test_basic_generation() {
                 typed_default: None,
                 core_wrapper: alef_core::ir::CoreWrapper::None,
                 vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                newtype_wrapper: None,
             }],
             methods: vec![],
             is_opaque: false,
@@ -61,6 +62,7 @@ fn test_basic_generation() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![EnumDef {
             name: "Mode".to_string(),
@@ -83,6 +85,8 @@ fn test_basic_generation() {
             ],
             doc: "Processing mode".to_string(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![],
     };
@@ -309,6 +313,7 @@ fn test_optional_field_defaults_in_builder() {
                     typed_default: None,
                     core_wrapper: alef_core::ir::CoreWrapper::None,
                     vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
                 FieldDef {
                     name: "bullets".to_string(),
@@ -323,6 +328,7 @@ fn test_optional_field_defaults_in_builder() {
                     typed_default: None,
                     core_wrapper: alef_core::ir::CoreWrapper::None,
                     vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
                 FieldDef {
                     name: "escape_asterisks".to_string(),
@@ -337,6 +343,7 @@ fn test_optional_field_defaults_in_builder() {
                     typed_default: None,
                     core_wrapper: alef_core::ir::CoreWrapper::None,
                     vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
                 FieldDef {
                     name: "timeout_ms".to_string(),
@@ -351,6 +358,7 @@ fn test_optional_field_defaults_in_builder() {
                     typed_default: None,
                     core_wrapper: alef_core::ir::CoreWrapper::None,
                     vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
             ],
             methods: vec![],

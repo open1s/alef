@@ -179,9 +179,15 @@ pub fn gen_call_args(params: &[ParamDef], opaque_types: &AHashSet<String>) -> St
                             p.name.clone()
                         }
                     } else if promoted {
-                        format!("&{}{}", p.name, unwrap_suffix)
-                    } else {
+                        if p.is_ref {
+                            format!("&{}{}", p.name, unwrap_suffix)
+                        } else {
+                            format!("{}{}", p.name, unwrap_suffix)
+                        }
+                    } else if p.is_ref {
                         format!("&{}", p.name)
+                    } else {
+                        p.name.clone()
                     }
                 }
                 // Path → PathBuf for core function calls (core expects PathBuf, binding has String)
@@ -273,9 +279,15 @@ pub fn gen_call_args_with_let_bindings(params: &[ParamDef], opaque_types: &AHash
                             p.name.clone()
                         }
                     } else if promoted {
-                        format!("&{}{}", p.name, unwrap_suffix)
-                    } else {
+                        if p.is_ref {
+                            format!("&{}{}", p.name, unwrap_suffix)
+                        } else {
+                            format!("{}{}", p.name, unwrap_suffix)
+                        }
+                    } else if p.is_ref {
                         format!("&{}", p.name)
+                    } else {
+                        p.name.clone()
                     }
                 }
                 TypeRef::Path => {
@@ -499,6 +511,20 @@ pub fn gen_lossy_binding_to_core_fields(typ: &TypeDef, core_import: &str) -> Str
                         format!("serde_json::from_str(&self.{name}).unwrap_or_default()")
                     }
                 }
+            };
+            // Newtype wrapping: when the field was resolved from a newtype (e.g. NodeIndex → u32),
+            // re-wrap the binding value into the newtype for the core struct literal.
+            // When `optional=true` and `ty` is a plain Primitive (not TypeRef::Optional), the core
+            // field is actually `Option<NewtypeT>`, so we must use `.map(NewtypeT)` not `NewtypeT(...)`.
+            let expr = if let Some(newtype_path) = &field.newtype_wrapper {
+                match &field.ty {
+                    TypeRef::Optional(_) => format!("({expr}).map({newtype_path})"),
+                    TypeRef::Vec(_) => format!("({expr}).into_iter().map({newtype_path}).collect()"),
+                    _ if field.optional => format!("({expr}).map({newtype_path})"),
+                    _ => format!("{newtype_path}({expr})"),
+                }
+            } else {
+                expr
             };
             writeln!(out, "            {name}: {expr},").ok();
         }

@@ -10,6 +10,38 @@ use super::helpers::{
     has_field_attr, is_pub, syn_type_is_boxed, unwrap_optional,
 };
 
+/// Extract `tag` value from `#[serde(tag = "...")]` or
+/// `#[cfg_attr(..., serde(tag = "..."))]` attributes on enums.
+fn extract_serde_tag(attrs: &[syn::Attribute]) -> Option<String> {
+    for attr in attrs {
+        let tokens = if let Ok(list) = attr.meta.require_list() {
+            format!("{}", list.tokens)
+        } else {
+            continue;
+        };
+        // Look for `tag = "value"` pattern (but not `rename_all` or similar)
+        if let Some(pos) = tokens.find("tag") {
+            let rest = &tokens[pos..];
+            // Make sure it's exactly "tag" not "rename_all" or other keys containing "tag"
+            // Check that "tag" is followed by whitespace or '=' (not part of another word)
+            let after_tag = &rest[3..];
+            if !after_tag.starts_with('=') && !after_tag.trim_start().starts_with('=') {
+                continue;
+            }
+            if let Some(eq_pos) = rest.find('=') {
+                let after_eq = rest[eq_pos + 1..].trim_start();
+                if let Some(start) = after_eq.find('"') {
+                    let after_start = &after_eq[start + 1..];
+                    if let Some(end) = after_start.find('"') {
+                        return Some(after_start[..end].to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Extract a public struct into a `TypeDef`.
 /// Returns `None` for generic structs — they can't be directly exposed to FFI.
 pub(crate) fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_path: &str) -> Option<TypeDef> {
@@ -46,6 +78,7 @@ pub(crate) fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_pa
                 typed_default: None,
                 core_wrapper: detect_core_wrapper(&field.ty),
                 vec_inner_core_wrapper: detect_vec_inner_core_wrapper(&field.ty),
+                newtype_wrapper: None,
             }]
         }
         _ => vec![],
@@ -97,6 +130,8 @@ pub(crate) fn extract_enum(item: &syn::ItemEnum, crate_name: &str, module_path: 
     let variants = item.variants.iter().map(extract_enum_variant).collect();
 
     let rust_path = build_rust_path(crate_name, module_path, &name);
+    let serde_tag = extract_serde_tag(&item.attrs);
+    let serde_rename_all = extract_serde_rename_all(&item.attrs);
 
     Some(EnumDef {
         rust_path,
@@ -104,6 +139,8 @@ pub(crate) fn extract_enum(item: &syn::ItemEnum, crate_name: &str, module_path: 
         variants,
         doc,
         cfg,
+        serde_tag,
+        serde_rename_all,
     })
 }
 
@@ -174,6 +211,7 @@ pub(crate) fn extract_error_enum(item: &syn::ItemEnum, crate_name: &str, module_
                                 typed_default: None,
                                 core_wrapper: CoreWrapper::None,
                                 vec_inner_core_wrapper: CoreWrapper::None,
+                                newtype_wrapper: None,
                             }
                         })
                         .collect();

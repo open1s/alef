@@ -62,6 +62,7 @@ fn simple_type_def() -> TypeDef {
                 typed_default: None,
                 core_wrapper: CoreWrapper::None,
                 vec_inner_core_wrapper: CoreWrapper::None,
+                newtype_wrapper: None,
             },
             FieldDef {
                 name: "count".to_string(),
@@ -76,6 +77,7 @@ fn simple_type_def() -> TypeDef {
                 typed_default: None,
                 core_wrapper: CoreWrapper::None,
                 vec_inner_core_wrapper: CoreWrapper::None,
+                newtype_wrapper: None,
             },
         ],
         methods: vec![],
@@ -112,6 +114,7 @@ fn simple_function_def() -> FunctionDef {
         cfg: None,
         sanitized: false,
         returns_ref: false,
+        return_newtype_wrapper: None,
     }
 }
 
@@ -144,6 +147,8 @@ fn simple_enum_def() -> EnumDef {
         ],
         doc: "Output format options.".to_string(),
         cfg: None,
+        serde_tag: None,
+        serde_rename_all: None,
     }
 }
 
@@ -279,6 +284,7 @@ fn test_gen_instance_method_with_ref_receiver() {
         sanitized: false,
         trait_source: None,
         returns_ref: false,
+        return_newtype_wrapper: None,
     };
     let mapper = RustMapper;
     let cfg = default_cfg();
@@ -316,6 +322,7 @@ fn test_gen_static_method_without_receiver() {
         sanitized: false,
         trait_source: None,
         returns_ref: false,
+        return_newtype_wrapper: None,
     };
     let mapper = RustMapper;
     let cfg = default_cfg();
@@ -345,6 +352,7 @@ fn test_gen_async_method_generates_async_signature() {
         sanitized: false,
         trait_source: None,
         returns_ref: false,
+        return_newtype_wrapper: None,
     };
     let mapper = RustMapper;
     let cfg = default_cfg();
@@ -411,6 +419,7 @@ fn test_gen_method_with_multiple_params() {
         sanitized: false,
         trait_source: None,
         returns_ref: false,
+        return_newtype_wrapper: None,
     };
     let mapper = RustMapper;
     let cfg = default_cfg();
@@ -441,6 +450,7 @@ fn test_gen_method_with_error_type() {
         sanitized: false,
         trait_source: None,
         returns_ref: false,
+        return_newtype_wrapper: None,
     };
     let mapper = RustMapper;
     let cfg = default_cfg();
@@ -476,6 +486,7 @@ fn test_gen_impl_block_with_constructor_and_methods() {
             sanitized: false,
             trait_source: None,
             returns_ref: false,
+            return_newtype_wrapper: None,
         },
         MethodDef {
             name: "create".to_string(),
@@ -489,6 +500,7 @@ fn test_gen_impl_block_with_constructor_and_methods() {
             sanitized: false,
             trait_source: None,
             returns_ref: false,
+            return_newtype_wrapper: None,
         },
     ];
 
@@ -531,6 +543,7 @@ fn test_gen_method_with_optional_param() {
         sanitized: false,
         trait_source: None,
         returns_ref: false,
+        return_newtype_wrapper: None,
     };
     let mapper = RustMapper;
     let cfg = default_cfg();
@@ -1115,6 +1128,7 @@ fn test_gen_lossy_binding_to_core_fields_with_duration() {
         typed_default: None,
         core_wrapper: CoreWrapper::None,
         vec_inner_core_wrapper: CoreWrapper::None,
+        newtype_wrapper: None,
     });
 
     let result = binding_helpers::gen_lossy_binding_to_core_fields(&typ, "my_crate");

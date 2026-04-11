@@ -18,6 +18,7 @@ fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
         typed_default: None,
         core_wrapper: CoreWrapper::None,
         vec_inner_core_wrapper: CoreWrapper::None,
+        newtype_wrapper: None,
     }
 }
 
@@ -118,6 +119,7 @@ fn test_basic_stubs() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![EnumDef {
             name: "Mode".to_string(),
@@ -140,6 +142,8 @@ fn test_basic_stubs() {
             ],
             doc: "Processing mode".to_string(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![],
     };
@@ -312,6 +316,8 @@ fn test_enum_stubs() {
             ],
             doc: "Status enum".to_string(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![],
     };
@@ -487,6 +493,7 @@ fn test_function_stubs_with_multiple_params() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![],
         errors: vec![],
@@ -556,6 +563,7 @@ fn test_opaque_type_stubs() {
                 receiver: Some(ReceiverKind::Ref),
                 sanitized: false,
                 returns_ref: false,
+                return_newtype_wrapper: None,
                 trait_source: None,
             }],
             is_opaque: true,
@@ -653,6 +661,7 @@ fn test_python_keyword_escaping_function_name() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![],
         errors: vec![],
@@ -705,6 +714,7 @@ fn test_static_method_stubs() {
                 receiver: None,
                 sanitized: false,
                 returns_ref: false,
+                return_newtype_wrapper: None,
                 trait_source: None,
             }],
             is_opaque: false,
@@ -812,6 +822,7 @@ fn test_multiple_types_and_functions() {
                 cfg: None,
                 sanitized: false,
                 returns_ref: false,
+                return_newtype_wrapper: None,
             },
             FunctionDef {
                 name: "create_post".to_string(),
@@ -845,6 +856,7 @@ fn test_multiple_types_and_functions() {
                 cfg: None,
                 sanitized: false,
                 returns_ref: false,
+                return_newtype_wrapper: None,
             },
         ],
         enums: vec![EnumDef {
@@ -868,6 +880,8 @@ fn test_multiple_types_and_functions() {
             ],
             doc: String::new(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![],
     };

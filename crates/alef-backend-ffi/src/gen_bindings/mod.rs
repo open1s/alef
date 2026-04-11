@@ -230,6 +230,7 @@ mod tests {
                         typed_default: None,
                         core_wrapper: alef_core::ir::CoreWrapper::None,
                         vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                        newtype_wrapper: None,
                     },
                     FieldDef {
                         name: "name".to_string(),
@@ -244,6 +245,7 @@ mod tests {
                         typed_default: None,
                         core_wrapper: alef_core::ir::CoreWrapper::None,
                         vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                        newtype_wrapper: None,
                     },
                     FieldDef {
                         name: "verbose".to_string(),
@@ -258,6 +260,7 @@ mod tests {
                         typed_default: None,
                         core_wrapper: alef_core::ir::CoreWrapper::None,
                         vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                        newtype_wrapper: None,
                     },
                 ],
                 methods: vec![],
@@ -291,6 +294,7 @@ mod tests {
                 cfg: None,
                 sanitized: false,
                 returns_ref: false,
+                return_newtype_wrapper: None,
             }],
             enums: vec![EnumDef {
                 name: "OutputFormat".to_string(),
@@ -313,6 +317,8 @@ mod tests {
                 ],
                 doc: "Output format.".to_string(),
                 cfg: None,
+                serde_tag: None,
+                serde_rename_all: None,
             }],
             errors: vec![],
         }

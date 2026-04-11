@@ -156,8 +156,12 @@ pub(super) fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, prefix: &str
             match &p.ty {
                 TypeRef::Path if !p.optional => rs, // PathBuf is passed owned
                 TypeRef::Named(_) if !p.optional => {
-                    // Builder methods (Owned receiver) take params by value
-                    if is_owned_receiver { rs } else { format!("&{rs}") }
+                    // Pass by value when method takes owned (Owned receiver or is_ref=false)
+                    if is_owned_receiver || !p.is_ref {
+                        rs
+                    } else {
+                        format!("&{rs}")
+                    }
                 }
                 TypeRef::String | TypeRef::Char | TypeRef::Bytes if !p.optional => {
                     format!("&{rs}")
@@ -199,13 +203,36 @@ pub(super) fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, prefix: &str
     }
 
     // Handle return
+    // When return_newtype_wrapper is set, the core function returns a newtype (e.g. NodeIndex)
+    // but the IR has already resolved it to the inner type (e.g. u32). Unwrap with `.0`.
+    let result_expr = if method.return_newtype_wrapper.is_some() && matches!(method.return_type, TypeRef::Primitive(_))
+    {
+        "result.0"
+    } else {
+        "result"
+    };
+    // When returns_ref=true and the return type is Option<NamedType>, the core returns Option<&T>.
+    // Clone the result so that gen_owned_value_to_c receives an owned Option<T>
+    // (Box::new requires owned, not reference).
+    if method.returns_ref
+        && !has_error
+        && matches!(&method.return_type, TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Named(_)))
+    {
+        writeln!(out, "    let result = result.cloned();").ok();
+    }
     if has_error {
         writeln!(out, "    match result {{").ok();
         if is_void_return(&method.return_type) {
             writeln!(out, "        Ok(()) => 0,").ok();
         } else {
             writeln!(out, "        Ok(val) => {{").ok();
-            write!(out, "{}", gen_value_to_c("val", &method.return_type, "            ")).ok();
+            let val_expr =
+                if method.return_newtype_wrapper.is_some() && matches!(method.return_type, TypeRef::Primitive(_)) {
+                    "val.0"
+                } else {
+                    "val"
+                };
+            write!(out, "{}", gen_value_to_c(val_expr, &method.return_type, "            ")).ok();
             writeln!(out, "        }}").ok();
         }
         writeln!(out, "        Err(e) => {{").ok();
@@ -220,7 +247,12 @@ pub(super) fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, prefix: &str
     } else if is_void_return(&method.return_type) {
         // void, no error — result is already ()
     } else {
-        write!(out, "{}", gen_owned_value_to_c("result", &method.return_type, "    ")).ok();
+        write!(
+            out,
+            "{}",
+            gen_owned_value_to_c(result_expr, &method.return_type, "    ")
+        )
+        .ok();
     }
 
     write!(out, "}}").ok();
@@ -329,8 +361,12 @@ pub(super) fn gen_free_function(func: &FunctionDef, prefix: &str, core_import: &
             let rs = format!("{}_rs", p.name);
             match &p.ty {
                 TypeRef::Path if !p.optional => rs, // PathBuf is passed owned
-                TypeRef::String | TypeRef::Char | TypeRef::Bytes | TypeRef::Named(_) if !p.optional => {
+                TypeRef::String | TypeRef::Char | TypeRef::Bytes if !p.optional => {
                     format!("&{rs}")
+                }
+                TypeRef::Named(_) if !p.optional => {
+                    // Pass by value when function takes owned (is_ref=false)
+                    if p.is_ref { format!("&{rs}") } else { rs }
                 }
                 TypeRef::String | TypeRef::Char | TypeRef::Bytes if p.optional => {
                     // Only convert to &str slice when the core param is a reference (&str).
@@ -355,13 +391,33 @@ pub(super) fn gen_free_function(func: &FunctionDef, prefix: &str, core_import: &
     }
 
     // Handle return
+    // When return_newtype_wrapper is set, the core function returns a newtype but IR has the inner type.
+    let result_expr = if func.return_newtype_wrapper.is_some() && matches!(func.return_type, TypeRef::Primitive(_)) {
+        "result.0"
+    } else {
+        "result"
+    };
+    // When returns_ref=true and return type is Option<NamedType>, the core returns Option<&T>.
+    // Clone to get owned Option<T> before boxing.
+    if func.returns_ref
+        && !has_error
+        && matches!(&func.return_type, TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Named(_)))
+    {
+        writeln!(out, "    let result = result.cloned();").ok();
+    }
     if has_error {
         writeln!(out, "    match result {{").ok();
         if is_void_return(&func.return_type) {
             writeln!(out, "        Ok(()) => 0,").ok();
         } else {
             writeln!(out, "        Ok(val) => {{").ok();
-            write!(out, "{}", gen_value_to_c("val", &func.return_type, "            ")).ok();
+            let val_expr = if func.return_newtype_wrapper.is_some() && matches!(func.return_type, TypeRef::Primitive(_))
+            {
+                "val.0"
+            } else {
+                "val"
+            };
+            write!(out, "{}", gen_value_to_c(val_expr, &func.return_type, "            ")).ok();
             writeln!(out, "        }}").ok();
         }
         writeln!(out, "        Err(e) => {{").ok();
@@ -376,7 +432,7 @@ pub(super) fn gen_free_function(func: &FunctionDef, prefix: &str, core_import: &
     } else if is_void_return(&func.return_type) {
         // nothing
     } else {
-        write!(out, "{}", gen_owned_value_to_c("result", &func.return_type, "    ")).ok();
+        write!(out, "{}", gen_owned_value_to_c(result_expr, &func.return_type, "    ")).ok();
     }
 
     write!(out, "}}").ok();
@@ -447,6 +503,45 @@ pub(super) fn gen_param_conversion(
                     "        Some(unsafe {{ &*({name} as *const {qualified}) }}.clone())"
                 )
                 .ok();
+                writeln!(out, "    }};").ok();
+            }
+            TypeRef::Primitive(alef_core::ir::PrimitiveType::Bool) => {
+                // Optional bool: -1 = None, 0 = false, 1 = true
+                writeln!(out, "    let {rs_name} = if {name} < 0 {{").ok();
+                writeln!(out, "        None").ok();
+                writeln!(out, "    }} else {{").ok();
+                writeln!(out, "        Some({name} != 0)").ok();
+                writeln!(out, "    }};").ok();
+            }
+            TypeRef::Primitive(prim) => {
+                // Optional numeric primitive: max value of type = None
+                let max_val = match prim {
+                    alef_core::ir::PrimitiveType::U8 => "u8::MAX",
+                    alef_core::ir::PrimitiveType::U16 => "u16::MAX",
+                    alef_core::ir::PrimitiveType::U32 => "u32::MAX",
+                    alef_core::ir::PrimitiveType::U64 => "u64::MAX",
+                    alef_core::ir::PrimitiveType::I8 => "i8::MAX",
+                    alef_core::ir::PrimitiveType::I16 => "i16::MAX",
+                    alef_core::ir::PrimitiveType::I32 => "i32::MAX",
+                    alef_core::ir::PrimitiveType::I64 => "i64::MAX",
+                    alef_core::ir::PrimitiveType::F32 => "f32::NAN",
+                    alef_core::ir::PrimitiveType::F64 => "f64::NAN",
+                    alef_core::ir::PrimitiveType::Usize => "usize::MAX",
+                    alef_core::ir::PrimitiveType::Isize => "isize::MAX",
+                    alef_core::ir::PrimitiveType::Bool => unreachable!("handled above"),
+                };
+                let is_float = matches!(
+                    prim,
+                    alef_core::ir::PrimitiveType::F32 | alef_core::ir::PrimitiveType::F64
+                );
+                if is_float {
+                    writeln!(out, "    let {rs_name} = if {name}.is_nan() {{").ok();
+                } else {
+                    writeln!(out, "    let {rs_name} = if {name} == {max_val} {{").ok();
+                }
+                writeln!(out, "        None").ok();
+                writeln!(out, "    }} else {{").ok();
+                writeln!(out, "        Some({name})").ok();
                 writeln!(out, "    }};").ok();
             }
             _ => {
@@ -531,14 +626,25 @@ pub(super) fn gen_param_conversion(
                 writeln!(out, "    }}").ok();
                 writeln!(
                     out,
-                    "    let {rs_name} = match unsafe {{ CStr::from_ptr({name}) }}.to_str() {{"
+                    "    let {name}_str = match unsafe {{ CStr::from_ptr({name}) }}.to_str() {{"
                 )
                 .ok();
-                writeln!(out, "        Ok(s) => s.to_string(),").ok();
+                writeln!(out, "        Ok(s) => s,").ok();
                 writeln!(out, "        Err(_) => {{").ok();
                 writeln!(
                     out,
                     "            set_last_error(1, \"Invalid UTF-8 in parameter '{name}'\");"
+                )
+                .ok();
+                writeln!(out, "            {fail_ret}").ok();
+                writeln!(out, "        }}").ok();
+                writeln!(out, "    }};").ok();
+                writeln!(out, "    let {rs_name} = match serde_json::from_str({name}_str) {{").ok();
+                writeln!(out, "        Ok(v) => v,").ok();
+                writeln!(out, "        Err(_) => {{").ok();
+                writeln!(
+                    out,
+                    "            set_last_error(1, \"Invalid JSON in parameter '{name}'\");"
                 )
                 .ok();
                 writeln!(out, "            {fail_ret}").ok();
@@ -550,7 +656,12 @@ pub(super) fn gen_param_conversion(
                     writeln!(out, "    let {rs_name} = {name} != 0;").ok();
                 }
                 _ => {
-                    writeln!(out, "    let {rs_name} = {name};").ok();
+                    if let Some(newtype_path) = &param.newtype_wrapper {
+                        // Param was resolved from a newtype (e.g. NodeIndex→u32): re-wrap for core call.
+                        writeln!(out, "    let {rs_name} = {newtype_path}({name});").ok();
+                    } else {
+                        writeln!(out, "    let {rs_name} = {name};").ok();
+                    }
                 }
             },
             TypeRef::Named(_type_name) => {

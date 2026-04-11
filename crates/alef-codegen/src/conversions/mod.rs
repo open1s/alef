@@ -75,6 +75,7 @@ mod tests {
                     typed_default: None,
                     core_wrapper: CoreWrapper::None,
                     vec_inner_core_wrapper: CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
                 FieldDef {
                     name: "timeout".into(),
@@ -89,6 +90,7 @@ mod tests {
                     typed_default: None,
                     core_wrapper: CoreWrapper::None,
                     vec_inner_core_wrapper: CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
                 FieldDef {
                     name: "backend".into(),
@@ -103,6 +105,7 @@ mod tests {
                     typed_default: None,
                     core_wrapper: CoreWrapper::None,
                     vec_inner_core_wrapper: CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
             ],
             methods: vec![],
@@ -140,6 +143,8 @@ mod tests {
             ],
             doc: String::new(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }
     }
 

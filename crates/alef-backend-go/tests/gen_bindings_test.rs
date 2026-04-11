@@ -18,6 +18,7 @@ fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
         typed_default: None,
         core_wrapper: CoreWrapper::None,
         vec_inner_core_wrapper: CoreWrapper::None,
+        newtype_wrapper: None,
     }
 }
 
@@ -123,6 +124,7 @@ fn test_basic_generation() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![EnumDef {
             name: "Mode".to_string(),
@@ -145,6 +147,8 @@ fn test_basic_generation() {
             ],
             doc: "Processing mode".to_string(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![],
     };
@@ -297,6 +301,8 @@ fn test_enum_generation() {
             ],
             doc: "Status enum".to_string(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![],
     };
@@ -384,6 +390,7 @@ fn test_methods_generation() {
                     receiver: Some(alef_core::ir::ReceiverKind::Ref),
                     sanitized: false,
                     returns_ref: false,
+                    return_newtype_wrapper: None,
                     trait_source: None,
                 },
                 // Static method that returns a primitive (not skipped)
@@ -398,6 +405,7 @@ fn test_methods_generation() {
                     receiver: None,
                     sanitized: false,
                     returns_ref: false,
+                    return_newtype_wrapper: None,
                     trait_source: None,
                 },
                 // Instance method with parameters and error
@@ -421,6 +429,7 @@ fn test_methods_generation() {
                     receiver: Some(alef_core::ir::ReceiverKind::Ref),
                     sanitized: false,
                     returns_ref: false,
+                    return_newtype_wrapper: None,
                     trait_source: None,
                 },
             ],
@@ -557,6 +566,7 @@ fn test_async_function() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![],
         errors: vec![],

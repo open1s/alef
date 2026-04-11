@@ -107,6 +107,12 @@ pub struct FieldDef {
     /// Core wrapper on Vec inner elements (e.g., `Vec<Arc<T>>`).
     #[serde(default)]
     pub vec_inner_core_wrapper: CoreWrapper,
+    /// Full Rust path of the newtype wrapper that was resolved away for this field,
+    /// e.g. `"my_crate::NodeIndex"` when `NodeIndex(u32)` was resolved to `u32`.
+    /// When set, binding→core codegen must wrap values into the newtype
+    /// (e.g. `my_crate::NodeIndex(val.field)`) and core→binding codegen must unwrap (`.0`).
+    #[serde(default)]
+    pub newtype_wrapper: Option<String>,
 }
 
 /// A method on a public struct.
@@ -132,6 +138,11 @@ pub struct MethodDef {
     /// Used by code generators to insert `.clone()` before type conversion.
     #[serde(default)]
     pub returns_ref: bool,
+    /// Full Rust path of the newtype wrapper that was resolved away for the return type,
+    /// e.g. `"my_crate::NodeIndex"` when the return type `NodeIndex(u32)` was resolved to `u32`.
+    /// When set, codegen must unwrap the returned newtype value (e.g. `result.0`) before returning.
+    #[serde(default)]
+    pub return_newtype_wrapper: Option<String>,
 }
 
 /// How `self` is received.
@@ -161,6 +172,10 @@ pub struct FunctionDef {
     /// Used by code generators to insert `.clone()` before type conversion.
     #[serde(default)]
     pub returns_ref: bool,
+    /// Full Rust path of the newtype wrapper that was resolved away for the return type.
+    /// When set, codegen must unwrap the returned newtype value (e.g. `result.0`).
+    #[serde(default)]
+    pub return_newtype_wrapper: Option<String>,
 }
 
 /// A function/method parameter.
@@ -197,6 +212,12 @@ pub struct EnumDef {
     pub doc: String,
     #[serde(default)]
     pub cfg: Option<String>,
+    /// Serde tag property name for internally tagged enums (from `#[serde(tag = "...")]`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serde_tag: Option<String>,
+    /// Serde rename strategy for enum variants (from `#[serde(rename_all = "...")]`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serde_rename_all: Option<String>,
 }
 
 /// An enum variant.

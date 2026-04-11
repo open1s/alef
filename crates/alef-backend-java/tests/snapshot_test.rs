@@ -34,6 +34,7 @@ fn print_generated_java_code() {
                         typed_default: None,
                         core_wrapper: alef_core::ir::CoreWrapper::None,
                         vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                        newtype_wrapper: None,
                     },
                     FieldDef {
                         name: "timeout".to_string(),
@@ -48,6 +49,7 @@ fn print_generated_java_code() {
                         typed_default: None,
                         core_wrapper: alef_core::ir::CoreWrapper::None,
                         vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                        newtype_wrapper: None,
                     },
                 ],
                 methods: vec![],
@@ -78,6 +80,7 @@ fn print_generated_java_code() {
                         typed_default: None,
                         core_wrapper: alef_core::ir::CoreWrapper::None,
                         vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                        newtype_wrapper: None,
                     },
                     FieldDef {
                         name: "confidence".to_string(),
@@ -92,6 +95,7 @@ fn print_generated_java_code() {
                         typed_default: None,
                         core_wrapper: alef_core::ir::CoreWrapper::None,
                         vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                        newtype_wrapper: None,
                     },
                 ],
                 methods: vec![],
@@ -139,6 +143,7 @@ fn print_generated_java_code() {
                 cfg: None,
                 sanitized: false,
                 returns_ref: false,
+                return_newtype_wrapper: None,
             },
             FunctionDef {
                 name: "extractFileAsync".to_string(),
@@ -172,6 +177,7 @@ fn print_generated_java_code() {
                 cfg: None,
                 sanitized: false,
                 returns_ref: false,
+                return_newtype_wrapper: None,
             },
         ],
         enums: vec![EnumDef {
@@ -202,6 +208,8 @@ fn print_generated_java_code() {
             ],
             doc: "Available OCR backends".to_string(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![ErrorDef {
             name: "Error".to_string(),

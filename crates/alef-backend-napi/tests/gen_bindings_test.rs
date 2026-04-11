@@ -17,6 +17,7 @@ fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
         typed_default: None,
         core_wrapper: CoreWrapper::None,
         vec_inner_core_wrapper: CoreWrapper::None,
+        newtype_wrapper: None,
     }
 }
 
@@ -124,6 +125,7 @@ fn test_basic_generation() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![EnumDef {
             name: "Mode".to_string(),
@@ -146,6 +148,8 @@ fn test_basic_generation() {
             ],
             doc: "Processing mode".to_string(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![],
     };
@@ -293,6 +297,8 @@ fn test_enum_generation() {
             ],
             doc: "Task status".to_string(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![],
     };
@@ -378,6 +384,7 @@ fn test_async_function() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![],
         errors: vec![],
@@ -441,6 +448,7 @@ fn test_methods_generation() {
                     sanitized: false,
                     trait_source: None,
                     returns_ref: false,
+                    return_newtype_wrapper: None,
                 },
                 MethodDef {
                     name: "create".to_string(),
@@ -454,6 +462,7 @@ fn test_methods_generation() {
                     sanitized: false,
                     trait_source: None,
                     returns_ref: false,
+                    return_newtype_wrapper: None,
                 },
             ],
             is_opaque: true,
@@ -524,6 +533,7 @@ fn test_error_types() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![],
         errors: vec![ErrorDef {
@@ -604,6 +614,7 @@ fn test_opaque_type() {
                 sanitized: false,
                 trait_source: None,
                 returns_ref: false,
+                return_newtype_wrapper: None,
             }],
             is_opaque: true,
             is_clone: true,
@@ -749,6 +760,7 @@ fn test_async_method() {
                 sanitized: false,
                 trait_source: None,
                 returns_ref: false,
+                return_newtype_wrapper: None,
             }],
             is_opaque: true,
             is_clone: true,
@@ -825,6 +837,7 @@ fn test_static_method_with_error() {
                 sanitized: false,
                 trait_source: None,
                 returns_ref: false,
+                return_newtype_wrapper: None,
             }],
             is_opaque: true,
             is_clone: true,

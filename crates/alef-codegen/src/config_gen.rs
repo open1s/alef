@@ -706,6 +706,7 @@ mod tests {
                     typed_default: Some(DefaultValue::IntLiteral(30)),
                     core_wrapper: CoreWrapper::None,
                     vec_inner_core_wrapper: CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
                 FieldDef {
                     name: "enabled".to_string(),
@@ -720,6 +721,7 @@ mod tests {
                     typed_default: Some(DefaultValue::BoolLiteral(true)),
                     core_wrapper: CoreWrapper::None,
                     vec_inner_core_wrapper: CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
                 FieldDef {
                     name: "name".to_string(),
@@ -734,6 +736,7 @@ mod tests {
                     typed_default: Some(DefaultValue::StringLiteral("default".to_string())),
                     core_wrapper: CoreWrapper::None,
                     vec_inner_core_wrapper: CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
             ],
             methods: vec![],
@@ -764,6 +767,7 @@ mod tests {
             typed_default: Some(DefaultValue::BoolLiteral(true)),
             core_wrapper: CoreWrapper::None,
             vec_inner_core_wrapper: CoreWrapper::None,
+            newtype_wrapper: None,
         };
         assert_eq!(default_value_for_field(&field, "python"), "True");
     }
@@ -783,6 +787,7 @@ mod tests {
             typed_default: Some(DefaultValue::BoolLiteral(false)),
             core_wrapper: CoreWrapper::None,
             vec_inner_core_wrapper: CoreWrapper::None,
+            newtype_wrapper: None,
         };
         assert_eq!(default_value_for_field(&field, "go"), "false");
     }
@@ -802,6 +807,7 @@ mod tests {
             typed_default: Some(DefaultValue::StringLiteral("hello".to_string())),
             core_wrapper: CoreWrapper::None,
             vec_inner_core_wrapper: CoreWrapper::None,
+            newtype_wrapper: None,
         };
         assert_eq!(default_value_for_field(&field, "python"), "\"hello\"");
         assert_eq!(default_value_for_field(&field, "java"), "\"hello\"");
@@ -822,6 +828,7 @@ mod tests {
             typed_default: Some(DefaultValue::IntLiteral(42)),
             core_wrapper: CoreWrapper::None,
             vec_inner_core_wrapper: CoreWrapper::None,
+            newtype_wrapper: None,
         };
         let result = default_value_for_field(&field, "python");
         assert_eq!(result, "42");
@@ -842,6 +849,7 @@ mod tests {
             typed_default: Some(DefaultValue::None),
             core_wrapper: CoreWrapper::None,
             vec_inner_core_wrapper: CoreWrapper::None,
+            newtype_wrapper: None,
         };
         assert_eq!(default_value_for_field(&field, "python"), "None");
         assert_eq!(default_value_for_field(&field, "go"), "nil");
@@ -864,6 +872,7 @@ mod tests {
             typed_default: None,
             core_wrapper: CoreWrapper::None,
             vec_inner_core_wrapper: CoreWrapper::None,
+            newtype_wrapper: None,
         };
         assert_eq!(default_value_for_field(&field, "python"), "\"custom\"");
     }
@@ -978,6 +987,7 @@ mod tests {
             typed_default: Some(DefaultValue::FloatLiteral(1.5)),
             core_wrapper: CoreWrapper::None,
             vec_inner_core_wrapper: CoreWrapper::None,
+            newtype_wrapper: None,
         };
         let result = default_value_for_field(&field, "python");
         assert!(result.contains("1.5"));
@@ -998,6 +1008,7 @@ mod tests {
             typed_default: None,
             core_wrapper: CoreWrapper::None,
             vec_inner_core_wrapper: CoreWrapper::None,
+            newtype_wrapper: None,
         };
         // Should fall back to type-based zero value
         assert_eq!(default_value_for_field(&field, "python"), "0");

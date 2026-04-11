@@ -35,6 +35,7 @@ fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
         typed_default: None,
         core_wrapper: CoreWrapper::None,
         vec_inner_core_wrapper: CoreWrapper::None,
+        newtype_wrapper: None,
     }
 }
 
@@ -147,6 +148,7 @@ fn test_basic_rbs_stubs() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![EnumDef {
             name: "Backend".to_string(),
@@ -169,6 +171,8 @@ fn test_basic_rbs_stubs() {
             ],
             doc: "Available backends".to_string(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![],
     };
@@ -367,6 +371,8 @@ fn test_enum_stubs() {
             ],
             doc: "Processing status".to_string(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![],
     };
@@ -445,6 +451,7 @@ fn test_opaque_type_stubs() {
                     receiver: Some(ReceiverKind::Ref),
                     sanitized: false,
                     returns_ref: false,
+                    return_newtype_wrapper: None,
                     trait_source: None,
                 },
                 MethodDef {
@@ -467,6 +474,7 @@ fn test_opaque_type_stubs() {
                     receiver: None,
                     sanitized: false,
                     returns_ref: false,
+                    return_newtype_wrapper: None,
                     trait_source: None,
                 },
             ],
@@ -618,6 +626,7 @@ fn test_type_with_methods_and_fields() {
                     receiver: Some(ReceiverKind::Ref),
                     sanitized: false,
                     returns_ref: false,
+                    return_newtype_wrapper: None,
                     trait_source: None,
                 },
                 MethodDef {
@@ -640,6 +649,7 @@ fn test_type_with_methods_and_fields() {
                     receiver: Some(ReceiverKind::RefMut),
                     sanitized: false,
                     returns_ref: false,
+                    return_newtype_wrapper: None,
                     trait_source: None,
                 },
             ],

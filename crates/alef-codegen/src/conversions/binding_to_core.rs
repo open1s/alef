@@ -50,10 +50,38 @@ pub fn gen_from_binding_to_core_cfg(typ: &TypeDef, core_import: &str, config: &C
         } else {
             field_conversion_to_core_cfg(&field.name, &field.ty, field.optional, config)
         };
+        // Newtype wrapping: when the field was resolved from a newtype (e.g. NodeIndex → u32),
+        // wrap the binding value back into the newtype for the core struct.
+        // e.g. `source: val.source` → `source: kreuzberg::NodeIndex(val.source)`
+        //      `parent: val.parent` → `parent: val.parent.map(kreuzberg::NodeIndex)`
+        //      `children: val.children` → `children: val.children.into_iter().map(kreuzberg::NodeIndex).collect()`
+        let conversion = if let Some(newtype_path) = &field.newtype_wrapper {
+            if let Some(expr) = conversion.strip_prefix(&format!("{}: ", field.name)) {
+                // When `optional=true` and `ty` is a plain Primitive (not TypeRef::Optional), the core
+                // field is actually `Option<NewtypeT>`, so we must use `.map(NewtypeT)` not `NewtypeT(...)`.
+                match &field.ty {
+                    TypeRef::Optional(_) => format!("{}: ({expr}).map({newtype_path})", field.name),
+                    TypeRef::Vec(_) => {
+                        format!("{}: ({expr}).into_iter().map({newtype_path}).collect()", field.name)
+                    }
+                    _ if field.optional => format!("{}: ({expr}).map({newtype_path})", field.name),
+                    _ => format!("{}: {newtype_path}({expr})", field.name),
+                }
+            } else {
+                conversion
+            }
+        } else {
+            conversion
+        };
         // Box<T> fields: wrap the converted value in Box::new()
         let conversion = if field.is_boxed && matches!(&field.ty, TypeRef::Named(_)) {
             if let Some(expr) = conversion.strip_prefix(&format!("{}: ", field.name)) {
-                format!("{}: Box::new({})", field.name, expr)
+                if field.optional {
+                    // Option<Box<T>> field: map inside the Option
+                    format!("{}: {}.map(Box::new)", field.name, expr)
+                } else {
+                    format!("{}: Box::new({})", field.name, expr)
+                }
             } else {
                 conversion
             }

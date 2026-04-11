@@ -226,7 +226,11 @@ fn gen_field_access_body(field: &FieldDef, needs_len_out: bool) -> String {
     if field.optional {
         // Wrap in match on Option — val is a reference from &Option<T> destructure
         // When is_boxed: val is &Box<T>, so deref twice (**val) to get &T
-        let val_expr = if matches!(field.ty, TypeRef::Primitive(_)) {
+        // When newtype_wrapper: the core field is Option<NewtypeT> but IR ty is Primitive;
+        //   val is &NewtypeT so we must access val.0 to get the inner primitive.
+        let val_expr = if field.newtype_wrapper.is_some() && matches!(field.ty, TypeRef::Primitive(_)) {
+            "val.0" // unwrap newtype inner value
+        } else if matches!(field.ty, TypeRef::Primitive(_)) {
             "*val" // dereference for Copy types
         } else if field.is_boxed {
             "(**val)" // deref &Box<T> -> &T
@@ -252,8 +256,11 @@ fn gen_field_access_body(field: &FieldDef, needs_len_out: bool) -> String {
         writeln!(out, "    }}").ok();
         writeln!(out, "    data.as_ptr() as *mut u8").ok();
     } else {
-        // When is_boxed: obj.field_name is Box<T>, deref to get T before cloning
-        let access_expr = if field.is_boxed {
+        // When is_boxed: obj.field_name is Box<T>, deref to get T before cloning.
+        // When newtype_wrapper: obj.field_name is NewtypeT; access .0 to get the inner primitive.
+        let access_expr = if field.newtype_wrapper.is_some() && matches!(field.ty, TypeRef::Primitive(_)) {
+            format!("obj.{field_name}.0") // unwrap newtype inner value
+        } else if field.is_boxed {
             format!("(*obj.{field_name})")
         } else {
             format!("obj.{field_name}")

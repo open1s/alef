@@ -107,9 +107,31 @@ pub(crate) fn gen_php_call_args(params: &[alef_core::ir::ParamDef], opaque_types
                     format!("{}.clone().into()", p.name)
                 }
             }
-            TypeRef::String | TypeRef::Char => format!("&{}", p.name),
+            TypeRef::String | TypeRef::Char => {
+                // For optional params, only use as_deref() when core expects &str (is_ref=true).
+                // When is_ref=false, core takes Option<String> — pass owned.
+                if p.optional {
+                    if p.is_ref {
+                        format!("{}.as_deref()", p.name)
+                    } else {
+                        p.name.clone()
+                    }
+                } else {
+                    format!("&{}", p.name)
+                }
+            }
             TypeRef::Path => format!("std::path::PathBuf::from({})", p.name),
-            TypeRef::Bytes => format!("&{}", p.name),
+            TypeRef::Bytes => {
+                if p.optional {
+                    if p.is_ref {
+                        format!("{}.as_deref()", p.name)
+                    } else {
+                        p.name.clone()
+                    }
+                } else {
+                    format!("&{}", p.name)
+                }
+            }
             TypeRef::Duration => format!("std::time::Duration::from_secs({})", p.name),
             _ => p.name.clone(),
         })
@@ -168,9 +190,29 @@ pub(crate) fn gen_php_call_args_with_let_bindings(
             TypeRef::Named(_) => {
                 format!("{}_core", p.name)
             }
-            TypeRef::String | TypeRef::Char => format!("&{}", p.name),
+            TypeRef::String | TypeRef::Char => {
+                if p.optional {
+                    if p.is_ref {
+                        format!("{}.as_deref()", p.name)
+                    } else {
+                        p.name.clone()
+                    }
+                } else {
+                    format!("&{}", p.name)
+                }
+            }
             TypeRef::Path => format!("std::path::PathBuf::from({})", p.name),
-            TypeRef::Bytes => format!("&{}", p.name),
+            TypeRef::Bytes => {
+                if p.optional {
+                    if p.is_ref {
+                        format!("{}.as_deref()", p.name)
+                    } else {
+                        p.name.clone()
+                    }
+                } else {
+                    format!("&{}", p.name)
+                }
+            }
             TypeRef::Duration => format!("std::time::Duration::from_secs({})", p.name),
             _ => p.name.clone(),
         })

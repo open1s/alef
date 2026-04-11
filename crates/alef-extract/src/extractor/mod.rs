@@ -140,6 +140,28 @@ fn resolve_newtypes(surface: &mut ApiSurface) {
     // Walk all TypeRefs in the surface and replace Named references to newtypes.
     for typ in &mut surface.types {
         for field in &mut typ.fields {
+            // Record the newtype wrapper path before resolving, so codegen can wrap/unwrap correctly.
+            if let alef_core::ir::TypeRef::Named(name) = &field.ty {
+                if let Some(rust_path) = newtype_rust_paths.get(name.as_str()) {
+                    field.newtype_wrapper = Some(rust_path.clone());
+                }
+            }
+            // Also handle Optional<NewtypeT> — record wrapper on the optional field
+            if let alef_core::ir::TypeRef::Optional(inner) = &field.ty {
+                if let alef_core::ir::TypeRef::Named(name) = inner.as_ref() {
+                    if let Some(rust_path) = newtype_rust_paths.get(name.as_str()) {
+                        field.newtype_wrapper = Some(rust_path.clone());
+                    }
+                }
+            }
+            // And Vec<NewtypeT>
+            if let alef_core::ir::TypeRef::Vec(inner) = &field.ty {
+                if let alef_core::ir::TypeRef::Named(name) = inner.as_ref() {
+                    if let Some(rust_path) = newtype_rust_paths.get(name.as_str()) {
+                        field.newtype_wrapper = Some(rust_path.clone());
+                    }
+                }
+            }
             resolve_typeref(&newtype_map, &mut field.ty);
         }
         for method in &mut typ.methods {
@@ -152,6 +174,13 @@ fn resolve_newtypes(surface: &mut ApiSurface) {
                 }
                 resolve_typeref(&newtype_map, &mut param.ty);
             }
+            // Record return newtype wrapper before resolving — only for direct Named returns
+            // (not Optional/Vec wrappers; those would require different unwrap patterns).
+            if let alef_core::ir::TypeRef::Named(name) = &method.return_type {
+                if let Some(rust_path) = newtype_rust_paths.get(name.as_str()) {
+                    method.return_newtype_wrapper = Some(rust_path.clone());
+                }
+            }
             resolve_typeref(&newtype_map, &mut method.return_type);
         }
     }
@@ -163,6 +192,12 @@ fn resolve_newtypes(surface: &mut ApiSurface) {
                 }
             }
             resolve_typeref(&newtype_map, &mut param.ty);
+        }
+        // Record return newtype wrapper for free functions too
+        if let alef_core::ir::TypeRef::Named(name) = &func.return_type {
+            if let Some(rust_path) = newtype_rust_paths.get(name.as_str()) {
+                func.return_newtype_wrapper = Some(rust_path.clone());
+            }
         }
         resolve_typeref(&newtype_map, &mut func.return_type);
     }
@@ -307,6 +342,7 @@ fn extract_items(
                                     sanitized: false,
                                     trait_source: None,
                                     returns_ref,
+                                    return_newtype_wrapper: None,
                                 })
                             } else {
                                 None

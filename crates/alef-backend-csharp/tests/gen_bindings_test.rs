@@ -30,6 +30,7 @@ fn test_basic_generation() {
                     typed_default: None,
                     core_wrapper: alef_core::ir::CoreWrapper::None,
                     vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
                 FieldDef {
                     name: "backend".to_string(),
@@ -44,6 +45,7 @@ fn test_basic_generation() {
                     typed_default: None,
                     core_wrapper: alef_core::ir::CoreWrapper::None,
                     vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
             ],
             methods: vec![],
@@ -89,6 +91,7 @@ fn test_basic_generation() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![EnumDef {
             name: "OcrBackend".to_string(),
@@ -111,6 +114,8 @@ fn test_basic_generation() {
             ],
             doc: "Available OCR backends".to_string(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![],
     };
@@ -417,6 +422,7 @@ fn test_type_mapping() {
                     typed_default: None,
                     core_wrapper: alef_core::ir::CoreWrapper::None,
                     vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
                 FieldDef {
                     name: "i64_val".to_string(),
@@ -431,6 +437,7 @@ fn test_type_mapping() {
                     typed_default: None,
                     core_wrapper: alef_core::ir::CoreWrapper::None,
                     vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
                 FieldDef {
                     name: "string_val".to_string(),
@@ -445,6 +452,7 @@ fn test_type_mapping() {
                     typed_default: None,
                     core_wrapper: alef_core::ir::CoreWrapper::None,
                     vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
                 FieldDef {
                     name: "list_val".to_string(),
@@ -459,6 +467,7 @@ fn test_type_mapping() {
                     typed_default: None,
                     core_wrapper: alef_core::ir::CoreWrapper::None,
                     vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
             ],
             methods: vec![],
@@ -566,6 +575,7 @@ fn test_tuple_struct_fields_skipped() {
                     typed_default: None,
                     core_wrapper: alef_core::ir::CoreWrapper::None,
                     vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
                 FieldDef {
                     name: "_1".to_string(),
@@ -580,6 +590,7 @@ fn test_tuple_struct_fields_skipped() {
                     typed_default: None,
                     core_wrapper: alef_core::ir::CoreWrapper::None,
                     vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
             ],
             methods: vec![],
@@ -680,6 +691,7 @@ fn test_mixed_struct_skips_tuple_fields_only() {
                     typed_default: None,
                     core_wrapper: alef_core::ir::CoreWrapper::None,
                     vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
                 FieldDef {
                     name: "label".to_string(),
@@ -694,6 +706,7 @@ fn test_mixed_struct_skips_tuple_fields_only() {
                     typed_default: None,
                     core_wrapper: alef_core::ir::CoreWrapper::None,
                     vec_inner_core_wrapper: alef_core::ir::CoreWrapper::None,
+                    newtype_wrapper: None,
                 },
             ],
             methods: vec![],

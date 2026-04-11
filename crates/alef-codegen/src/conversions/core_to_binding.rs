@@ -65,6 +65,41 @@ pub fn gen_from_core_to_binding_cfg(
         } else {
             base_conversion
         };
+        // Newtype unwrapping: when the field was resolved from a newtype (e.g. NodeIndex → u32),
+        // unwrap the core newtype by accessing `.0`.
+        // e.g. `source: val.source` → `source: val.source.0`
+        //      `parent: val.parent` → `parent: val.parent.map(|v| v.0)`
+        //      `children: val.children` → `children: val.children.iter().map(|v| v.0).collect()`
+        let base_conversion = if field.newtype_wrapper.is_some() {
+            match &field.ty {
+                TypeRef::Optional(_) => {
+                    // Replace `val.{name}` with `val.{name}.map(|v| v.0)` in the generated expression
+                    base_conversion.replace(
+                        &format!("val.{}", field.name),
+                        &format!("val.{}.map(|v| v.0)", field.name),
+                    )
+                }
+                TypeRef::Vec(_) => {
+                    // Replace `val.{name}` with `val.{name}.iter().map(|v| v.0).collect()` in expression
+                    base_conversion.replace(
+                        &format!("val.{}", field.name),
+                        &format!("val.{}.iter().map(|v| v.0).collect::<Vec<_>>()", field.name),
+                    )
+                }
+                // When `optional=true` and `ty` is a plain Primitive (not TypeRef::Optional), the core
+                // field is actually `Option<NewtypeT>`, so we must use `.map(|v| v.0)` not `.0`.
+                _ if field.optional => base_conversion.replace(
+                    &format!("val.{}", field.name),
+                    &format!("val.{}.map(|v| v.0)", field.name),
+                ),
+                _ => {
+                    // Direct field: append `.0` to access the inner primitive
+                    base_conversion.replace(&format!("val.{}", field.name), &format!("val.{}.0", field.name))
+                }
+            }
+        } else {
+            base_conversion
+        };
         // Optionalized non-optional fields need Some() wrapping in core→binding direction
         let conversion = if optionalized && !field.optional {
             // Extract the value expression after "name: " and wrap in Some()

@@ -17,6 +17,7 @@ fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
         typed_default: None,
         core_wrapper: CoreWrapper::None,
         vec_inner_core_wrapper: CoreWrapper::None,
+        newtype_wrapper: None,
     }
 }
 
@@ -127,6 +128,7 @@ fn test_basic_generation() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![EnumDef {
             name: "OcrBackend".to_string(),
@@ -149,6 +151,8 @@ fn test_basic_generation() {
             ],
             doc: "Available OCR backends".to_string(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![],
     };
@@ -288,6 +292,8 @@ fn test_enum_generation() {
             ],
             doc: "Processing status".to_string(),
             cfg: None,
+            serde_tag: None,
+            serde_rename_all: None,
         }],
         errors: vec![],
     };
@@ -373,6 +379,7 @@ fn test_methods_generation() {
                     receiver: Some(ReceiverKind::Ref),
                     sanitized: false,
                     returns_ref: false,
+                    return_newtype_wrapper: None,
                     trait_source: None,
                 },
                 MethodDef {
@@ -395,6 +402,7 @@ fn test_methods_generation() {
                     receiver: None,
                     sanitized: false,
                     returns_ref: false,
+                    return_newtype_wrapper: None,
                     trait_source: None,
                 },
             ],
@@ -457,6 +465,7 @@ fn test_error_types() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![],
         errors: vec![ErrorDef {
@@ -541,6 +550,7 @@ fn test_async_function() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            return_newtype_wrapper: None,
         }],
         enums: vec![],
         errors: vec![ErrorDef {
@@ -608,6 +618,7 @@ fn test_opaque_type() {
                 receiver: Some(ReceiverKind::Owned),
                 sanitized: false,
                 returns_ref: false,
+                return_newtype_wrapper: None,
                 trait_source: None,
             }],
             is_opaque: true,
@@ -759,6 +770,7 @@ fn test_multiple_types_with_shared_error() {
                     receiver: Some(ReceiverKind::Ref),
                     sanitized: false,
                     returns_ref: false,
+                    return_newtype_wrapper: None,
                     trait_source: None,
                 }],
                 is_opaque: false,
@@ -795,6 +807,7 @@ fn test_multiple_types_with_shared_error() {
                     receiver: Some(ReceiverKind::Ref),
                     sanitized: false,
                     returns_ref: false,
+                    return_newtype_wrapper: None,
                     trait_source: None,
                 }],
                 is_opaque: false,
