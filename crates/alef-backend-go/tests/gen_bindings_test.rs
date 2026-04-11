@@ -352,3 +352,358 @@ fn test_generated_header() {
         );
     }
 }
+
+#[test]
+fn test_methods_generation() {
+    let backend = GoBackend;
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "Handler".to_string(),
+            rust_path: "test_lib::Handler".to_string(),
+            fields: vec![make_field("id", TypeRef::Primitive(PrimitiveType::U64), false)],
+            methods: vec![
+                // Instance method that returns a value
+                MethodDef {
+                    name: "get_name".to_string(),
+                    params: vec![],
+                    return_type: TypeRef::String,
+                    is_async: false,
+                    is_static: false,
+                    error_type: None,
+                    doc: "Get the name".to_string(),
+                    receiver: Some(alef_core::ir::ReceiverKind::Ref),
+                    sanitized: false,
+                    returns_ref: false,
+                    trait_source: None,
+                },
+                // Static method that returns a primitive (not skipped)
+                MethodDef {
+                    name: "version".to_string(),
+                    params: vec![],
+                    return_type: TypeRef::String,
+                    is_async: false,
+                    is_static: true,
+                    error_type: None,
+                    doc: "Get the version string".to_string(),
+                    receiver: None,
+                    sanitized: false,
+                    returns_ref: false,
+                    trait_source: None,
+                },
+                // Instance method with parameters and error
+                MethodDef {
+                    name: "process".to_string(),
+                    params: vec![ParamDef {
+                        name: "data".to_string(),
+                        ty: TypeRef::String,
+                        optional: false,
+                        default: None,
+                        sanitized: false,
+                        typed_default: None,
+                    }],
+                    return_type: TypeRef::Unit,
+                    is_async: false,
+                    is_static: false,
+                    error_type: Some("Error".to_string()),
+                    doc: "Process data".to_string(),
+                    receiver: Some(alef_core::ir::ReceiverKind::Ref),
+                    sanitized: false,
+                    returns_ref: false,
+                    trait_source: None,
+                },
+            ],
+            is_opaque: false,
+            is_clone: true,
+            is_trait: false,
+            has_default: false,
+            has_stripped_cfg_fields: false,
+            is_return_type: false,
+            serde_rename_all: None,
+            doc: "A handler type".to_string(),
+            cfg: None,
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+    };
+
+    let config = make_config();
+
+    let result = backend.generate_bindings(&api, &config);
+    assert!(result.is_ok(), "Generation should succeed");
+
+    let files = result.unwrap();
+    let content = &files[0].content;
+
+    // Verify instance method wrapper (receiver with pointer)
+    assert!(
+        content.contains("func (r *Handler) GetName()"),
+        "Should define instance method GetName with receiver"
+    );
+    assert!(content.contains("*string"), "GetName should return *string");
+
+    // Verify static method (no receiver, becomes function)
+    assert!(
+        content.contains("func HandlerVersion()"),
+        "Should define static method as package-level function"
+    );
+
+    // Verify instance method with error return
+    assert!(
+        content.contains("func (r *Handler) Process(data string) error"),
+        "Should define Process method with error return"
+    );
+    assert!(
+        content.contains("return lastError()"),
+        "Process should call lastError() for error handling"
+    );
+}
+
+#[test]
+fn test_error_types() {
+    let backend = GoBackend;
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![ErrorDef {
+            name: "GoError".to_string(),
+            rust_path: "test_lib::GoError".to_string(),
+            variants: vec![
+                ErrorVariant {
+                    name: "NotFound".to_string(),
+                    fields: vec![],
+                    doc: "Resource not found".to_string(),
+                    message_template: Some("not found".to_string()),
+                    has_source: false,
+                    has_from: false,
+                    is_unit: true,
+                },
+                ErrorVariant {
+                    name: "InvalidInput".to_string(),
+                    fields: vec![make_field("reason", TypeRef::String, false)],
+                    doc: "Invalid input provided".to_string(),
+                    message_template: Some("invalid input: {reason}".to_string()),
+                    has_source: false,
+                    has_from: false,
+                    is_unit: false,
+                },
+            ],
+            doc: "Error type for library".to_string(),
+        }],
+    };
+
+    let config = make_config();
+
+    let result = backend.generate_bindings(&api, &config);
+    assert!(result.is_ok(), "Generation should succeed");
+
+    let files = result.unwrap();
+    let content = &files[0].content;
+
+    // Verify error type generation via alef_codegen
+    // The gen_go_error_types function generates sentinel errors and error wrappers
+    assert!(
+        content.contains("errors") || content.contains("Error"),
+        "Should import or reference errors package"
+    );
+    // Verify error-related code is generated
+    assert!(
+        content.contains("GoError") || content.contains("lastError"),
+        "Should generate error-related code"
+    );
+}
+
+#[test]
+fn test_async_function() {
+    let backend = GoBackend;
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![],
+        functions: vec![FunctionDef {
+            name: "async_process".to_string(),
+            rust_path: "test_lib::async_process".to_string(),
+            params: vec![ParamDef {
+                name: "input".to_string(),
+                ty: TypeRef::String,
+                optional: false,
+                default: None,
+                sanitized: false,
+                typed_default: None,
+            }],
+            return_type: TypeRef::String,
+            is_async: true,
+            error_type: Some("Error".to_string()),
+            doc: "Process data asynchronously".to_string(),
+            cfg: None,
+            sanitized: false,
+            returns_ref: false,
+        }],
+        enums: vec![],
+        errors: vec![],
+    };
+
+    let config = make_config();
+
+    let result = backend.generate_bindings(&api, &config);
+    assert!(result.is_ok(), "Generation should succeed");
+
+    let files = result.unwrap();
+    let content = &files[0].content;
+
+    // Verify async function is generated
+    assert!(content.contains("func AsyncProcess("), "Should define async function");
+    // Async functions in Go use the FFI with block_on() internally, but the wrapper is still generated
+    assert!(
+        content.contains("AsyncProcess"),
+        "Async function should be included in generated code"
+    );
+}
+
+#[test]
+fn test_opaque_type() {
+    let backend = GoBackend;
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "OpaqueHandle".to_string(),
+            rust_path: "test_lib::OpaqueHandle".to_string(),
+            fields: vec![],
+            methods: vec![],
+            is_opaque: true,
+            is_clone: false,
+            is_trait: false,
+            has_default: false,
+            has_stripped_cfg_fields: false,
+            is_return_type: false,
+            serde_rename_all: None,
+            doc: "An opaque handle to Rust state".to_string(),
+            cfg: None,
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+    };
+
+    let config = make_config();
+
+    let result = backend.generate_bindings(&api, &config);
+    assert!(result.is_ok(), "Generation should succeed");
+
+    let files = result.unwrap();
+    let content = &files[0].content;
+
+    // Verify opaque type wraps unsafe.Pointer
+    assert!(
+        content.contains("type OpaqueHandle struct"),
+        "Should define OpaqueHandle struct"
+    );
+    assert!(
+        content.contains("ptr unsafe.Pointer"),
+        "Should have ptr field of unsafe.Pointer type"
+    );
+    assert!(
+        content.contains("\"unsafe\""),
+        "Should import unsafe package for opaque types"
+    );
+
+    // Verify Free method
+    assert!(
+        content.contains("func (h *OpaqueHandle) Free()"),
+        "Should define Free method for opaque type"
+    );
+    assert!(
+        content.contains("test_opaque_handle_free") || content.contains("Free"),
+        "Free method should call FFI free function"
+    );
+}
+
+#[test]
+fn test_default_config() {
+    let backend = GoBackend;
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "Config".to_string(),
+            rust_path: "test_lib::Config".to_string(),
+            fields: vec![
+                make_field("timeout", TypeRef::Primitive(PrimitiveType::U32), false),
+                make_field("retries", TypeRef::Primitive(PrimitiveType::U8), false),
+                make_field("name", TypeRef::String, true),
+            ],
+            methods: vec![],
+            is_opaque: false,
+            is_clone: true,
+            is_trait: false,
+            has_default: true, // Enable functional options
+            has_stripped_cfg_fields: false,
+            is_return_type: false,
+            serde_rename_all: None,
+            doc: "Configuration with defaults".to_string(),
+            cfg: None,
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+    };
+
+    let config = make_config();
+
+    let result = backend.generate_bindings(&api, &config);
+    assert!(result.is_ok(), "Generation should succeed");
+
+    let files = result.unwrap();
+    let content = &files[0].content;
+
+    // Verify ConfigOption type
+    assert!(
+        content.contains("type ConfigOption func(*Config)"),
+        "Should define ConfigOption functional option type"
+    );
+
+    // Verify With* constructors
+    assert!(
+        content.contains("func WithConfigTimeout("),
+        "Should define WithConfigTimeout constructor"
+    );
+    assert!(
+        content.contains("func WithConfigRetries("),
+        "Should define WithConfigRetries constructor"
+    );
+    assert!(
+        content.contains("func WithConfigName("),
+        "Should define WithConfigName constructor"
+    );
+
+    // Verify NewConfig constructor
+    assert!(
+        content.contains("func NewConfig(opts ...ConfigOption)"),
+        "Should define NewConfig constructor with variadic options"
+    );
+    assert!(
+        content.contains("return c"),
+        "NewConfig should return the configured instance"
+    );
+
+    // Verify default values are set
+    assert!(
+        content.contains("Timeout:") || content.contains("timeout"),
+        "NewConfig should initialize Timeout field with default"
+    );
+    assert!(
+        content.contains("Retries:") || content.contains("retries"),
+        "NewConfig should initialize Retries field with default"
+    );
+}

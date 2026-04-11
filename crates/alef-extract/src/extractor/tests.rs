@@ -735,13 +735,16 @@ fn test_newtype_wrapper_resolved() {
 
     let surface = extract_from_source(source);
 
-    // The newtype `ElementId` should be removed from the surface
-    assert!(
-        !surface.types.iter().any(|t| t.name == "ElementId"),
-        "Newtype wrapper ElementId should be removed from types"
-    );
+    // The newtype `ElementId` should be kept in the IR (not resolved away)
+    let element_id = surface
+        .types
+        .iter()
+        .find(|t| t.name == "ElementId")
+        .expect("Newtype ElementId should be kept in types");
+    // Tuple structs are kept but their positional fields may be stripped
+    assert!(element_id.fields.is_empty() || element_id.fields[0].name == "_0");
 
-    // Widget should exist with `id` resolved to String
+    // Widget should exist with `id` referencing ElementId as a Named type
     let widget = surface
         .types
         .iter()
@@ -752,8 +755,8 @@ fn test_newtype_wrapper_resolved() {
     assert_eq!(widget.fields[0].name, "id");
     assert_eq!(
         widget.fields[0].ty,
-        TypeRef::String,
-        "ElementId should resolve to String"
+        TypeRef::Named("ElementId".to_string()),
+        "ElementId should be kept as Named reference"
     );
     assert_eq!(widget.fields[1].name, "label");
     assert_eq!(widget.fields[1].ty, TypeRef::String);
@@ -794,9 +797,10 @@ fn test_newtype_in_optional_and_vec_resolved() {
 
     let surface = extract_from_source(source);
 
+    // Newtype Id should be kept in the IR (not resolved away)
     assert!(
-        !surface.types.iter().any(|t| t.name == "Id"),
-        "Newtype Id should be removed"
+        surface.types.iter().any(|t| t.name == "Id"),
+        "Newtype Id should be kept in types"
     );
 
     let container = surface
@@ -804,16 +808,20 @@ fn test_newtype_in_optional_and_vec_resolved() {
         .iter()
         .find(|t| t.name == "Container")
         .expect("Container should exist");
-    // primary: Option<Id> → Optional(u64)
+    // primary: Option<Id> → Optional(Named("Id"))
     assert_eq!(container.fields[0].name, "primary");
     assert!(container.fields[0].optional);
-    assert_eq!(container.fields[0].ty, TypeRef::Primitive(PrimitiveType::U64));
+    assert_eq!(
+        container.fields[0].ty,
+        TypeRef::Named("Id".to_string()),
+        "Id should be kept as Named reference"
+    );
 
-    // all_ids: Vec<Id> → Vec(u64)
+    // all_ids: Vec<Id> → Vec(Named("Id"))
     assert_eq!(container.fields[1].name, "all_ids");
     assert_eq!(
         container.fields[1].ty,
-        TypeRef::Vec(Box::new(TypeRef::Primitive(PrimitiveType::U64)))
+        TypeRef::Vec(Box::new(TypeRef::Named("Id".to_string())))
     );
 }
 
@@ -1017,4 +1025,726 @@ fn test_non_thiserror_enum_not_in_errors() {
     let surface = extract_from_source(source);
     assert_eq!(surface.enums.len(), 1);
     assert_eq!(surface.errors.len(), 0, "non-thiserror enum should not be in errors");
+}
+
+#[test]
+fn test_struct_with_default_derive() {
+    let source = r#"
+        /// A configuration with sensible defaults.
+        #[derive(Default, Clone)]
+        pub struct Config {
+            pub name: String,
+            pub count: u32,
+            pub enabled: bool,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    assert_eq!(surface.types.len(), 1);
+
+    let config = &surface.types[0];
+    assert_eq!(config.name, "Config");
+    // has_default should be true for types with #[derive(Default)]
+    assert!(
+        config.has_default,
+        "Config with #[derive(Default)] should have has_default=true"
+    );
+}
+
+#[test]
+fn test_struct_without_default() {
+    let source = r#"
+        /// A configuration without defaults.
+        pub struct Custom {
+            pub value: String,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    assert_eq!(surface.types.len(), 1);
+
+    let custom = &surface.types[0];
+    assert_eq!(custom.name, "Custom");
+    assert!(
+        !custom.has_default,
+        "Struct without Default should have has_default=false"
+    );
+}
+
+#[test]
+fn test_field_with_bool_default_literal() {
+    let source = r#"
+        pub struct Settings {
+            pub verbose: bool,
+        }
+
+        impl Default for Settings {
+            fn default() -> Self {
+                Settings { verbose: true }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    assert_eq!(surface.types.len(), 1);
+
+    let settings = &surface.types[0];
+    assert_eq!(settings.fields.len(), 1);
+
+    let verbose_field = &settings.fields[0];
+    assert_eq!(verbose_field.name, "verbose");
+    assert_eq!(
+        verbose_field.typed_default,
+        Some(alef_core::ir::DefaultValue::BoolLiteral(true)),
+        "bool field should have BoolLiteral(true) default"
+    );
+}
+
+#[test]
+fn test_field_with_int_default_literal() {
+    let source = r#"
+        pub struct Limits {
+            pub max_retries: i32,
+        }
+
+        impl Default for Limits {
+            fn default() -> Self {
+                Limits { max_retries: 3 }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    assert_eq!(surface.types.len(), 1);
+
+    let limits = &surface.types[0];
+    assert_eq!(limits.fields.len(), 1);
+
+    let max_retries = &limits.fields[0];
+    assert_eq!(max_retries.name, "max_retries");
+    assert_eq!(
+        max_retries.typed_default,
+        Some(alef_core::ir::DefaultValue::IntLiteral(3)),
+        "int field should have IntLiteral(3) default"
+    );
+}
+
+#[test]
+fn test_field_with_negative_int_default() {
+    let source = r#"
+        pub struct Temperature {
+            pub celsius: i32,
+        }
+
+        impl Default for Temperature {
+            fn default() -> Self {
+                Temperature { celsius: -273 }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let temperature = &surface.types[0];
+    let celsius_field = &temperature.fields[0];
+
+    assert_eq!(
+        celsius_field.typed_default,
+        Some(alef_core::ir::DefaultValue::IntLiteral(-273)),
+        "negative int literal should be parsed correctly"
+    );
+}
+
+#[test]
+fn test_field_with_float_default_literal() {
+    let source = r#"
+        pub struct Thresholds {
+            pub confidence: f64,
+        }
+
+        impl Default for Thresholds {
+            fn default() -> Self {
+                Thresholds { confidence: 0.95 }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let thresholds = &surface.types[0];
+    let confidence_field = &thresholds.fields[0];
+
+    assert_eq!(
+        confidence_field.typed_default,
+        Some(alef_core::ir::DefaultValue::FloatLiteral(0.95)),
+        "float field should have FloatLiteral(0.95) default"
+    );
+}
+
+#[test]
+fn test_field_with_negative_float_default() {
+    let source = r#"
+        pub struct Adjustment {
+            pub offset: f64,
+        }
+
+        impl Default for Adjustment {
+            fn default() -> Self {
+                Adjustment { offset: -1.5 }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let adjustment = &surface.types[0];
+    let offset_field = &adjustment.fields[0];
+
+    assert_eq!(
+        offset_field.typed_default,
+        Some(alef_core::ir::DefaultValue::FloatLiteral(-1.5)),
+        "negative float literal should be parsed correctly"
+    );
+}
+
+#[test]
+fn test_field_with_string_literal_default() {
+    let source = r#"
+        pub struct Message {
+            pub text: String,
+        }
+
+        impl Default for Message {
+            fn default() -> Self {
+                Message { text: "hello world".into() }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let message = &surface.types[0];
+    let text_field = &message.fields[0];
+
+    assert_eq!(
+        text_field.typed_default,
+        Some(alef_core::ir::DefaultValue::StringLiteral("hello world".to_string())),
+        "string field with .into() should have StringLiteral default"
+    );
+}
+
+#[test]
+fn test_field_with_string_from_default() {
+    let source = r#"
+        pub struct Label {
+            pub name: String,
+        }
+
+        impl Default for Label {
+            fn default() -> Self {
+                Label { name: String::from("default") }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let label = &surface.types[0];
+    let name_field = &label.fields[0];
+
+    assert_eq!(
+        name_field.typed_default,
+        Some(alef_core::ir::DefaultValue::StringLiteral("default".to_string())),
+        "String::from(...) should be extracted as StringLiteral"
+    );
+}
+
+#[test]
+fn test_field_with_string_new_default() {
+    let source = r#"
+        pub struct Buffer {
+            pub data: String,
+        }
+
+        impl Default for Buffer {
+            fn default() -> Self {
+                Buffer { data: String::new() }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let buffer = &surface.types[0];
+    let data_field = &buffer.fields[0];
+
+    assert_eq!(
+        data_field.typed_default,
+        Some(alef_core::ir::DefaultValue::StringLiteral(String::new())),
+        "String::new() should be extracted as StringLiteral(\"\")"
+    );
+}
+
+#[test]
+fn test_field_with_string_to_string_default() {
+    let source = r#"
+        pub struct Display {
+            pub content: String,
+        }
+
+        impl Default for Display {
+            fn default() -> Self {
+                Display { content: "placeholder".to_string() }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let display = &surface.types[0];
+    let content_field = &display.fields[0];
+
+    assert_eq!(
+        content_field.typed_default,
+        Some(alef_core::ir::DefaultValue::StringLiteral("placeholder".to_string())),
+        "\"str\".to_string() should extract the string literal"
+    );
+}
+
+#[test]
+fn test_field_with_char_default() {
+    let source = r#"
+        pub struct Separator {
+            pub delimiter: char,
+        }
+
+        impl Default for Separator {
+            fn default() -> Self {
+                Separator { delimiter: ',' }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let separator = &surface.types[0];
+    let delimiter_field = &separator.fields[0];
+
+    assert_eq!(
+        delimiter_field.typed_default,
+        Some(alef_core::ir::DefaultValue::StringLiteral(",".to_string())),
+        "char literal should be extracted as StringLiteral"
+    );
+}
+
+#[test]
+fn test_field_with_vec_new_default() {
+    let source = r#"
+        pub struct Collection {
+            pub items: Vec<String>,
+        }
+
+        impl Default for Collection {
+            fn default() -> Self {
+                Collection { items: Vec::new() }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let collection = &surface.types[0];
+    let items_field = &collection.fields[0];
+
+    assert_eq!(
+        items_field.typed_default,
+        Some(alef_core::ir::DefaultValue::Empty),
+        "Vec::new() should extract as Empty"
+    );
+}
+
+#[test]
+fn test_field_with_enum_variant_default() {
+    let source = r#"
+        #[derive(Clone)]
+        pub enum Status {
+            Pending,
+            Active,
+            Inactive,
+        }
+
+        pub struct Task {
+            pub status: Status,
+        }
+
+        impl Default for Task {
+            fn default() -> Self {
+                Task { status: Status::Pending }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    // Filter for Task type (Status is also extracted as an enum)
+    let task = surface.types.iter().find(|t| t.name == "Task").unwrap();
+    let status_field = &task.fields[0];
+
+    assert_eq!(
+        status_field.typed_default,
+        Some(alef_core::ir::DefaultValue::EnumVariant("Pending".to_string())),
+        "SomeEnum::Variant should extract EnumVariant"
+    );
+}
+
+#[test]
+fn test_multiple_fields_with_different_defaults() {
+    let source = r#"
+        pub struct Config {
+            pub name: String,
+            pub count: u32,
+            pub enabled: bool,
+            pub threshold: f64,
+        }
+
+        impl Default for Config {
+            fn default() -> Self {
+                Config {
+                    name: "default".into(),
+                    count: 42,
+                    enabled: false,
+                    threshold: 0.5,
+                }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let config = &surface.types[0];
+
+    assert_eq!(config.fields.len(), 4);
+
+    // Check name field
+    let name_field = &config.fields[0];
+    assert_eq!(name_field.name, "name");
+    assert_eq!(
+        name_field.typed_default,
+        Some(alef_core::ir::DefaultValue::StringLiteral("default".to_string()))
+    );
+
+    // Check count field
+    let count_field = &config.fields[1];
+    assert_eq!(count_field.name, "count");
+    assert_eq!(
+        count_field.typed_default,
+        Some(alef_core::ir::DefaultValue::IntLiteral(42))
+    );
+
+    // Check enabled field
+    let enabled_field = &config.fields[2];
+    assert_eq!(enabled_field.name, "enabled");
+    assert_eq!(
+        enabled_field.typed_default,
+        Some(alef_core::ir::DefaultValue::BoolLiteral(false))
+    );
+
+    // Check threshold field
+    let threshold_field = &config.fields[3];
+    assert_eq!(threshold_field.name, "threshold");
+    assert_eq!(
+        threshold_field.typed_default,
+        Some(alef_core::ir::DefaultValue::FloatLiteral(0.5))
+    );
+}
+
+#[test]
+fn test_impl_default_without_fn_default() {
+    let source = r#"
+        pub struct Incomplete {
+            pub value: u32,
+        }
+
+        impl Default for Incomplete {
+            // Missing fn default() - no matching method
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let incomplete = &surface.types[0];
+    let value_field = &incomplete.fields[0];
+
+    // When fn default() is not found, fields should get Empty
+    assert_eq!(
+        value_field.typed_default,
+        Some(alef_core::ir::DefaultValue::Empty),
+        "Fields should have Empty when fn default() is missing"
+    );
+}
+
+#[test]
+fn test_field_with_default_default_call() {
+    let source = r#"
+        pub struct Delegated {
+            pub inner: u64,
+        }
+
+        impl Default for Delegated {
+            fn default() -> Self {
+                Delegated { inner: u64::default() }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let delegated = &surface.types[0];
+    let inner_field = &delegated.fields[0];
+
+    assert_eq!(
+        inner_field.typed_default,
+        Some(alef_core::ir::DefaultValue::Empty),
+        "T::default() should extract as Empty"
+    );
+}
+
+#[test]
+fn test_field_with_generic_default_call() {
+    let source = r#"
+        pub struct Generic {
+            pub value: String,
+        }
+
+        impl Default for Generic {
+            fn default() -> Self {
+                Generic { value: Default::default() }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let generic = &surface.types[0];
+    let value_field = &generic.fields[0];
+
+    assert_eq!(
+        value_field.typed_default,
+        Some(alef_core::ir::DefaultValue::Empty),
+        "Default::default() should extract as Empty"
+    );
+}
+
+#[test]
+fn test_field_missing_from_struct_literal() {
+    let source = r#"
+        pub struct Partial {
+            pub field_a: u32,
+            pub field_b: String,
+        }
+
+        impl Default for Partial {
+            fn default() -> Self {
+                Partial { field_a: 99 }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let partial = &surface.types[0];
+
+    assert_eq!(partial.fields.len(), 2);
+
+    // field_a is in the struct literal
+    let field_a = &partial.fields[0];
+    assert_eq!(field_a.typed_default, Some(alef_core::ir::DefaultValue::IntLiteral(99)));
+
+    // field_b is NOT in the struct literal → should be Empty
+    let field_b = &partial.fields[1];
+    assert_eq!(
+        field_b.typed_default,
+        Some(alef_core::ir::DefaultValue::Empty),
+        "Field not in struct literal should have Empty default"
+    );
+}
+
+#[test]
+fn test_enum_with_default_derive_and_default_variant() {
+    let source = r#"
+        #[derive(Default, Clone)]
+        pub enum Priority {
+            #[default]
+            Normal,
+            High,
+            Low,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    assert_eq!(surface.enums.len(), 1);
+
+    let priority = &surface.enums[0];
+    assert_eq!(priority.name, "Priority");
+    assert_eq!(priority.variants.len(), 3);
+
+    // The Normal variant should be marked as default
+    let normal = &priority.variants[0];
+    assert_eq!(normal.name, "Normal");
+    assert!(
+        normal.is_default,
+        "Normal variant with #[default] should have is_default=true"
+    );
+
+    // Other variants should not be marked as default
+    let high = &priority.variants[1];
+    assert_eq!(high.name, "High");
+    assert!(!high.is_default, "Non-default variant should have is_default=false");
+
+    let low = &priority.variants[2];
+    assert_eq!(low.name, "Low");
+    assert!(!low.is_default);
+}
+
+#[test]
+fn test_enum_without_default() {
+    let source = r#"
+        pub enum Format {
+            Json,
+            Xml,
+            Yaml,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let format = &surface.enums[0];
+
+    // No variants should be marked as default
+    for variant in &format.variants {
+        assert!(
+            !variant.is_default,
+            "Variants without #[default] should be is_default=false"
+        );
+    }
+}
+
+#[test]
+fn test_struct_literal_wrapped_in_block() {
+    let source = r#"
+        pub struct WithBlock {
+            pub value: i32,
+        }
+
+        impl Default for WithBlock {
+            fn default() -> Self {
+                {
+                    WithBlock { value: 77 }
+                }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let with_block = &surface.types[0];
+    let value_field = &with_block.fields[0];
+
+    assert_eq!(
+        value_field.typed_default,
+        Some(alef_core::ir::DefaultValue::IntLiteral(77)),
+        "Struct literal inside block expression should be found"
+    );
+}
+
+#[test]
+fn test_field_with_false_bool_default() {
+    let source = r#"
+        pub struct DisabledFeature {
+            pub active: bool,
+        }
+
+        impl Default for DisabledFeature {
+            fn default() -> Self {
+                DisabledFeature { active: false }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let disabled = &surface.types[0];
+    let active_field = &disabled.fields[0];
+
+    assert_eq!(
+        active_field.typed_default,
+        Some(alef_core::ir::DefaultValue::BoolLiteral(false)),
+        "false bool literal should be parsed as BoolLiteral(false)"
+    );
+}
+
+#[test]
+fn test_field_with_zero_defaults() {
+    let source = r#"
+        pub struct Zeroes {
+            pub int_val: i32,
+            pub float_val: f64,
+        }
+
+        impl Default for Zeroes {
+            fn default() -> Self {
+                Zeroes { int_val: 0, float_val: 0.0 }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let zeroes = &surface.types[0];
+
+    assert_eq!(
+        zeroes.fields[0].typed_default,
+        Some(alef_core::ir::DefaultValue::IntLiteral(0))
+    );
+    assert_eq!(
+        zeroes.fields[1].typed_default,
+        Some(alef_core::ir::DefaultValue::FloatLiteral(0.0))
+    );
+}
+
+#[test]
+fn test_field_with_hashmap_new_default() {
+    let source = r#"
+        use std::collections::HashMap;
+
+        pub struct Cache {
+            pub data: HashMap<String, String>,
+        }
+
+        impl Default for Cache {
+            fn default() -> Self {
+                Cache { data: HashMap::new() }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let cache = &surface.types[0];
+    let data_field = &cache.fields[0];
+
+    assert_eq!(
+        data_field.typed_default,
+        Some(alef_core::ir::DefaultValue::Empty),
+        "HashMap::new() should extract as Empty"
+    );
+}
+
+#[test]
+fn test_complex_expression_defaults_to_empty() {
+    let source = r#"
+        pub struct Complex {
+            pub result: u32,
+        }
+
+        impl Default for Complex {
+            fn default() -> Self {
+                Complex { result: some_function() }
+            }
+        }
+
+        fn some_function() -> u32 {
+            42
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let complex = &surface.types[0];
+    let result_field = &complex.fields[0];
+
+    assert_eq!(
+        result_field.typed_default,
+        Some(alef_core::ir::DefaultValue::Empty),
+        "Complex expressions like function calls should default to Empty"
+    );
 }

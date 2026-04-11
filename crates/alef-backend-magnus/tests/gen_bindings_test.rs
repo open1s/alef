@@ -108,6 +108,7 @@ fn test_basic_generation() {
                     default: None,
                     sanitized: false,
                     typed_default: None,
+                    is_ref: false,
                 },
                 ParamDef {
                     name: "config".to_string(),
@@ -116,6 +117,7 @@ fn test_basic_generation() {
                     default: None,
                     sanitized: false,
                     typed_default: None,
+                    is_ref: false,
                 },
             ],
             return_type: TypeRef::String,
@@ -372,4 +374,385 @@ fn test_generated_header() {
             || lib_file.content.contains("DO NOT EDIT"),
         "Generated file should have an auto-generated header comment"
     );
+}
+
+#[test]
+fn test_methods_generation() {
+    let backend = MagnusBackend;
+
+    // Create a TypeDef with methods
+    let api = ApiSurface {
+        crate_name: "test_lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "Store".to_string(),
+            rust_path: "test_lib::Store".to_string(),
+            fields: vec![
+                make_field("name", TypeRef::String, false),
+                make_field("count", TypeRef::Primitive(PrimitiveType::U32), false),
+            ],
+            methods: vec![
+                MethodDef {
+                    name: "get_name".to_string(),
+                    params: vec![],
+                    return_type: TypeRef::String,
+                    is_async: false,
+                    is_static: false,
+                    error_type: None,
+                    doc: "Get store name".to_string(),
+                    receiver: Some(ReceiverKind::Ref),
+                    sanitized: false,
+                    returns_ref: false,
+                    trait_source: None,
+                },
+                MethodDef {
+                    name: "increment".to_string(),
+                    params: vec![ParamDef {
+                        name: "amount".to_string(),
+                        ty: TypeRef::Primitive(PrimitiveType::U32),
+                        optional: false,
+                        default: None,
+                        sanitized: false,
+                        typed_default: None,
+                        is_ref: false,
+                    }],
+                    return_type: TypeRef::Primitive(PrimitiveType::U32),
+                    is_async: false,
+                    is_static: false,
+                    error_type: None,
+                    doc: "Increment counter".to_string(),
+                    receiver: Some(ReceiverKind::RefMut),
+                    sanitized: false,
+                    returns_ref: false,
+                    trait_source: None,
+                },
+            ],
+            is_opaque: false,
+            is_clone: true,
+            is_trait: false,
+            has_default: false,
+            has_stripped_cfg_fields: false,
+            is_return_type: false,
+            serde_rename_all: None,
+            doc: "A data store".to_string(),
+            cfg: None,
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+    };
+
+    let config = make_config();
+    let result = backend.generate_bindings(&api, &config);
+
+    assert!(result.is_ok());
+
+    let files = result.unwrap();
+    let lib_file = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().contains("lib.rs"))
+        .unwrap();
+    let content = &lib_file.content;
+
+    // Check for struct definition
+    assert!(content.contains("struct Store"), "Should generate Store struct");
+
+    // Check for method! macros (Magnus method bindings)
+    assert!(
+        content.contains("method!("),
+        "Should contain method! macro for instance methods"
+    );
+
+    // Check for specific method names
+    assert!(content.contains("get_name"), "Should contain get_name method");
+    assert!(content.contains("increment"), "Should contain increment method");
+
+    // Check for define_method usage in module initialization
+    assert!(
+        content.contains("define_method") || content.contains("method!"),
+        "Should use Magnus method macros"
+    );
+}
+
+#[test]
+fn test_error_types() {
+    let backend = MagnusBackend;
+
+    // Create an API with error types
+    let api = ApiSurface {
+        crate_name: "test_lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![],
+        functions: vec![FunctionDef {
+            name: "validate".to_string(),
+            rust_path: "test_lib::validate".to_string(),
+            params: vec![ParamDef {
+                name: "input".to_string(),
+                ty: TypeRef::String,
+                optional: false,
+                default: None,
+                sanitized: false,
+                typed_default: None,
+                is_ref: false,
+            }],
+            return_type: TypeRef::Primitive(PrimitiveType::Bool),
+            is_async: false,
+            error_type: Some("ValidationError".to_string()),
+            doc: "Validate input".to_string(),
+            cfg: None,
+            sanitized: false,
+            returns_ref: false,
+        }],
+        enums: vec![],
+        errors: vec![ErrorDef {
+            name: "ValidationError".to_string(),
+            rust_path: "test_lib::ValidationError".to_string(),
+            variants: vec![
+                ErrorVariant {
+                    name: "InvalidFormat".to_string(),
+                    fields: vec![],
+                    doc: "Invalid format".to_string(),
+                    message_template: Some("invalid format provided".to_string()),
+                    has_source: false,
+                    has_from: false,
+                    is_unit: true,
+                },
+                ErrorVariant {
+                    name: "OutOfRange".to_string(),
+                    fields: vec![],
+                    doc: "Out of range".to_string(),
+                    message_template: Some("value out of range".to_string()),
+                    has_source: false,
+                    has_from: false,
+                    is_unit: true,
+                },
+            ],
+            doc: "Validation error type".to_string(),
+        }],
+    };
+
+    let config = make_config();
+    let result = backend.generate_bindings(&api, &config);
+
+    assert!(result.is_ok(), "Generation should succeed");
+
+    let files = result.unwrap();
+    let lib_file = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().contains("lib.rs"))
+        .unwrap();
+    let content = &lib_file.content;
+
+    // Check for error converter generation (gen_magnus_error_converter)
+    assert!(
+        content.contains("ValidationError"),
+        "Should contain ValidationError type reference"
+    );
+
+    // Check for error handling in function
+    assert!(content.contains("validate"), "Should contain validate function");
+
+    // Error variants may not appear directly in generated code; just verify the function exists
+    // The important thing is that the error type is processed by gen_magnus_error_converter
+}
+
+#[test]
+fn test_async_function() {
+    let backend = MagnusBackend;
+
+    // Create API with async function
+    let api = ApiSurface {
+        crate_name: "test_lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![],
+        functions: vec![FunctionDef {
+            name: "process_async".to_string(),
+            rust_path: "test_lib::process_async".to_string(),
+            params: vec![ParamDef {
+                name: "data".to_string(),
+                ty: TypeRef::String,
+                optional: false,
+                default: None,
+                sanitized: false,
+                typed_default: None,
+                is_ref: false,
+            }],
+            return_type: TypeRef::String,
+            is_async: true,
+            error_type: None,
+            doc: "Process data asynchronously".to_string(),
+            cfg: None,
+            sanitized: false,
+            returns_ref: false,
+        }],
+        enums: vec![],
+        errors: vec![],
+    };
+
+    let config = make_config();
+    let result = backend.generate_bindings(&api, &config);
+
+    assert!(result.is_ok());
+
+    let files = result.unwrap();
+    let lib_file = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().contains("lib.rs"))
+        .unwrap();
+    let content = &lib_file.content;
+
+    // Check for async function presence
+    assert!(
+        content.contains("process_async"),
+        "Should contain process_async function"
+    );
+
+    // Check for tokio/async runtime integration
+    assert!(
+        content.contains("tokio") || content.contains("async") || content.contains("block_on"),
+        "Should contain async/tokio runtime handling"
+    );
+
+    // Check for function! macro
+    assert!(
+        content.contains("function!("),
+        "Should use function! macro for free functions"
+    );
+}
+
+#[test]
+fn test_opaque_type() {
+    let backend = MagnusBackend;
+
+    // Create API with opaque type
+    let api = ApiSurface {
+        crate_name: "test_lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "Processor".to_string(),
+            rust_path: "test_lib::Processor".to_string(),
+            fields: vec![],
+            methods: vec![MethodDef {
+                name: "process".to_string(),
+                params: vec![ParamDef {
+                    name: "input".to_string(),
+                    ty: TypeRef::String,
+                    optional: false,
+                    default: None,
+                    sanitized: false,
+                    typed_default: None,
+                    is_ref: false,
+                }],
+                return_type: TypeRef::String,
+                is_async: false,
+                is_static: false,
+                error_type: None,
+                doc: "Process input".to_string(),
+                receiver: Some(ReceiverKind::Ref),
+                sanitized: false,
+                returns_ref: false,
+                trait_source: None,
+            }],
+            is_opaque: true,
+            is_clone: true,
+            is_trait: false,
+            has_default: false,
+            has_stripped_cfg_fields: false,
+            is_return_type: false,
+            serde_rename_all: None,
+            doc: "Opaque processor type".to_string(),
+            cfg: None,
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+    };
+
+    let config = make_config();
+    let result = backend.generate_bindings(&api, &config);
+
+    assert!(result.is_ok());
+
+    let files = result.unwrap();
+    let lib_file = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().contains("lib.rs"))
+        .unwrap();
+    let content = &lib_file.content;
+
+    // Check for opaque struct generation with Arc wrapping
+    assert!(content.contains("struct Processor"), "Should generate Processor struct");
+    assert!(content.contains("Arc<"), "Opaque types should wrap inner with Arc");
+
+    // Check for magnus::wrap attribute
+    assert!(
+        content.contains("magnus::wrap"),
+        "Should use magnus::wrap for opaque types"
+    );
+
+    // Check for TryConvert and IntoValue implementations
+    assert!(
+        content.contains("impl magnus::TryConvert for Processor"),
+        "Should implement TryConvert for opaque type"
+    );
+    assert!(
+        content.contains("IntoValueFromNative"),
+        "Should implement IntoValueFromNative for opaque type"
+    );
+}
+
+#[test]
+fn test_default_config() {
+    let backend = MagnusBackend;
+
+    // Create API with a type that has default: true
+    let api = ApiSurface {
+        crate_name: "test_lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "Config".to_string(),
+            rust_path: "test_lib::Config".to_string(),
+            fields: vec![
+                make_field("timeout_ms", TypeRef::Primitive(PrimitiveType::U32), false),
+                make_field("retries", TypeRef::Primitive(PrimitiveType::U32), true),
+            ],
+            methods: vec![],
+            is_opaque: false,
+            is_clone: true,
+            is_trait: false,
+            has_default: true,
+            has_stripped_cfg_fields: false,
+            is_return_type: false,
+            serde_rename_all: None,
+            doc: "Configuration with default".to_string(),
+            cfg: None,
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+    };
+
+    let config = make_config();
+    let result = backend.generate_bindings(&api, &config);
+
+    assert!(result.is_ok());
+
+    let files = result.unwrap();
+    let lib_file = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().contains("lib.rs"))
+        .unwrap();
+    let content = &lib_file.content;
+
+    // Check for struct generation
+    assert!(content.contains("struct Config"), "Should generate Config struct");
+
+    // Check for Default impl generation
+    assert!(
+        content.contains("impl Default for Config") || content.contains("impl core::default::Default"),
+        "Should generate Default implementation for types with has_default: true"
+    );
+
+    // Check for magnus wrapper
+    assert!(content.contains("magnus::wrap"), "Should have magnus::wrap");
 }

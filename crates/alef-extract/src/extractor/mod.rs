@@ -117,9 +117,7 @@ fn resolve_newtypes(surface: &mut ApiSurface) {
     let newtype_map: AHashMap<String, TypeRef> = surface
         .types
         .iter()
-        .filter(|t| {
-            t.fields.len() == 1 && t.fields[0].name == "_0" && t.methods.is_empty() && is_simple_type(&t.fields[0].ty)
-        })
+        .filter(|t| t.fields.len() == 1 && t.fields[0].name == "_0" && is_simple_type(&t.fields[0].ty))
         .map(|t| (t.name.clone(), t.fields[0].ty.clone()))
         .collect();
 

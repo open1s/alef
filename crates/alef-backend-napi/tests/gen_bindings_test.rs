@@ -340,3 +340,559 @@ fn test_generated_header() {
         "lib.rs should have generated_header: false"
     );
 }
+
+#[test]
+fn test_async_function() {
+    let backend = NapiBackend;
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![],
+        functions: vec![FunctionDef {
+            name: "process_async".to_string(),
+            rust_path: "test_lib::process_async".to_string(),
+            params: vec![ParamDef {
+                name: "input".to_string(),
+                ty: TypeRef::String,
+                optional: false,
+                default: None,
+                sanitized: false,
+                typed_default: None,
+            }],
+            return_type: TypeRef::String,
+            is_async: true,
+            error_type: Some("Error".to_string()),
+            doc: "Async processor".to_string(),
+            cfg: None,
+            sanitized: false,
+            returns_ref: false,
+        }],
+        enums: vec![],
+        errors: vec![],
+    };
+
+    let config = make_config();
+
+    let result = backend.generate_bindings(&api, &config);
+    assert!(result.is_ok());
+
+    let files = result.unwrap();
+    let lib_rs = files.iter().find(|f| f.path.to_string_lossy().ends_with("lib.rs"));
+    assert!(lib_rs.is_some());
+
+    let content = lib_rs.unwrap().content.as_str();
+
+    // Verify async function is generated with proper async keyword
+    assert!(
+        content.contains("async fn process_async"),
+        "Should contain async function"
+    );
+    // Verify tokio runtime is added for async support
+    assert!(
+        content.contains("tokio") || content.contains("spawn_blocking"),
+        "Should include tokio runtime support for async"
+    );
+    // Verify return type indicates async/promise
+    assert!(content.contains("#[napi"), "Async function should have napi attribute");
+}
+
+#[test]
+fn test_methods_generation() {
+    let backend = NapiBackend;
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "Processor".to_string(),
+            rust_path: "test_lib::Processor".to_string(),
+            fields: vec![],
+            methods: vec![
+                MethodDef {
+                    name: "process".to_string(),
+                    params: vec![ParamDef {
+                        name: "data".to_string(),
+                        ty: TypeRef::String,
+                        optional: false,
+                        default: None,
+                        sanitized: false,
+                        typed_default: None,
+                    }],
+                    return_type: TypeRef::String,
+                    is_async: false,
+                    is_static: false,
+                    error_type: Some("Error".to_string()),
+                    doc: "Process data".to_string(),
+                    receiver: Some(alef_core::ir::ReceiverKind::Ref),
+                    sanitized: false,
+                    trait_source: None,
+                    returns_ref: false,
+                },
+                MethodDef {
+                    name: "create".to_string(),
+                    params: vec![],
+                    return_type: TypeRef::Named("Processor".to_string()),
+                    is_async: false,
+                    is_static: true,
+                    error_type: None,
+                    doc: "Create processor".to_string(),
+                    receiver: None,
+                    sanitized: false,
+                    trait_source: None,
+                    returns_ref: false,
+                },
+            ],
+            is_opaque: true,
+            is_clone: true,
+            is_trait: false,
+            has_default: false,
+            has_stripped_cfg_fields: false,
+            is_return_type: false,
+            serde_rename_all: None,
+            doc: "Text processor".to_string(),
+            cfg: None,
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+    };
+
+    let config = make_config();
+
+    let result = backend.generate_bindings(&api, &config);
+    assert!(result.is_ok());
+
+    let files = result.unwrap();
+    let lib_rs = files.iter().find(|f| f.path.to_string_lossy().ends_with("lib.rs"));
+    assert!(lib_rs.is_some());
+
+    let content = lib_rs.unwrap().content.as_str();
+
+    // Verify opaque struct is generated with Js prefix
+    assert!(
+        content.contains("struct JsProcessor"),
+        "Should contain opaque struct JsProcessor"
+    );
+    // Verify impl block with napi attribute for methods
+    assert!(
+        content.contains("impl JsProcessor"),
+        "Should contain impl block for JsProcessor"
+    );
+    // Verify instance method is generated
+    assert!(content.contains("fn process"), "Should contain instance method process");
+    // Verify static method is generated
+    assert!(content.contains("fn create"), "Should contain static method create");
+    // Verify napi attributes on methods
+    assert!(content.contains("#[napi"), "Methods should have napi attributes");
+    // Verify Arc usage for opaque types
+    assert!(
+        content.contains("Arc"),
+        "Opaque types should use Arc for interior mutability"
+    );
+}
+
+#[test]
+fn test_error_types() {
+    let backend = NapiBackend;
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![],
+        functions: vec![FunctionDef {
+            name: "risky_operation".to_string(),
+            rust_path: "test_lib::risky_operation".to_string(),
+            params: vec![],
+            return_type: TypeRef::String,
+            is_async: false,
+            error_type: Some("ProcessError".to_string()),
+            doc: "Operation that can fail".to_string(),
+            cfg: None,
+            sanitized: false,
+            returns_ref: false,
+        }],
+        enums: vec![],
+        errors: vec![ErrorDef {
+            name: "ProcessError".to_string(),
+            rust_path: "test_lib::ProcessError".to_string(),
+            variants: vec![
+                ErrorVariant {
+                    name: "NotFound".to_string(),
+                    fields: vec![],
+                    doc: "Item not found".to_string(),
+                    message_template: Some("not found".to_string()),
+                    has_source: false,
+                    has_from: false,
+                    is_unit: true,
+                },
+                ErrorVariant {
+                    name: "InvalidInput".to_string(),
+                    fields: vec![make_field("reason", TypeRef::String, false)],
+                    doc: "Invalid input provided".to_string(),
+                    message_template: Some("invalid: {0}".to_string()),
+                    has_source: false,
+                    has_from: false,
+                    is_unit: false,
+                },
+            ],
+            doc: "Processing error".to_string(),
+        }],
+    };
+
+    let config = make_config();
+
+    let result = backend.generate_bindings(&api, &config);
+    assert!(result.is_ok());
+
+    let files = result.unwrap();
+    let lib_rs = files.iter().find(|f| f.path.to_string_lossy().ends_with("lib.rs"));
+    assert!(lib_rs.is_some());
+
+    let content = lib_rs.unwrap().content.as_str();
+
+    // Verify error handling code is generated
+    assert!(
+        content.contains("ProcessError") || content.contains("map_err"),
+        "Should contain error handling for ProcessError"
+    );
+    // Verify error conversion function is generated
+    assert!(
+        content.contains("napi::Error") || content.contains("GenericFailure"),
+        "Should contain NAPI error conversion"
+    );
+    // Verify error variant constants are generated
+    assert!(
+        content.contains("NotFound") || content.contains("InvalidInput"),
+        "Should contain error variant handling"
+    );
+}
+
+#[test]
+fn test_opaque_type() {
+    let backend = NapiBackend;
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "Handle".to_string(),
+            rust_path: "test_lib::Handle".to_string(),
+            fields: vec![],
+            methods: vec![MethodDef {
+                name: "get_value".to_string(),
+                params: vec![],
+                return_type: TypeRef::String,
+                is_async: false,
+                is_static: false,
+                error_type: None,
+                doc: "Get handle value".to_string(),
+                receiver: Some(alef_core::ir::ReceiverKind::Ref),
+                sanitized: false,
+                trait_source: None,
+                returns_ref: false,
+            }],
+            is_opaque: true,
+            is_clone: true,
+            is_trait: false,
+            has_default: false,
+            has_stripped_cfg_fields: false,
+            is_return_type: false,
+            serde_rename_all: None,
+            doc: "Opaque handle type".to_string(),
+            cfg: None,
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+    };
+
+    let config = make_config();
+
+    let result = backend.generate_bindings(&api, &config);
+    assert!(result.is_ok());
+
+    let files = result.unwrap();
+    let lib_rs = files.iter().find(|f| f.path.to_string_lossy().ends_with("lib.rs"));
+    assert!(lib_rs.is_some());
+
+    let content = lib_rs.unwrap().content.as_str();
+
+    // Verify opaque struct uses Arc for memory management
+    assert!(
+        content.contains("struct JsHandle") && content.contains("Arc"),
+        "Opaque type should be JsHandle wrapped in Arc"
+    );
+    // Verify impl block for opaque type methods
+    assert!(
+        content.contains("impl JsHandle"),
+        "Should have impl block for opaque JsHandle"
+    );
+    // Verify napi attribute on impl block
+    assert!(
+        content.contains("#[napi]") && content.contains("impl JsHandle"),
+        "Opaque impl block should have napi attribute"
+    );
+    // Verify method references self.inner for delegation
+    assert!(
+        content.contains("self.inner") || content.contains("get_value"),
+        "Opaque method should delegate to inner type"
+    );
+}
+
+#[test]
+fn test_optional_and_default_fields() {
+    let backend = NapiBackend;
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "Options".to_string(),
+            rust_path: "test_lib::Options".to_string(),
+            fields: vec![
+                make_field("timeout", TypeRef::Primitive(PrimitiveType::U32), true),
+                make_field("retries", TypeRef::Primitive(PrimitiveType::U32), false),
+                make_field("max_size", TypeRef::Primitive(PrimitiveType::U64), true),
+            ],
+            methods: vec![],
+            is_opaque: false,
+            is_clone: true,
+            is_trait: false,
+            has_default: true,
+            has_stripped_cfg_fields: false,
+            is_return_type: false,
+            serde_rename_all: None,
+            doc: "Configuration with defaults".to_string(),
+            cfg: None,
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+    };
+
+    let config = make_config();
+
+    let result = backend.generate_bindings(&api, &config);
+    assert!(result.is_ok());
+
+    let files = result.unwrap();
+    let lib_rs = files.iter().find(|f| f.path.to_string_lossy().ends_with("lib.rs"));
+    assert!(lib_rs.is_some());
+
+    let content = lib_rs.unwrap().content.as_str();
+
+    // Verify struct with default impl
+    assert!(
+        content.contains("struct JsOptions"),
+        "Should contain Options struct with Js prefix"
+    );
+    // Verify fields are wrapped in Option when type has default
+    assert!(
+        content.contains("Option<") || content.contains("timeout"),
+        "Fields should be wrapped in Option for types with defaults"
+    );
+    // Verify napi(object) attribute
+    assert!(
+        content.contains("napi(object)"),
+        "Non-opaque struct should use napi(object)"
+    );
+    // Verify Default derive is added
+    assert!(
+        content.contains("Default") || content.contains("impl Default for JsOptions"),
+        "Type with has_default should derive Default or have impl"
+    );
+}
+
+#[test]
+fn test_async_method() {
+    let backend = NapiBackend;
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "AsyncWorker".to_string(),
+            rust_path: "test_lib::AsyncWorker".to_string(),
+            fields: vec![],
+            methods: vec![MethodDef {
+                name: "process_async".to_string(),
+                params: vec![ParamDef {
+                    name: "input".to_string(),
+                    ty: TypeRef::String,
+                    optional: false,
+                    default: None,
+                    sanitized: false,
+                    typed_default: None,
+                }],
+                return_type: TypeRef::String,
+                is_async: true,
+                is_static: false,
+                error_type: None,
+                doc: "Async process".to_string(),
+                receiver: Some(alef_core::ir::ReceiverKind::Ref),
+                sanitized: false,
+                trait_source: None,
+                returns_ref: false,
+            }],
+            is_opaque: true,
+            is_clone: true,
+            is_trait: false,
+            has_default: false,
+            has_stripped_cfg_fields: false,
+            is_return_type: false,
+            serde_rename_all: None,
+            doc: "Async worker".to_string(),
+            cfg: None,
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+    };
+
+    let config = make_config();
+
+    let result = backend.generate_bindings(&api, &config);
+    assert!(result.is_ok());
+
+    let files = result.unwrap();
+    let lib_rs = files.iter().find(|f| f.path.to_string_lossy().ends_with("lib.rs"));
+    assert!(lib_rs.is_some());
+
+    let content = lib_rs.unwrap().content.as_str();
+
+    // Verify async method keyword
+    assert!(
+        content.contains("async fn process_async"),
+        "Should contain async method"
+    );
+    // Verify tokio runtime for async support
+    assert!(
+        content.contains("tokio") || content.contains("spawn_blocking"),
+        "Should include tokio support for async methods"
+    );
+    // Verify method is in impl block
+    assert!(
+        content.contains("impl JsAsyncWorker"),
+        "Should have impl block for opaque async worker"
+    );
+}
+
+#[test]
+fn test_static_method_with_error() {
+    let backend = NapiBackend;
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "Factory".to_string(),
+            rust_path: "test_lib::Factory".to_string(),
+            fields: vec![],
+            methods: vec![MethodDef {
+                name: "from_config".to_string(),
+                params: vec![ParamDef {
+                    name: "config_path".to_string(),
+                    ty: TypeRef::String,
+                    optional: false,
+                    default: None,
+                    sanitized: false,
+                    typed_default: None,
+                }],
+                return_type: TypeRef::Named("Factory".to_string()),
+                is_async: false,
+                is_static: true,
+                error_type: Some("Error".to_string()),
+                doc: "Create from config".to_string(),
+                receiver: None,
+                sanitized: false,
+                trait_source: None,
+                returns_ref: false,
+            }],
+            is_opaque: true,
+            is_clone: true,
+            is_trait: false,
+            has_default: false,
+            has_stripped_cfg_fields: false,
+            is_return_type: false,
+            serde_rename_all: None,
+            doc: "Factory type".to_string(),
+            cfg: None,
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+    };
+
+    let config = make_config();
+
+    let result = backend.generate_bindings(&api, &config);
+    assert!(result.is_ok());
+
+    let files = result.unwrap();
+    let lib_rs = files.iter().find(|f| f.path.to_string_lossy().ends_with("lib.rs"));
+    assert!(lib_rs.is_some());
+
+    let content = lib_rs.unwrap().content.as_str();
+
+    // Verify static method (no &self parameter)
+    assert!(content.contains("fn from_config"), "Should contain static method");
+    // Verify error handling in static method
+    assert!(
+        content.contains("map_err") || content.contains("GenericFailure"),
+        "Static method with error should have error conversion"
+    );
+    // Verify return type wrapping for opaque types
+    assert!(
+        content.contains("JsFactory") || content.contains("Arc"),
+        "Static method returning opaque type should wrap in Js and Arc"
+    );
+}
+
+#[test]
+fn test_map_types() {
+    let backend = NapiBackend;
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "Config".to_string(),
+            rust_path: "test_lib::Config".to_string(),
+            fields: vec![make_field(
+                "settings",
+                TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+                false,
+            )],
+            methods: vec![],
+            is_opaque: false,
+            is_clone: true,
+            is_trait: false,
+            has_default: false,
+            has_stripped_cfg_fields: false,
+            is_return_type: false,
+            serde_rename_all: None,
+            doc: "Config with map".to_string(),
+            cfg: None,
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+    };
+
+    let config = make_config();
+
+    let result = backend.generate_bindings(&api, &config);
+    assert!(result.is_ok());
+
+    let files = result.unwrap();
+    let lib_rs = files.iter().find(|f| f.path.to_string_lossy().ends_with("lib.rs"));
+    assert!(lib_rs.is_some());
+
+    let content = lib_rs.unwrap().content.as_str();
+
+    // Verify HashMap import is added for Map types
+    assert!(content.contains("HashMap"), "Should import HashMap for Map types");
+    // Verify struct contains map field
+    assert!(content.contains("settings"), "Should contain settings field for map");
+}

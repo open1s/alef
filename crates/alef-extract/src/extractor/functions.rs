@@ -405,6 +405,7 @@ pub(crate) fn extract_params(inputs: &syn::punctuated::Punctuated<syn::FnArg, sy
                     syn::Pat::Ident(ident) => ident.ident.to_string(),
                     _ => "_".to_string(),
                 };
+                let is_ref = matches!(&*pat_type.ty, syn::Type::Reference(_));
                 let resolved = type_resolver::resolve_type(&pat_type.ty);
                 let (ty, optional) = unwrap_optional(resolved);
                 Some(ParamDef {
@@ -414,6 +415,7 @@ pub(crate) fn extract_params(inputs: &syn::punctuated::Punctuated<syn::FnArg, sy
                     default: None,
                     sanitized: false,
                     typed_default: None,
+                    is_ref,
                 })
             } else {
                 None // Skip self receiver

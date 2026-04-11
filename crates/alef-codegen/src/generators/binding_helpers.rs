@@ -222,6 +222,9 @@ pub fn gen_call_args_with_let_bindings(params: &[ParamDef], opaque_types: &AHash
                         format!("&{}.inner", p.name)
                     }
                 }
+                TypeRef::Named(_) if p.is_ref => {
+                    format!("&{}_core", p.name)
+                }
                 TypeRef::Named(_) => {
                     format!("{}_core", p.name)
                 }

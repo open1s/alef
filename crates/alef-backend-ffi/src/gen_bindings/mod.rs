@@ -281,6 +281,7 @@ mod tests {
                     default: None,
                     sanitized: false,
                     typed_default: None,
+                    is_ref: false,
                 }],
                 return_type: TypeRef::Named("ExtractionResult".to_string()),
                 is_async: false,
@@ -397,5 +398,401 @@ mod tests {
 
         let build = files.iter().find(|f| f.path.ends_with("build.rs")).unwrap();
         assert!(build.content.contains("mylib.h"));
+    }
+
+    #[test]
+    fn test_visitor_callbacks_disabled_by_default() {
+        let api = sample_api();
+        let config = sample_config();
+        let backend = FfiBackend;
+
+        let files = backend.generate_bindings(&api, &config).unwrap();
+        let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+        // When visitor_callbacks is not enabled, no visitor code should be generated
+        assert!(!lib.content.contains("VisitorCallbacks"));
+        assert!(!lib.content.contains("visit_text"));
+        assert!(!lib.content.contains("_visitor_create"));
+        assert!(!lib.content.contains("_visitor_free"));
+        assert!(!lib.content.contains("_convert_with_visitor"));
+    }
+
+    #[test]
+    fn test_visitor_callbacks_enabled() {
+        let api = sample_api();
+        let config: AlefConfig = toml::from_str(
+            r#"
+            languages = ["ffi"]
+            [crate]
+            name = "my-lib"
+            sources = ["src/lib.rs"]
+            [ffi]
+            prefix = "htm"
+            visitor_callbacks = true
+            "#,
+        )
+        .unwrap();
+        let backend = FfiBackend;
+
+        let files = backend.generate_bindings(&api, &config).unwrap();
+        let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+        // Callback struct should be generated
+        assert!(lib.content.contains("struct HtmVisitorCallbacks"));
+        assert!(lib.content.contains("pub struct HtmNodeContext"));
+
+        // Visit-result codes should be defined
+        assert!(lib.content.contains("HTM_VISIT_CONTINUE"));
+        assert!(lib.content.contains("HTM_VISIT_SKIP"));
+        assert!(lib.content.contains("HTM_VISIT_PRESERVE_HTML"));
+        assert!(lib.content.contains("HTM_VISIT_CUSTOM"));
+        assert!(lib.content.contains("HTM_VISIT_ERROR"));
+
+        // NodeContext fields
+        assert!(lib.content.contains("node_type: i32"));
+        assert!(lib.content.contains("tag_name: *const std::ffi::c_char"));
+        assert!(lib.content.contains("depth: usize"));
+        assert!(lib.content.contains("index_in_parent: usize"));
+        assert!(lib.content.contains("parent_tag: *const std::ffi::c_char"));
+        assert!(lib.content.contains("is_inline: i32"));
+    }
+
+    #[test]
+    fn test_visitor_callbacks_visitor_handle_struct() {
+        let api = sample_api();
+        let config: AlefConfig = toml::from_str(
+            r#"
+            languages = ["ffi"]
+            [crate]
+            name = "my-lib"
+            sources = ["src/lib.rs"]
+            [ffi]
+            prefix = "htm"
+            visitor_callbacks = true
+            "#,
+        )
+        .unwrap();
+        let backend = FfiBackend;
+
+        let files = backend.generate_bindings(&api, &config).unwrap();
+        let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+        // Visitor handle struct should exist
+        assert!(lib.content.contains("pub struct HtmVisitor"));
+        assert!(lib.content.contains("callbacks: HtmVisitorCallbacks"));
+        assert!(lib.content.contains("_tag_scratch"));
+    }
+
+    #[test]
+    fn test_visitor_callbacks_callback_fields() {
+        let api = sample_api();
+        let config: AlefConfig = toml::from_str(
+            r#"
+            languages = ["ffi"]
+            [crate]
+            name = "my-lib"
+            sources = ["src/lib.rs"]
+            [ffi]
+            prefix = "htm"
+            visitor_callbacks = true
+            "#,
+        )
+        .unwrap();
+        let backend = FfiBackend;
+
+        let files = backend.generate_bindings(&api, &config).unwrap();
+        let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+        // Some key visitor callback fields (there are 40 total in the visitor module)
+        assert!(lib.content.contains("visit_text"));
+        assert!(lib.content.contains("visit_element_start"));
+        assert!(lib.content.contains("visit_element_end"));
+        assert!(lib.content.contains("visit_link"));
+        assert!(lib.content.contains("visit_image"));
+        assert!(lib.content.contains("visit_heading"));
+        assert!(lib.content.contains("visit_code_block"));
+        assert!(lib.content.contains("visit_code_inline"));
+        assert!(lib.content.contains("visit_list_item"));
+        assert!(lib.content.contains("visit_list_start"));
+        assert!(lib.content.contains("visit_list_end"));
+        assert!(lib.content.contains("visit_table_start"));
+        assert!(lib.content.contains("visit_table_row"));
+        assert!(lib.content.contains("visit_table_end"));
+        assert!(lib.content.contains("visit_blockquote"));
+        assert!(lib.content.contains("visit_strong"));
+        assert!(lib.content.contains("visit_emphasis"));
+        assert!(lib.content.contains("visit_strikethrough"));
+    }
+
+    #[test]
+    fn test_visitor_callbacks_ffi_functions() {
+        let api = sample_api();
+        let config: AlefConfig = toml::from_str(
+            r#"
+            languages = ["ffi"]
+            [crate]
+            name = "my-lib"
+            sources = ["src/lib.rs"]
+            [ffi]
+            prefix = "htm"
+            visitor_callbacks = true
+            "#,
+        )
+        .unwrap();
+        let backend = FfiBackend;
+
+        let files = backend.generate_bindings(&api, &config).unwrap();
+        let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+        // Public FFI entry points for visitor management
+        assert!(lib.content.contains("htm_visitor_create"));
+        assert!(lib.content.contains("htm_visitor_free"));
+        assert!(lib.content.contains("htm_convert_with_visitor"));
+
+        // Functions should be extern "C"
+        assert!(lib.content.contains("extern \"C\" fn htm_visitor_create"));
+        assert!(lib.content.contains("extern \"C\" fn htm_visitor_free"));
+        assert!(lib.content.contains("extern \"C\" fn htm_convert_with_visitor"));
+    }
+
+    #[test]
+    fn test_visitor_callbacks_callback_signatures() {
+        let api = sample_api();
+        let config: AlefConfig = toml::from_str(
+            r#"
+            languages = ["ffi"]
+            [crate]
+            name = "my-lib"
+            sources = ["src/lib.rs"]
+            [ffi]
+            prefix = "htm"
+            visitor_callbacks = true
+            "#,
+        )
+        .unwrap();
+        let backend = FfiBackend;
+
+        let files = backend.generate_bindings(&api, &config).unwrap();
+        let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+        // Callback type signatures should be extern "C" function pointers
+        assert!(lib.content.contains("extern \"C\" fn("));
+        assert!(lib.content.contains("*const HtmNodeContext"));
+        assert!(lib.content.contains("user_data: *mut std::ffi::c_void"));
+        assert!(lib.content.contains("out_custom: *mut *mut std::ffi::c_char"));
+        assert!(lib.content.contains("out_len: *mut usize"));
+
+        // Return type should be i32
+        assert!(lib.content.contains(") -> i32"));
+    }
+
+    #[test]
+    fn test_visitor_callbacks_custom_prefix() {
+        let api = sample_api();
+        let config: AlefConfig = toml::from_str(
+            r#"
+            languages = ["ffi"]
+            [crate]
+            name = "my-lib"
+            sources = ["src/lib.rs"]
+            [ffi]
+            prefix = "ml"
+            visitor_callbacks = true
+            "#,
+        )
+        .unwrap();
+        let backend = FfiBackend;
+
+        let files = backend.generate_bindings(&api, &config).unwrap();
+        let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+        // Custom prefix should be used throughout (struct/function names and constants)
+        assert!(lib.content.contains("MlVisitorCallbacks"));
+        assert!(lib.content.contains("MlNodeContext"));
+        assert!(lib.content.contains("ml_visitor_create"));
+        assert!(lib.content.contains("ml_visitor_free"));
+        assert!(lib.content.contains("ml_convert_with_visitor"));
+        // Visit result constants use HTM_ prefix (hardcoded in gen_visitor)
+        assert!(lib.content.contains("HTM_VISIT_CONTINUE"));
+    }
+
+    #[test]
+    fn test_visitor_callbacks_visitor_ref_wrapper() {
+        let api = sample_api();
+        let config: AlefConfig = toml::from_str(
+            r#"
+            languages = ["ffi"]
+            [crate]
+            name = "my-lib"
+            sources = ["src/lib.rs"]
+            [ffi]
+            prefix = "htm"
+            visitor_callbacks = true
+            "#,
+        )
+        .unwrap();
+        let backend = FfiBackend;
+
+        let files = backend.generate_bindings(&api, &config).unwrap();
+        let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+        // VisitorRef wrapper for forwarding trait methods
+        assert!(lib.content.contains("struct VisitorRef"));
+        assert!(lib.content.contains("impl std::fmt::Debug for VisitorRef"));
+        // VisitorRef should implement HtmlVisitor trait (core_import is my_lib for this test)
+        assert!(lib.content.contains("impl my_lib::visitor::HtmlVisitor for VisitorRef"));
+    }
+
+    #[test]
+    fn test_visitor_callbacks_safety_comments() {
+        let api = sample_api();
+        let config: AlefConfig = toml::from_str(
+            r#"
+            languages = ["ffi"]
+            [crate]
+            name = "my-lib"
+            sources = ["src/lib.rs"]
+            [ffi]
+            prefix = "htm"
+            visitor_callbacks = true
+            "#,
+        )
+        .unwrap();
+        let backend = FfiBackend;
+
+        let files = backend.generate_bindings(&api, &config).unwrap();
+        let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+        // Should document safety invariants for unsafe blocks
+        assert!(lib.content.contains("// SAFETY:"));
+        assert!(lib.content.contains("unsafe"));
+        assert!(lib.content.contains("unsafe extern \"C\" fn"));
+    }
+
+    #[test]
+    fn test_visitor_callbacks_decode_visit_result() {
+        let api = sample_api();
+        let config: AlefConfig = toml::from_str(
+            r#"
+            languages = ["ffi"]
+            [crate]
+            name = "my-lib"
+            sources = ["src/lib.rs"]
+            [ffi]
+            prefix = "htm"
+            visitor_callbacks = true
+            "#,
+        )
+        .unwrap();
+        let backend = FfiBackend;
+
+        let files = backend.generate_bindings(&api, &config).unwrap();
+        let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+        // Helper function to decode visit result codes back to Rust enum
+        assert!(lib.content.contains("decode_visit_result"));
+        assert!(lib.content.contains("VisitResult::Skip"));
+        assert!(lib.content.contains("VisitResult::PreserveHtml"));
+        assert!(lib.content.contains("VisitResult::Custom"));
+        assert!(lib.content.contains("VisitResult::Error"));
+    }
+
+    #[test]
+    fn test_visitor_callbacks_call_with_ctx() {
+        let api = sample_api();
+        let config: AlefConfig = toml::from_str(
+            r#"
+            languages = ["ffi"]
+            [crate]
+            name = "my-lib"
+            sources = ["src/lib.rs"]
+            [ffi]
+            prefix = "htm"
+            visitor_callbacks = true
+            "#,
+        )
+        .unwrap();
+        let backend = FfiBackend;
+
+        let files = backend.generate_bindings(&api, &config).unwrap();
+        let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+        // Helper function for building and passing NodeContext to C callbacks
+        assert!(lib.content.contains("call_with_ctx"));
+        assert!(lib.content.contains("HtmNodeContext"));
+        assert!(lib.content.contains("tag_cstring"));
+        assert!(lib.content.contains("parent_cstring"));
+    }
+
+    #[test]
+    fn test_visitor_callbacks_opt_str_to_c() {
+        let api = sample_api();
+        let config: AlefConfig = toml::from_str(
+            r#"
+            languages = ["ffi"]
+            [crate]
+            name = "my-lib"
+            sources = ["src/lib.rs"]
+            [ffi]
+            prefix = "htm"
+            visitor_callbacks = true
+            "#,
+        )
+        .unwrap();
+        let backend = FfiBackend;
+
+        let files = backend.generate_bindings(&api, &config).unwrap();
+        let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+        // Helper to convert Option<&str> to C pointer (null or valid CString)
+        assert!(lib.content.contains("opt_str_to_c"));
+    }
+
+    #[test]
+    fn test_visitor_callbacks_repr_c() {
+        let api = sample_api();
+        let config: AlefConfig = toml::from_str(
+            r#"
+            languages = ["ffi"]
+            [crate]
+            name = "my-lib"
+            sources = ["src/lib.rs"]
+            [ffi]
+            prefix = "htm"
+            visitor_callbacks = true
+            "#,
+        )
+        .unwrap();
+        let backend = FfiBackend;
+
+        let files = backend.generate_bindings(&api, &config).unwrap();
+        let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+        // FFI-crossing types must use #[repr(C)]
+        assert!(lib.content.contains("#[repr(C)]"));
+    }
+
+    #[test]
+    fn test_visitor_callbacks_send_impl() {
+        let api = sample_api();
+        let config: AlefConfig = toml::from_str(
+            r#"
+            languages = ["ffi"]
+            [crate]
+            name = "my-lib"
+            sources = ["src/lib.rs"]
+            [ffi]
+            prefix = "htm"
+            visitor_callbacks = true
+            "#,
+        )
+        .unwrap();
+        let backend = FfiBackend;
+
+        let files = backend.generate_bindings(&api, &config).unwrap();
+        let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+        // VisitorCallbacks should be Send (safe to share across thread boundaries)
+        assert!(lib.content.contains("unsafe impl Send for HtmVisitorCallbacks"));
     }
 }

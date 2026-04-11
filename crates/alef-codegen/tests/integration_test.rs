@@ -1,8 +1,12 @@
 use ahash::AHashSet;
-use alef_codegen::generators::{AdapterBodies, AsyncPattern, RustBindingConfig, gen_enum, gen_function, gen_struct};
+use alef_codegen::generators::{
+    AdapterBodies, AsyncPattern, RustBindingConfig, gen_constructor, gen_enum, gen_function, gen_impl_block,
+    gen_method, gen_static_method, gen_struct,
+};
 use alef_codegen::type_mapper::TypeMapper;
 use alef_core::ir::{
-    CoreWrapper, EnumDef, EnumVariant, FieldDef, FunctionDef, ParamDef, PrimitiveType, TypeDef, TypeRef,
+    CoreWrapper, EnumDef, EnumVariant, FieldDef, FunctionDef, MethodDef, ParamDef, PrimitiveType, ReceiverKind,
+    TypeDef, TypeRef,
 };
 use std::borrow::Cow;
 
@@ -98,6 +102,7 @@ fn simple_function_def() -> FunctionDef {
             default: None,
             sanitized: false,
             typed_default: None,
+            is_ref: false,
         }],
         return_type: TypeRef::Primitive(PrimitiveType::U32),
         is_async: false,
@@ -233,4 +238,921 @@ fn test_gen_struct_with_empty_fields() {
     let result = gen_struct(&typ, &mapper, &cfg);
 
     assert!(result.contains("pub struct Empty"), "should generate empty struct");
+}
+
+// ==============================================================================
+// Tests for method code generation
+// ==============================================================================
+
+#[test]
+fn test_gen_constructor_produces_new_method() {
+    let typ = simple_type_def();
+    let mapper = RustMapper;
+    let cfg = default_cfg();
+
+    let result = gen_constructor(&typ, &mapper, &cfg);
+
+    assert!(result.contains("pub fn new"), "should contain new function");
+    assert!(result.contains("name: String"), "should accept name parameter");
+    assert!(result.contains("count: Option<u32>"), "should accept count parameter");
+    assert!(result.contains("Self {"), "should construct Self");
+    assert!(result.contains("name"), "should include name field in struct literal");
+    assert!(result.contains("count"), "should include count field in struct literal");
+}
+
+#[test]
+fn test_gen_instance_method_with_ref_receiver() {
+    let typ = simple_type_def();
+    let method = MethodDef {
+        name: "get_name".to_string(),
+        params: vec![],
+        return_type: TypeRef::String,
+        is_async: false,
+        is_static: false,
+        error_type: None,
+        doc: String::new(),
+        receiver: Some(ReceiverKind::Ref),
+        sanitized: false,
+        trait_source: None,
+        returns_ref: false,
+    };
+    let mapper = RustMapper;
+    let cfg = default_cfg();
+    let adapter_bodies = AdapterBodies::default();
+    let opaque_types = AHashSet::new();
+
+    let result = gen_method(&method, &mapper, &cfg, &typ, false, &opaque_types, &adapter_bodies);
+
+    assert!(result.contains("pub fn get_name"), "should contain method name");
+    assert!(result.contains("&self"), "should have &self receiver");
+    assert!(result.contains("-> String"), "should have String return type");
+}
+
+#[test]
+fn test_gen_static_method_without_receiver() {
+    let typ = simple_type_def();
+    let method = MethodDef {
+        name: "create".to_string(),
+        params: vec![ParamDef {
+            name: "config".to_string(),
+            ty: TypeRef::String,
+            optional: false,
+            default: None,
+            sanitized: false,
+            typed_default: None,
+            is_ref: false,
+        }],
+        return_type: TypeRef::Named("MyConfig".to_string()),
+        is_async: false,
+        is_static: true,
+        error_type: None,
+        doc: String::new(),
+        receiver: None,
+        sanitized: false,
+        trait_source: None,
+        returns_ref: false,
+    };
+    let mapper = RustMapper;
+    let cfg = default_cfg();
+    let adapter_bodies = AdapterBodies::default();
+    let opaque_types = AHashSet::new();
+
+    let result = gen_static_method(&method, &mapper, &cfg, &typ, &adapter_bodies, &opaque_types);
+
+    assert!(result.contains("pub fn create"), "should contain static method name");
+    assert!(!result.contains("&self"), "should not have &self");
+    assert!(result.contains("config: String"), "should accept config parameter");
+    assert!(result.contains("-> MyConfig"), "should have MyConfig return type");
+}
+
+#[test]
+fn test_gen_async_method_generates_async_signature() {
+    let typ = simple_type_def();
+    let method = MethodDef {
+        name: "process_async".to_string(),
+        params: vec![],
+        return_type: TypeRef::Primitive(PrimitiveType::U32),
+        is_async: true,
+        is_static: false,
+        error_type: None,
+        doc: String::new(),
+        receiver: Some(ReceiverKind::Ref),
+        sanitized: false,
+        trait_source: None,
+        returns_ref: false,
+    };
+    let mapper = RustMapper;
+    let cfg = default_cfg();
+    let adapter_bodies = AdapterBodies::default();
+    let opaque_types = AHashSet::new();
+
+    let result = gen_method(&method, &mapper, &cfg, &typ, false, &opaque_types, &adapter_bodies);
+
+    assert!(
+        result.contains("pub fn process_async"),
+        "should contain async method name"
+    );
+    assert!(result.contains("&self"), "should have &self receiver");
+    // The return type wrapping depends on the error_type and async handling
+    assert!(
+        result.contains("u32") || result.contains("impl"),
+        "should reference u32 return type"
+    );
+}
+
+#[test]
+fn test_gen_method_with_multiple_params() {
+    let typ = simple_type_def();
+    let method = MethodDef {
+        name: "compute".to_string(),
+        params: vec![
+            ParamDef {
+                name: "a".to_string(),
+                ty: TypeRef::Primitive(PrimitiveType::U32),
+                optional: false,
+                default: None,
+                sanitized: false,
+                typed_default: None,
+                is_ref: false,
+            },
+            ParamDef {
+                name: "b".to_string(),
+                ty: TypeRef::Primitive(PrimitiveType::U32),
+                optional: false,
+                default: None,
+                sanitized: false,
+                typed_default: None,
+                is_ref: false,
+            },
+            ParamDef {
+                name: "label".to_string(),
+                ty: TypeRef::String,
+                optional: false,
+                default: None,
+                sanitized: false,
+                typed_default: None,
+                is_ref: false,
+            },
+        ],
+        return_type: TypeRef::Primitive(PrimitiveType::U32),
+        is_async: false,
+        is_static: false,
+        error_type: None,
+        doc: String::new(),
+        receiver: Some(ReceiverKind::Ref),
+        sanitized: false,
+        trait_source: None,
+        returns_ref: false,
+    };
+    let mapper = RustMapper;
+    let cfg = default_cfg();
+    let adapter_bodies = AdapterBodies::default();
+    let opaque_types = AHashSet::new();
+
+    let result = gen_method(&method, &mapper, &cfg, &typ, false, &opaque_types, &adapter_bodies);
+
+    assert!(result.contains("pub fn compute"), "should contain method name");
+    assert!(result.contains("a: u32"), "should have parameter a");
+    assert!(result.contains("b: u32"), "should have parameter b");
+    assert!(result.contains("label: String"), "should have parameter label");
+    assert!(result.contains("-> u32"), "should have return type");
+}
+
+#[test]
+fn test_gen_method_with_error_type() {
+    let typ = simple_type_def();
+    let method = MethodDef {
+        name: "validate".to_string(),
+        params: vec![],
+        return_type: TypeRef::String,
+        is_async: false,
+        is_static: false,
+        error_type: Some("ValidationError".to_string()),
+        doc: String::new(),
+        receiver: Some(ReceiverKind::Ref),
+        sanitized: false,
+        trait_source: None,
+        returns_ref: false,
+    };
+    let mapper = RustMapper;
+    let cfg = default_cfg();
+    let adapter_bodies = AdapterBodies::default();
+    let opaque_types = AHashSet::new();
+
+    let result = gen_method(&method, &mapper, &cfg, &typ, false, &opaque_types, &adapter_bodies);
+
+    assert!(result.contains("pub fn validate"), "should contain method name");
+    // Should be wrapped in Result due to error_type
+    assert!(result.contains("Result"), "should return Result when error_type is set");
+    assert!(result.contains("String"), "should contain return type in Result");
+    // Should have #[allow(clippy::missing_errors_doc)] when returning Result
+    assert!(
+        result.contains("missing_errors_doc"),
+        "should suppress missing_errors_doc lint"
+    );
+}
+
+#[test]
+fn test_gen_impl_block_with_constructor_and_methods() {
+    let mut typ = simple_type_def();
+    typ.methods = vec![
+        MethodDef {
+            name: "get_name".to_string(),
+            params: vec![],
+            return_type: TypeRef::String,
+            is_async: false,
+            is_static: false,
+            error_type: None,
+            doc: String::new(),
+            receiver: Some(ReceiverKind::Ref),
+            sanitized: false,
+            trait_source: None,
+            returns_ref: false,
+        },
+        MethodDef {
+            name: "create".to_string(),
+            params: vec![],
+            return_type: TypeRef::Named("MyConfig".to_string()),
+            is_async: false,
+            is_static: true,
+            error_type: None,
+            doc: String::new(),
+            receiver: None,
+            sanitized: false,
+            trait_source: None,
+            returns_ref: false,
+        },
+    ];
+
+    let mapper = RustMapper;
+    let cfg = default_cfg();
+    let adapter_bodies = AdapterBodies::default();
+    let opaque_types = AHashSet::new();
+
+    let result = gen_impl_block(&typ, &mapper, &cfg, &adapter_bodies, &opaque_types);
+
+    assert!(result.contains("impl MyConfig {"), "should contain impl block");
+    assert!(result.contains("pub fn new"), "should contain constructor");
+    assert!(result.contains("pub fn get_name"), "should contain instance method");
+    assert!(result.contains("pub fn create"), "should contain static method");
+    assert!(result.starts_with("impl"), "should start with impl");
+    assert!(result.ends_with("}"), "should end with closing brace");
+}
+
+#[test]
+fn test_gen_method_with_optional_param() {
+    let typ = simple_type_def();
+    let method = MethodDef {
+        name: "configure".to_string(),
+        params: vec![ParamDef {
+            name: "timeout".to_string(),
+            ty: TypeRef::Primitive(PrimitiveType::U32),
+            optional: true,
+            default: None,
+            sanitized: false,
+            typed_default: None,
+            is_ref: false,
+        }],
+        return_type: TypeRef::Unit,
+        is_async: false,
+        is_static: false,
+        error_type: None,
+        doc: String::new(),
+        receiver: Some(ReceiverKind::Ref),
+        sanitized: false,
+        trait_source: None,
+        returns_ref: false,
+    };
+    let mapper = RustMapper;
+    let cfg = default_cfg();
+    let adapter_bodies = AdapterBodies::default();
+    let opaque_types = AHashSet::new();
+
+    let result = gen_method(&method, &mapper, &cfg, &typ, false, &opaque_types, &adapter_bodies);
+
+    assert!(result.contains("pub fn configure"), "should contain method name");
+    assert!(result.contains("Option<u32>"), "should wrap optional param in Option");
+    assert!(result.contains("-> ()"), "should return unit type");
+}
+
+// ==============================================================================
+// Tests for binding_helpers module
+// ==============================================================================
+
+#[test]
+fn test_wrap_return_primitive_passthrough() {
+    let opaque_types = AHashSet::new();
+    let result = binding_helpers::wrap_return(
+        "result",
+        &TypeRef::Primitive(PrimitiveType::U32),
+        "MyType",
+        &opaque_types,
+        false,
+        false,
+    );
+    assert_eq!(result, "result");
+}
+
+#[test]
+fn test_wrap_return_unit_passthrough() {
+    let opaque_types = AHashSet::new();
+    let result = binding_helpers::wrap_return(
+        "result",
+        &TypeRef::Unit,
+        "MyType",
+        &opaque_types,
+        false,
+        false,
+    );
+    assert_eq!(result, "result");
+}
+
+#[test]
+fn test_wrap_return_string_ref_conversion() {
+    let opaque_types = AHashSet::new();
+    let result = binding_helpers::wrap_return(
+        "result",
+        &TypeRef::String,
+        "MyType",
+        &opaque_types,
+        false,
+        true,
+    );
+    assert_eq!(result, "result.into()");
+}
+
+#[test]
+fn test_wrap_return_string_owned_passthrough() {
+    let opaque_types = AHashSet::new();
+    let result = binding_helpers::wrap_return(
+        "result",
+        &TypeRef::String,
+        "MyType",
+        &opaque_types,
+        false,
+        false,
+    );
+    assert_eq!(result, "result");
+}
+
+#[test]
+fn test_wrap_return_path_conversion() {
+    let opaque_types = AHashSet::new();
+    let result = binding_helpers::wrap_return(
+        "result",
+        &TypeRef::Path,
+        "MyType",
+        &opaque_types,
+        false,
+        false,
+    );
+    assert_eq!(result, "result.to_string_lossy().to_string()");
+}
+
+#[test]
+fn test_wrap_return_duration_conversion() {
+    let opaque_types = AHashSet::new();
+    let result = binding_helpers::wrap_return(
+        "result",
+        &TypeRef::Duration,
+        "MyType",
+        &opaque_types,
+        false,
+        false,
+    );
+    assert_eq!(result, "result.as_secs()");
+}
+
+#[test]
+fn test_wrap_return_opaque_self_owned() {
+    let opaque_types = AHashSet::new();
+    let result = binding_helpers::wrap_return(
+        "result",
+        &TypeRef::Named("MyType".to_string()),
+        "MyType",
+        &opaque_types,
+        true,
+        false,
+    );
+    assert_eq!(result, "Self { inner: Arc::new(result) }");
+}
+
+#[test]
+fn test_wrap_return_other_opaque_type() {
+    let mut opaque_types = AHashSet::new();
+    opaque_types.insert("OtherType".to_string());
+    let result = binding_helpers::wrap_return(
+        "result",
+        &TypeRef::Named("OtherType".to_string()),
+        "MyType",
+        &opaque_types,
+        false,
+        false,
+    );
+    assert_eq!(result, "OtherType { inner: Arc::new(result) }");
+}
+
+#[test]
+fn test_wrap_return_non_opaque_named() {
+    let opaque_types = AHashSet::new();
+    let result = binding_helpers::wrap_return(
+        "result",
+        &TypeRef::Named("SomeType".to_string()),
+        "MyType",
+        &opaque_types,
+        false,
+        false,
+    );
+    assert_eq!(result, "result.into()");
+}
+
+#[test]
+fn test_wrap_return_optional_named() {
+    let opaque_types = AHashSet::new();
+    let result = binding_helpers::wrap_return(
+        "result",
+        &TypeRef::Optional(Box::new(TypeRef::Named("SomeType".to_string()))),
+        "MyType",
+        &opaque_types,
+        false,
+        false,
+    );
+    assert_eq!(result, "result.map(Into::into)");
+}
+
+#[test]
+fn test_wrap_return_vec_named() {
+    let opaque_types = AHashSet::new();
+    let result = binding_helpers::wrap_return(
+        "result",
+        &TypeRef::Vec(Box::new(TypeRef::Named("Item".to_string()))),
+        "MyType",
+        &opaque_types,
+        false,
+        false,
+    );
+    assert_eq!(
+        result,
+        "result.into_iter().map(Into::into).collect()"
+    );
+}
+
+#[test]
+fn test_gen_call_args_string_param() {
+    let params = vec![ParamDef {
+        name: "input".to_string(),
+        ty: TypeRef::String,
+        optional: false,
+        default: None,
+        sanitized: false,
+        typed_default: None,
+    }];
+    let opaque_types = AHashSet::new();
+
+    let result = binding_helpers::gen_call_args(&params, &opaque_types);
+    assert_eq!(result, "&input");
+}
+
+#[test]
+fn test_gen_call_args_primitive_param() {
+    let params = vec![ParamDef {
+        name: "count".to_string(),
+        ty: TypeRef::Primitive(PrimitiveType::U32),
+        optional: false,
+        default: None,
+        sanitized: false,
+        typed_default: None,
+    }];
+    let opaque_types = AHashSet::new();
+
+    let result = binding_helpers::gen_call_args(&params, &opaque_types);
+    assert_eq!(result, "count");
+}
+
+#[test]
+fn test_gen_call_args_opaque_param() {
+    let mut opaque_types = AHashSet::new();
+    opaque_types.insert("MyOpaque".to_string());
+    let params = vec![ParamDef {
+        name: "obj".to_string(),
+        ty: TypeRef::Named("MyOpaque".to_string()),
+        optional: false,
+        default: None,
+        sanitized: false,
+        typed_default: None,
+    }];
+
+    let result = binding_helpers::gen_call_args(&params, &opaque_types);
+    assert_eq!(result, "&obj.inner");
+}
+
+#[test]
+fn test_gen_call_args_non_opaque_param() {
+    let opaque_types = AHashSet::new();
+    let params = vec![ParamDef {
+        name: "config".to_string(),
+        ty: TypeRef::Named("Config".to_string()),
+        optional: false,
+        default: None,
+        sanitized: false,
+        typed_default: None,
+    }];
+
+    let result = binding_helpers::gen_call_args(&params, &opaque_types);
+    assert_eq!(result, "config.into()");
+}
+
+#[test]
+fn test_gen_call_args_path_param() {
+    let params = vec![ParamDef {
+        name: "file_path".to_string(),
+        ty: TypeRef::Path,
+        optional: false,
+        default: None,
+        sanitized: false,
+        typed_default: None,
+    }];
+    let opaque_types = AHashSet::new();
+
+    let result = binding_helpers::gen_call_args(&params, &opaque_types);
+    assert_eq!(result, "std::path::PathBuf::from(file_path)");
+}
+
+#[test]
+fn test_gen_call_args_duration_param() {
+    let params = vec![ParamDef {
+        name: "timeout".to_string(),
+        ty: TypeRef::Duration,
+        optional: false,
+        default: None,
+        sanitized: false,
+        typed_default: None,
+    }];
+    let opaque_types = AHashSet::new();
+
+    let result = binding_helpers::gen_call_args(&params, &opaque_types);
+    assert_eq!(result, "std::time::Duration::from_secs(timeout)");
+}
+
+#[test]
+fn test_gen_call_args_multiple_params() {
+    let opaque_types = AHashSet::new();
+    let params = vec![
+        ParamDef {
+            name: "name".to_string(),
+            ty: TypeRef::String,
+            optional: false,
+            default: None,
+            sanitized: false,
+            typed_default: None,
+        },
+        ParamDef {
+            name: "count".to_string(),
+            ty: TypeRef::Primitive(PrimitiveType::U32),
+            optional: false,
+            default: None,
+            sanitized: false,
+            typed_default: None,
+        },
+    ];
+
+    let result = binding_helpers::gen_call_args(&params, &opaque_types);
+    assert_eq!(result, "&name, count");
+}
+
+#[test]
+fn test_gen_call_args_with_let_bindings_opaque() {
+    let mut opaque_types = AHashSet::new();
+    opaque_types.insert("MyOpaque".to_string());
+    let params = vec![ParamDef {
+        name: "obj".to_string(),
+        ty: TypeRef::Named("MyOpaque".to_string()),
+        optional: false,
+        default: None,
+        sanitized: false,
+        typed_default: None,
+    }];
+
+    let result = binding_helpers::gen_call_args_with_let_bindings(&params, &opaque_types);
+    assert_eq!(result, "&obj.inner");
+}
+
+#[test]
+fn test_gen_call_args_with_let_bindings_non_opaque() {
+    let opaque_types = AHashSet::new();
+    let params = vec![ParamDef {
+        name: "config".to_string(),
+        ty: TypeRef::Named("Config".to_string()),
+        optional: false,
+        default: None,
+        sanitized: false,
+        typed_default: None,
+    }];
+
+    let result = binding_helpers::gen_call_args_with_let_bindings(&params, &opaque_types);
+    assert_eq!(result, "config_core");
+}
+
+#[test]
+fn test_gen_named_let_bindings_empty_params() {
+    let opaque_types = AHashSet::new();
+    let params = vec![];
+
+    let result = binding_helpers::gen_named_let_bindings_pub(&params, &opaque_types);
+    assert_eq!(result, "");
+}
+
+#[test]
+fn test_gen_named_let_bindings_non_opaque_param() {
+    let opaque_types = AHashSet::new();
+    let params = vec![ParamDef {
+        name: "config".to_string(),
+        ty: TypeRef::Named("Config".to_string()),
+        optional: false,
+        default: None,
+        sanitized: false,
+        typed_default: None,
+    }];
+
+    let result = binding_helpers::gen_named_let_bindings_pub(&params, &opaque_types);
+    assert!(result.contains("let config_core = config.into();"));
+}
+
+#[test]
+fn test_gen_named_let_bindings_opaque_skipped() {
+    let mut opaque_types = AHashSet::new();
+    opaque_types.insert("MyOpaque".to_string());
+    let params = vec![ParamDef {
+        name: "obj".to_string(),
+        ty: TypeRef::Named("MyOpaque".to_string()),
+        optional: false,
+        default: None,
+        sanitized: false,
+        typed_default: None,
+    }];
+
+    let result = binding_helpers::gen_named_let_bindings_pub(&params, &opaque_types);
+    assert_eq!(result, "");
+}
+
+#[test]
+fn test_has_named_params_returns_true() {
+    let opaque_types = AHashSet::new();
+    let params = vec![ParamDef {
+        name: "config".to_string(),
+        ty: TypeRef::Named("Config".to_string()),
+        optional: false,
+        default: None,
+        sanitized: false,
+        typed_default: None,
+    }];
+
+    assert!(binding_helpers::has_named_params(&params, &opaque_types));
+}
+
+#[test]
+fn test_has_named_params_returns_false() {
+    let mut opaque_types = AHashSet::new();
+    opaque_types.insert("MyOpaque".to_string());
+    let params = vec![ParamDef {
+        name: "obj".to_string(),
+        ty: TypeRef::Named("MyOpaque".to_string()),
+        optional: false,
+        default: None,
+        sanitized: false,
+        typed_default: None,
+    }];
+
+    assert!(!binding_helpers::has_named_params(&params, &opaque_types));
+}
+
+#[test]
+fn test_is_simple_non_opaque_param_string() {
+    assert!(binding_helpers::is_simple_non_opaque_param(&TypeRef::String));
+}
+
+#[test]
+fn test_is_simple_non_opaque_param_primitive() {
+    assert!(binding_helpers::is_simple_non_opaque_param(
+        &TypeRef::Primitive(PrimitiveType::U32)
+    ));
+}
+
+#[test]
+fn test_is_simple_non_opaque_param_path() {
+    assert!(binding_helpers::is_simple_non_opaque_param(&TypeRef::Path));
+}
+
+#[test]
+fn test_is_simple_non_opaque_param_duration() {
+    assert!(binding_helpers::is_simple_non_opaque_param(&TypeRef::Duration));
+}
+
+#[test]
+fn test_is_simple_non_opaque_param_vec_is_false() {
+    assert!(!binding_helpers::is_simple_non_opaque_param(&TypeRef::Vec(
+        Box::new(TypeRef::String)
+    )));
+}
+
+#[test]
+fn test_is_simple_non_opaque_param_named_is_false() {
+    assert!(!binding_helpers::is_simple_non_opaque_param(
+        &TypeRef::Named("Config".to_string())
+    ));
+}
+
+#[test]
+fn test_gen_async_body_pyo3_with_error() {
+    let mut cfg = default_cfg();
+    cfg.async_pattern = AsyncPattern::Pyo3FutureIntoPy;
+
+    let result = binding_helpers::gen_async_body(
+        "inner.process()",
+        &cfg,
+        true,
+        "result",
+        false,
+        "",
+        false,
+    );
+
+    assert!(result.contains("pyo3_async_runtimes::tokio::future_into_py"));
+    assert!(result.contains("await"));
+    assert!(result.contains("map_err"));
+}
+
+#[test]
+fn test_gen_async_body_napi_with_error() {
+    let mut cfg = default_cfg();
+    cfg.async_pattern = AsyncPattern::NapiNativeAsync;
+
+    let result = binding_helpers::gen_async_body(
+        "CoreType::process()",
+        &cfg,
+        true,
+        "result",
+        false,
+        "",
+        false,
+    );
+
+    assert!(result.contains("await"));
+    assert!(result.contains("map_err"));
+    assert!(result.contains("napi::Error"));
+}
+
+#[test]
+fn test_gen_async_body_wasm_with_error() {
+    let mut cfg = default_cfg();
+    cfg.async_pattern = AsyncPattern::WasmNativeAsync;
+
+    let result = binding_helpers::gen_async_body(
+        "process_async()",
+        &cfg,
+        true,
+        "result",
+        false,
+        "",
+        false,
+    );
+
+    assert!(result.contains("await"));
+    assert!(result.contains("JsValue"));
+}
+
+#[test]
+fn test_gen_async_body_with_inner_clone_line() {
+    let mut cfg = default_cfg();
+    cfg.async_pattern = AsyncPattern::Pyo3FutureIntoPy;
+
+    let result = binding_helpers::gen_async_body(
+        "inner.process()",
+        &cfg,
+        false,
+        "()",
+        false,
+        "let inner = self.inner.clone();\n        ",
+        true,
+    );
+
+    assert!(result.contains("let inner = self.inner.clone();"));
+    assert!(result.contains("pyo3_async_runtimes::tokio::future_into_py"));
+}
+
+#[test]
+fn test_gen_unimplemented_body_with_error() {
+    let cfg = default_cfg();
+    let params = vec![ParamDef {
+        name: "input".to_string(),
+        ty: TypeRef::String,
+        optional: false,
+        default: None,
+        sanitized: false,
+        typed_default: None,
+    }];
+
+    let result = binding_helpers::gen_unimplemented_body(
+        &TypeRef::String,
+        "unimplemented_fn",
+        true,
+        &cfg,
+        &params,
+    );
+
+    assert!(result.contains("let _ = input;"));
+    assert!(result.contains("Err(\"Not implemented"));
+}
+
+#[test]
+fn test_gen_unimplemented_body_string_return() {
+    let cfg = default_cfg();
+    let params = vec![];
+
+    let result = binding_helpers::gen_unimplemented_body(
+        &TypeRef::String,
+        "unimplemented_fn",
+        false,
+        &cfg,
+        &params,
+    );
+
+    assert!(result.contains("[unimplemented"));
+}
+
+#[test]
+fn test_gen_unimplemented_body_bool_return() {
+    let cfg = default_cfg();
+    let params = vec![];
+
+    let result = binding_helpers::gen_unimplemented_body(
+        &TypeRef::Primitive(PrimitiveType::Bool),
+        "is_valid",
+        false,
+        &cfg,
+        &params,
+    );
+
+    assert!(result.contains("false"));
+}
+
+#[test]
+fn test_gen_unimplemented_body_vec_return() {
+    let cfg = default_cfg();
+    let params = vec![];
+
+    let result = binding_helpers::gen_unimplemented_body(
+        &TypeRef::Vec(Box::new(TypeRef::String)),
+        "list_items",
+        false,
+        &cfg,
+        &params,
+    );
+
+    assert!(result.contains("Vec::new()"));
+}
+
+#[test]
+fn test_gen_lossy_binding_to_core_fields_sanitized() {
+    let mut typ = simple_type_def();
+    typ.fields[0].sanitized = true;
+
+    let result = binding_helpers::gen_lossy_binding_to_core_fields(&typ, "my_crate");
+
+    assert!(result.contains("let core_self"));
+    assert!(result.contains("name: Default::default(),"));
+    assert!(result.contains("count:"));
+}
+
+#[test]
+fn test_gen_lossy_binding_to_core_fields_non_sanitized() {
+    let typ = simple_type_def();
+
+    let result = binding_helpers::gen_lossy_binding_to_core_fields(&typ, "my_crate");
+
+    assert!(result.contains("let core_self"));
+    assert!(result.contains("my_crate::MyConfig {"));
+}
+
+#[test]
+fn test_gen_lossy_binding_to_core_fields_with_duration() {
+    let mut typ = simple_type_def();
+    typ.fields.push(FieldDef {
+        name: "timeout".to_string(),
+        ty: TypeRef::Duration,
+        optional: false,
+        default: None,
+        doc: String::new(),
+        sanitized: false,
+        is_boxed: false,
+        type_rust_path: None,
+        cfg: None,
+        typed_default: None,
+        core_wrapper: CoreWrapper::None,
+        vec_inner_core_wrapper: CoreWrapper::None,
+    });
+
+    let result = binding_helpers::gen_lossy_binding_to_core_fields(&typ, "my_crate");
+
+    assert!(result.contains("timeout: std::time::Duration::from_secs(self.timeout),"));
 }

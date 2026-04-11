@@ -278,13 +278,48 @@ fn dedup_api_surface(api: &mut ApiSurface) {
     let enum_names: AHashSet<String> = api.enums.iter().map(|e| e.name.clone()).collect();
     api.types.retain(|t| !enum_names.contains(&t.name));
 
-    // Dedup types by name (keep first)
-    let mut seen_types: AHashSet<String> = AHashSet::new();
-    api.types.retain(|t| seen_types.insert(t.name.clone()));
+    // Dedup types by name — prefer shorter rust_path (closer to crate root).
+    // This handles name collisions like kreuzberg::Table vs kreuzberg::extraction::docx::parser::Table.
+    {
+        let mut best: AHashMap<String, usize> = AHashMap::new();
+        for (i, t) in api.types.iter().enumerate() {
+            best.entry(t.name.clone())
+                .and_modify(|prev_i| {
+                    if api.types[i].rust_path.len() < api.types[*prev_i].rust_path.len() {
+                        *prev_i = i;
+                    }
+                })
+                .or_insert(i);
+        }
+        let keep: AHashSet<usize> = best.values().copied().collect();
+        let mut idx = 0;
+        api.types.retain(|_| {
+            let k = keep.contains(&idx);
+            idx += 1;
+            k
+        });
+    }
 
-    // Dedup enums by name (keep first)
-    let mut seen_enums: AHashSet<String> = AHashSet::new();
-    api.enums.retain(|e| seen_enums.insert(e.name.clone()));
+    // Dedup enums by name — prefer shorter rust_path.
+    {
+        let mut best: AHashMap<String, usize> = AHashMap::new();
+        for (i, e) in api.enums.iter().enumerate() {
+            best.entry(e.name.clone())
+                .and_modify(|prev_i| {
+                    if api.enums[i].rust_path.len() < api.enums[*prev_i].rust_path.len() {
+                        *prev_i = i;
+                    }
+                })
+                .or_insert(i);
+        }
+        let keep: AHashSet<usize> = best.values().copied().collect();
+        let mut idx = 0;
+        api.enums.retain(|_| {
+            let k = keep.contains(&idx);
+            idx += 1;
+            k
+        });
+    }
 
     // Dedup functions by name (keep first)
     let mut seen_fns: AHashSet<String> = AHashSet::new();

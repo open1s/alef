@@ -177,13 +177,10 @@ pub(crate) fn is_field_convertible(
 }
 
 /// Check if an enum can have From/Into safely generated (both directions).
-/// Supports unit-variant enums and enums whose data variants contain only
-/// simple convertible field types (primitives, String, Bytes, Path, Unit).
+/// All enums are allowed — data variants use Default::default() for non-simple fields
+/// in the binding→core direction.
 pub fn can_generate_enum_conversion(enum_def: &EnumDef) -> bool {
-    enum_def
-        .variants
-        .iter()
-        .all(|v| v.fields.iter().all(|f| is_simple_type(&f.ty)))
+    !enum_def.variants.is_empty()
 }
 
 /// Check if an enum can have core→binding From safely generated.

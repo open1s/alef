@@ -176,6 +176,10 @@ pub struct ParamDef {
     /// Typed default value for language-native default emission.
     #[serde(default)]
     pub typed_default: Option<DefaultValue>,
+    /// True if the original Rust parameter was a reference (`&T`).
+    /// Used by codegen to generate owned intermediates and pass refs.
+    #[serde(default)]
+    pub is_ref: bool,
 }
 
 /// A public enum.
