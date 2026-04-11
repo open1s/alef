@@ -311,7 +311,10 @@ pub fn default_value_for_field(field: &FieldDef, language: &str) -> String {
                     }
                 }
             },
-            DefaultValue::StringLiteral(s) => format!("\"{}\"", s.replace('"', "\\\"")),
+            DefaultValue::StringLiteral(s) => match language {
+                "rust" => format!("\"{}\".to_string()", s.replace('"', "\\\"")),
+                _ => format!("\"{}\"", s.replace('"', "\\\"")),
+            },
             DefaultValue::IntLiteral(n) => n.to_string(),
             DefaultValue::FloatLiteral(f) => {
                 let s = f.to_string();

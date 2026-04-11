@@ -178,6 +178,9 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
                 .any(|arg| arg.arg_type == "json_object" && !resolve_field(&f.input, &arg.field).is_null())
         });
 
+    // mock_url args need `import os`.
+    let needs_os_import = e2e_config.call.args.iter().any(|arg| arg.arg_type == "mock_url");
+
     // Only import options_type when using "kwargs" mode.
     let needs_options_type = options_via == "kwargs"
         && options_type.is_some()
@@ -217,6 +220,10 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
 
     if needs_json_import {
         stdlib_imports.push("import json".to_string());
+    }
+
+    if needs_os_import {
+        stdlib_imports.push("import os".to_string());
     }
 
     if needs_pytest {
@@ -344,6 +351,15 @@ fn render_test_function(
             // Generate a create_engine (or equivalent) call and pass the variable.
             let constructor_name = format!("create_{}", arg.name.to_snake_case());
             arg_bindings.push(format!("    {var_name} = {constructor_name}()"));
+            kwarg_exprs.push(format!("{var_name}={var_name}"));
+            continue;
+        }
+
+        if arg.arg_type == "mock_url" {
+            let fixture_id = &fixture.id;
+            arg_bindings.push(format!(
+                "    {var_name} = os.environ['MOCK_SERVER_URL'] + '/fixtures/{fixture_id}'"
+            ));
             kwarg_exprs.push(format!("{var_name}={var_name}"));
             continue;
         }

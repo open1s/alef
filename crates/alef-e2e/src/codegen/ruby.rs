@@ -316,6 +316,7 @@ fn render_example(
         options_type,
         enum_fields,
         result_is_simple,
+        &fixture.id,
     );
 
     let call_expr = format!("{call_receiver}.{function_name}({args_str})");
@@ -357,6 +358,7 @@ fn build_args_and_setup(
     options_type: Option<&str>,
     enum_fields: &HashMap<String, String>,
     result_is_simple: bool,
+    fixture_id: &str,
 ) -> (Vec<String>, String) {
     if args.is_empty() {
         return (Vec::new(), json_to_ruby(input));
@@ -366,6 +368,15 @@ fn build_args_and_setup(
     let mut parts: Vec<String> = Vec::new();
 
     for arg in args {
+        if arg.arg_type == "mock_url" {
+            setup_lines.push(format!(
+                "{} = ENV['MOCK_SERVER_URL'] + '/fixtures/{fixture_id}'",
+                arg.name,
+            ));
+            parts.push(arg.name.clone());
+            continue;
+        }
+
         if arg.arg_type == "handle" {
             // Generate a create_engine (or equivalent) call and pass the variable.
             let constructor_name = format!("create_{}", arg.name.to_snake_case());

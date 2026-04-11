@@ -339,7 +339,7 @@ fn render_test_method(
         }
     }
 
-    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, class_name, options_type);
+    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, class_name, options_type, &fixture.id);
 
     for line in &setup_lines {
         let _ = writeln!(out, "        {line}");
@@ -374,6 +374,7 @@ fn build_args_and_setup(
     args: &[crate::config::ArgMapping],
     class_name: &str,
     options_type: Option<&str>,
+    fixture_id: &str,
 ) -> (Vec<String>, String) {
     if args.is_empty() {
         return (Vec::new(), json_to_java(input));
@@ -383,6 +384,15 @@ fn build_args_and_setup(
     let mut parts: Vec<String> = Vec::new();
 
     for arg in args {
+        if arg.arg_type == "mock_url" {
+            setup_lines.push(format!(
+                "String {} = System.getenv(\"MOCK_SERVER_URL\") + \"/fixtures/{fixture_id}\";",
+                arg.name,
+            ));
+            parts.push(arg.name.clone());
+            continue;
+        }
+
         if arg.arg_type == "handle" {
             // Generate a createEngine (or equivalent) call and pass the variable.
             let constructor_name = format!("create{}", arg.name.to_upper_camel_case());

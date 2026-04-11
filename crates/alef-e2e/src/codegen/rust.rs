@@ -209,7 +209,7 @@ fn render_test_function(
     for arg in &e2e_config.call.args {
         let value = resolve_field(&fixture.input, &arg.field);
         let var_name = &arg.name;
-        let (bindings, expr) = render_rust_arg(var_name, value, &arg.arg_type, arg.optional, &module);
+        let (bindings, expr) = render_rust_arg(var_name, value, &arg.arg_type, arg.optional, &module, &fixture.id);
         for binding in &bindings {
             let _ = writeln!(out, "    {binding}");
         }
@@ -331,7 +331,14 @@ fn render_rust_arg(
     arg_type: &str,
     optional: bool,
     module: &str,
+    fixture_id: &str,
 ) -> (Vec<String>, String) {
+    if arg_type == "mock_url" {
+        let lines = vec![format!(
+            "let {name} = format!(\"{{}}/fixtures/{{}}\", std::env::var(\"MOCK_SERVER_URL\").expect(\"MOCK_SERVER_URL not set\"), \"{fixture_id}\");"
+        )];
+        return (lines, format!("&{name}"));
+    }
     if arg_type == "handle" {
         // Generate a create_engine (or equivalent) call and pass the variable.
         use heck::ToSnakeCase;

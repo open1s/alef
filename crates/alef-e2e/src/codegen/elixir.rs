@@ -225,6 +225,7 @@ fn render_test_case(
         options_type,
         options_default_fn,
         enum_fields,
+        &fixture.id,
     );
 
     // Use the bang variant (convert!) to unwrap {:ok, result} tuples.
@@ -266,6 +267,7 @@ fn build_args_and_setup(
     options_type: Option<&str>,
     options_default_fn: Option<&str>,
     enum_fields: &HashMap<String, String>,
+    fixture_id: &str,
 ) -> (Vec<String>, String) {
     if args.is_empty() {
         return (Vec::new(), json_to_elixir(input));
@@ -275,6 +277,15 @@ fn build_args_and_setup(
     let mut parts: Vec<String> = Vec::new();
 
     for arg in args {
+        if arg.arg_type == "mock_url" {
+            setup_lines.push(format!(
+                "{} = System.get_env(\"MOCK_SERVER_URL\") <> \"/fixtures/{fixture_id}\"",
+                arg.name,
+            ));
+            parts.push(arg.name.clone());
+            continue;
+        }
+
         if arg.arg_type == "handle" {
             // Generate a create_engine! (or equivalent) call and pass the variable.
             let constructor_name = format!("create_{}!", arg.name.to_snake_case());
@@ -493,7 +504,7 @@ fn json_to_elixir(value: &serde_json::Value) -> String {
         serde_json::Value::Object(map) => {
             let entries: Vec<String> = map
                 .iter()
-                .map(|(k, v)| format!("{}: {}", k, json_to_elixir(v)))
+                .map(|(k, v)| format!("\"{}\" => {}", k.to_snake_case(), json_to_elixir(v)))
                 .collect();
             format!("%{{{}}}", entries.join(", "))
         }

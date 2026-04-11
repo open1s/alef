@@ -227,7 +227,8 @@ fn render_test_method(
     let description = &fixture.description;
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
 
-    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, class_name, e2e_config, enum_fields);
+    let (setup_lines, args_str) =
+        build_args_and_setup(&fixture.input, args, class_name, e2e_config, enum_fields, &fixture.id);
 
     let return_type = if is_async { "async Task" } else { "void" };
     let await_kw = if is_async { "await " } else { "" };
@@ -278,6 +279,7 @@ fn build_args_and_setup(
     class_name: &str,
     e2e_config: &E2eConfig,
     enum_fields: &HashMap<String, String>,
+    fixture_id: &str,
 ) -> (Vec<String>, String) {
     if args.is_empty() {
         return (Vec::new(), json_to_csharp(input));
@@ -290,6 +292,15 @@ fn build_args_and_setup(
     let mut parts: Vec<String> = Vec::new();
 
     for arg in args {
+        if arg.arg_type == "mock_url" {
+            setup_lines.push(format!(
+                "var {} = Environment.GetEnvironmentVariable(\"MOCK_SERVER_URL\") + \"/fixtures/{fixture_id}\";",
+                arg.name,
+            ));
+            parts.push(arg.name.clone());
+            continue;
+        }
+
         if arg.arg_type == "handle" {
             // Generate a CreateEngine (or equivalent) call and pass the variable.
             let constructor_name = format!("Create{}", arg.name.to_upper_camel_case());

@@ -139,6 +139,9 @@ fn render_test_file(
 ) -> String {
     let mut out = String::new();
 
+    // Determine if we need the "os" import (mock_url args).
+    let needs_os = args.iter().any(|a| a.arg_type == "mock_url");
+
     // Determine if we need the "strings" import.
     // Only count assertions whose fields are actually valid for the result type.
     let needs_strings = fixtures.iter().any(|f| {
@@ -177,6 +180,9 @@ fn render_test_file(
     let _ = writeln!(out, "package e2e_test");
     let _ = writeln!(out);
     let _ = writeln!(out, "import (");
+    if needs_os {
+        let _ = writeln!(out, "\t\"os\"");
+    }
     if needs_strings {
         let _ = writeln!(out, "\t\"strings\"");
     }
@@ -232,7 +238,7 @@ fn render_test_function(
 
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
 
-    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, import_alias, e2e_config);
+    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, import_alias, e2e_config, &fixture.id);
 
     let _ = writeln!(out, "func Test_{fn_name}(t *testing.T) {{");
     let _ = writeln!(out, "\t// {description}");
@@ -359,6 +365,7 @@ fn build_args_and_setup(
     args: &[crate::config::ArgMapping],
     import_alias: &str,
     e2e_config: &crate::config::E2eConfig,
+    fixture_id: &str,
 ) -> (Vec<String>, String) {
     use heck::ToUpperCamelCase;
 
@@ -373,6 +380,15 @@ fn build_args_and_setup(
     let mut parts: Vec<String> = Vec::new();
 
     for arg in args {
+        if arg.arg_type == "mock_url" {
+            setup_lines.push(format!(
+                "{} := os.Getenv(\"MOCK_SERVER_URL\") + \"/fixtures/{fixture_id}\"",
+                arg.name,
+            ));
+            parts.push(arg.name.clone());
+            continue;
+        }
+
         if arg.arg_type == "handle" {
             // Generate a CreateEngine (or equivalent) call and pass the variable.
             // Call with no args — optional params are variadic in Go.

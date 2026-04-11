@@ -258,7 +258,7 @@ fn render_test_case(
 
     if expects_error {
         let _ = writeln!(out, "  it('{test_name}: {description}', {async_kw}() => {{");
-        let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, options_type);
+        let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, options_type, &fixture.id);
         for line in &setup_lines {
             let _ = writeln!(out, "    {line}");
         }
@@ -277,7 +277,7 @@ fn render_test_case(
     let _ = writeln!(out, "  it('{test_name}: {description}', {async_kw}() => {{");
 
     // Build function call arguments from input fields.
-    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, options_type);
+    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, options_type, &fixture.id);
 
     for line in &setup_lines {
         let _ = writeln!(out, "    {line}");
@@ -318,6 +318,7 @@ fn build_args_and_setup(
     input: &serde_json::Value,
     args: &[crate::config::ArgMapping],
     options_type: Option<&str>,
+    fixture_id: &str,
 ) -> (Vec<String>, String) {
     if args.is_empty() {
         // If no args mapping, pass the whole input as a single argument.
@@ -328,6 +329,15 @@ fn build_args_and_setup(
     let mut parts: Vec<String> = Vec::new();
 
     for arg in args {
+        if arg.arg_type == "mock_url" {
+            setup_lines.push(format!(
+                "const {} = process.env.MOCK_SERVER_URL + '/fixtures/{fixture_id}';",
+                arg.name,
+            ));
+            parts.push(arg.name.clone());
+            continue;
+        }
+
         if arg.arg_type == "handle" {
             // Generate a createEngine (or equivalent) call and pass the variable.
             let constructor_name = format!("create{}", arg.name.to_upper_camel_case());

@@ -258,7 +258,7 @@ fn render_test_method(
     let description = &fixture.description;
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
 
-    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, class_name);
+    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, class_name, &fixture.id);
 
     // When result_is_simple, emit a simple function call instead of a class method.
     let call_expr = if result_is_simple {
@@ -298,6 +298,7 @@ fn build_args_and_setup(
     input: &serde_json::Value,
     args: &[crate::config::ArgMapping],
     class_name: &str,
+    fixture_id: &str,
 ) -> (Vec<String>, String) {
     if args.is_empty() {
         return (Vec::new(), json_to_php(input));
@@ -307,6 +308,15 @@ fn build_args_and_setup(
     let mut parts: Vec<String> = Vec::new();
 
     for arg in args {
+        if arg.arg_type == "mock_url" {
+            setup_lines.push(format!(
+                "${} = getenv('MOCK_SERVER_URL') . '/fixtures/{fixture_id}';",
+                arg.name,
+            ));
+            parts.push(format!("${}", arg.name));
+            continue;
+        }
+
         if arg.arg_type == "handle" {
             // Generate a createEngine (or equivalent) call and pass the variable.
             let constructor_name = format!("create{}", arg.name.to_upper_camel_case());
