@@ -289,7 +289,21 @@ fn build_args_and_setup(
         if arg.arg_type == "handle" {
             // Generate a create_engine! (or equivalent) call and pass the variable.
             let constructor_name = format!("create_{}!", arg.name.to_snake_case());
-            setup_lines.push(format!("{} = {module_path}.{constructor_name}(nil)", arg.name));
+            let config_value = input.get(&arg.field).unwrap_or(&serde_json::Value::Null);
+            if config_value.is_null()
+                || config_value.is_object() && config_value.as_object().is_some_and(|o| o.is_empty())
+            {
+                setup_lines.push(format!("{} = {module_path}.{constructor_name}(nil)", arg.name,));
+            } else {
+                let literal = json_to_elixir(config_value);
+                let name = &arg.name;
+                setup_lines.push(format!("{name}_config = {literal}"));
+                setup_lines.push(format!(
+                    "{} = {module_path}.{constructor_name}({name}_config)",
+                    arg.name,
+                    name = name,
+                ));
+            }
             parts.push(arg.name.clone());
             continue;
         }

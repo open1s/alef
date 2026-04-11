@@ -350,7 +350,16 @@ fn render_test_function(
         if arg.arg_type == "handle" {
             // Generate a create_engine (or equivalent) call and pass the variable.
             let constructor_name = format!("create_{}", arg.name.to_snake_case());
-            arg_bindings.push(format!("    {var_name} = {constructor_name}()"));
+            let config_value = resolve_field(&fixture.input, &arg.field);
+            if config_value.is_null()
+                || config_value.is_object() && config_value.as_object().is_some_and(|o| o.is_empty())
+            {
+                arg_bindings.push(format!("    {var_name} = {constructor_name}(None)"));
+            } else {
+                let literal = json_to_python_literal(config_value);
+                arg_bindings.push(format!("    {var_name}_config = {literal}"));
+                arg_bindings.push(format!("    {var_name} = {constructor_name}({var_name}_config)"));
+            }
             kwarg_exprs.push(format!("{var_name}={var_name}"));
             continue;
         }

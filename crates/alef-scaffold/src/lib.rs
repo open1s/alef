@@ -5,6 +5,24 @@ use alef_core::config::{AlefConfig, Language};
 use alef_core::ir::ApiSurface;
 use std::path::PathBuf;
 
+/// Format the features clause for the core crate dependency in generated Cargo.toml files.
+///
+/// Returns an empty string if no features are configured, otherwise returns
+/// `, features = ["feat1", "feat2"]`.
+fn core_dep_features(config: &AlefConfig) -> String {
+    if config.crate_config.features.is_empty() {
+        String::new()
+    } else {
+        let features: Vec<String> = config
+            .crate_config
+            .features
+            .iter()
+            .map(|f| format!("\"{f}\""))
+            .collect();
+        format!(", features = [{}]", features.join(", "))
+    }
+}
+
 /// Generate package scaffolding files for the given languages.
 pub fn scaffold(api: &ApiSurface, config: &AlefConfig, languages: &[Language]) -> anyhow::Result<Vec<GeneratedFile>> {
     let mut files = vec![];
@@ -99,7 +117,7 @@ name = "{module_name}"
 crate-type = ["cdylib"]
 
 [dependencies]
-{core_import} = {{ path = "../../crates/{crate_name}" }}
+{core_import} = {{ path = "../../crates/{crate_name}"{features} }}
 pyo3 = {{ version = "0.28", features = ["extension-module"] }}
 pyo3-async-runtimes = {{ version = "0.28", features = ["tokio-runtime"] }}
 serde = {{ version = "1", features = ["derive"] }}
@@ -111,6 +129,7 @@ tokio = {{ version = "1", features = ["full"] }}
         module_name = module_name,
         core_import = core_import,
         crate_name = name,
+        features = core_dep_features(config),
     );
 
     Ok(vec![GeneratedFile {
@@ -208,7 +227,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-{core_import} = {{ path = "../../crates/{crate_name}" }}
+{core_import} = {{ path = "../../crates/{crate_name}"{features} }}
 napi = {{ version = "3", features = ["async"] }}
 napi-derive = "3"
 serde = {{ version = "1", features = ["derive"] }}
@@ -222,6 +241,7 @@ napi-build = "2"
         version = version,
         core_import = core_import,
         crate_name = name,
+        features = core_dep_features(config),
     );
 
     Ok(vec![GeneratedFile {
@@ -322,7 +342,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-{core_import} = {{ path = "../../../../crates/{crate_name}" }}
+{core_import} = {{ path = "../../../../crates/{crate_name}"{features} }}
 magnus = "0.8"
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
@@ -332,6 +352,7 @@ tokio = {{ version = "1", features = ["full"] }}
         version = version,
         core_import = core_import,
         crate_name = name,
+        features = core_dep_features(config),
     );
 
     Ok(vec![GeneratedFile {
@@ -476,7 +497,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-{core_import} = {{ path = "../../crates/{crate_name}" }}
+{core_import} = {{ path = "../../crates/{crate_name}"{features} }}
 ext-php-rs = "0.15"
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
@@ -486,6 +507,7 @@ tokio = {{ version = "1", features = ["full"] }}
         version = version,
         core_import = core_import,
         crate_name = name,
+        features = core_dep_features(config),
     );
 
     Ok(vec![GeneratedFile {
@@ -550,7 +572,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-{core_import} = {{ path = "../../../../crates/{crate_name}" }}
+{core_import} = {{ path = "../../../../crates/{crate_name}"{features} }}
 rustler = "0.37"
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
@@ -560,6 +582,7 @@ tokio = {{ version = "1", features = ["full"] }}
         version = version,
         core_import = core_import,
         crate_name = name,
+        features = core_dep_features(config),
     );
 
     Ok(vec![GeneratedFile {
@@ -796,9 +819,12 @@ repository = "{repository}"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-{core_crate} = {{ path = "../../crates/{crate_name}" }}
+{core_crate} = {{ path = "../../crates/{crate_name}"{features} }}
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
+
+[build-dependencies]
+cbindgen = "0.28"
 "#,
         name = name,
         version = version,
@@ -807,6 +833,7 @@ serde_json = "1"
         repository = meta.repository,
         core_crate = core_crate,
         crate_name = name,
+        features = core_dep_features(config),
     );
 
     Ok(vec![GeneratedFile {
@@ -835,7 +862,7 @@ repository = "{repository}"
 crate-type = ["cdylib"]
 
 [dependencies]
-{core_import} = {{ path = "../../crates/{crate_name}" }}
+{core_import} = {{ path = "../../crates/{crate_name}"{features} }}
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 serde = {{ version = "1", features = ["derive"] }}
@@ -849,6 +876,7 @@ js-sys = "0.3"
         repository = meta.repository,
         core_import = core_import,
         crate_name = name,
+        features = core_dep_features(config),
     );
 
     Ok(vec![GeneratedFile {
@@ -940,7 +968,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-{core_import} = {{ path = "../../crates/{crate_name}" }}
+{core_import} = {{ path = "../../crates/{crate_name}"{features} }}
 extendr-api = {{ version = "0.7", features = ["use-precompiled-bindings"] }}
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
@@ -949,6 +977,7 @@ serde_json = "1"
         version = version,
         core_import = core_import,
         crate_name = name,
+        features = core_dep_features(config),
     );
 
     Ok(vec![GeneratedFile {

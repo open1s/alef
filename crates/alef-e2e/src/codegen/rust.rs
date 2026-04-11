@@ -33,7 +33,11 @@ impl super::E2eCodegen for RustE2eCodegen {
 
         // Cargo.toml
         // Check if any fixture uses json_object args (needs serde_json dep).
-        let needs_serde_json = e2e_config.call.args.iter().any(|a| a.arg_type == "json_object");
+        let needs_serde_json = e2e_config
+            .call
+            .args
+            .iter()
+            .any(|a| a.arg_type == "json_object" || a.arg_type == "handle");
         files.push(GeneratedFile {
             path: output_base.join("Cargo.toml"),
             content: render_cargo_toml(&crate_name, &dep_name, &crate_path, needs_serde_json),
@@ -346,12 +350,27 @@ fn render_rust_arg(
         return (lines, format!("&{name}"));
     }
     if arg_type == "handle" {
-        // Generate a create_engine (or equivalent) call and pass the variable.
+        // Generate a create_engine (or equivalent) call and pass the config.
+        // If the fixture has input.config, serialize it as a json_object and pass it;
+        // otherwise pass None.
         use heck::ToSnakeCase;
         let constructor_name = format!("create_{}", name.to_snake_case());
-        let lines = vec![format!(
-            "let {name} = {module}::{constructor_name}(None).expect(\"handle creation should succeed\");"
-        )];
+        let mut lines = Vec::new();
+        if value.is_null() || value.is_object() && value.as_object().unwrap().is_empty() {
+            lines.push(format!(
+                "let {name} = {module}::{constructor_name}(None).expect(\"handle creation should succeed\");"
+            ));
+        } else {
+            // Serialize the config JSON and deserialize at runtime.
+            let json_literal = serde_json::to_string(value).unwrap_or_default();
+            let escaped = json_literal.replace('\\', "\\\\").replace('"', "\\\"");
+            lines.push(format!(
+                "let {name}_config: {module}::CrawlConfig = serde_json::from_str(\"{escaped}\").expect(\"config should parse\");"
+            ));
+            lines.push(format!(
+                "let {name} = {module}::{constructor_name}(Some({name}_config)).expect(\"handle creation should succeed\");"
+            ));
+        }
         return (lines, format!("&{name}"));
     }
     if arg_type == "json_object" {
@@ -558,7 +577,7 @@ fn render_assertion(
             if let Some(val) = &assertion.value {
                 let expected = value_to_rust_string(val);
                 let line = format!(
-                    "    assert!(format!(\"{{:?}}\", {field_access}).to_lowercase().contains({expected}), \"expected to contain: {{}}\", {expected});"
+                    "    assert!(format!(\"{{:?}}\", {field_access}).contains({expected}), \"expected to contain: {{}}\", {expected});"
                 );
                 let _ = writeln!(out, "{line}");
             }
@@ -568,7 +587,7 @@ fn render_assertion(
                 for val in values {
                     let expected = value_to_rust_string(val);
                     let line = format!(
-                        "    assert!(format!(\"{{:?}}\", {field_access}).to_lowercase().contains({expected}), \"expected to contain: {{}}\", {expected});"
+                        "    assert!(format!(\"{{:?}}\", {field_access}).contains({expected}), \"expected to contain: {{}}\", {expected});"
                     );
                     let _ = writeln!(out, "{line}");
                 }
@@ -578,7 +597,7 @@ fn render_assertion(
             if let Some(val) = &assertion.value {
                 let expected = value_to_rust_string(val);
                 let line = format!(
-                    "    assert!(!format!(\"{{:?}}\", {field_access}).to_lowercase().contains({expected}), \"expected NOT to contain: {{}}\", {expected});"
+                    "    assert!(!format!(\"{{:?}}\", {field_access}).contains({expected}), \"expected NOT to contain: {{}}\", {expected});"
                 );
                 let _ = writeln!(out, "{line}");
             }

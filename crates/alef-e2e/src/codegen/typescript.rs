@@ -341,7 +341,20 @@ fn build_args_and_setup(
         if arg.arg_type == "handle" {
             // Generate a createEngine (or equivalent) call and pass the variable.
             let constructor_name = format!("create{}", arg.name.to_upper_camel_case());
-            setup_lines.push(format!("const {} = {constructor_name}(null);", arg.name));
+            let config_value = input.get(&arg.field).unwrap_or(&serde_json::Value::Null);
+            if config_value.is_null()
+                || config_value.is_object() && config_value.as_object().is_some_and(|o| o.is_empty())
+            {
+                setup_lines.push(format!("const {} = {constructor_name}(null);", arg.name));
+            } else {
+                let literal = json_to_js(config_value);
+                setup_lines.push(format!("const {name}Config = {literal};", name = arg.name,));
+                setup_lines.push(format!(
+                    "const {} = {constructor_name}({name}Config);",
+                    arg.name,
+                    name = arg.name,
+                ));
+            }
             parts.push(arg.name.clone());
             continue;
         }

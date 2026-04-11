@@ -15,8 +15,12 @@ pub struct E2eConfig {
     /// Languages to generate e2e tests for. Defaults to top-level `languages` list.
     #[serde(default)]
     pub languages: Vec<String>,
-    /// Function call configuration.
+    /// Default function call configuration.
     pub call: CallConfig,
+    /// Named additional call configurations for multi-function testing.
+    /// Fixtures reference these via the `call` field, e.g. `"call": "embed"`.
+    #[serde(default)]
+    pub calls: HashMap<String, CallConfig>,
     /// Per-language package reference overrides.
     #[serde(default)]
     pub packages: HashMap<String, PackageRef>,
@@ -60,6 +64,17 @@ pub struct E2eConfig {
     /// ```
     #[serde(default)]
     pub fields_c_types: HashMap<String, String>,
+}
+
+impl E2eConfig {
+    /// Resolve the call config for a fixture. Uses the named call if specified,
+    /// otherwise falls back to the default `[e2e.call]`.
+    pub fn resolve_call(&self, call_name: Option<&str>) -> &CallConfig {
+        match call_name {
+            Some(name) => self.calls.get(name).unwrap_or(&self.call),
+            None => &self.call,
+        }
+    }
 }
 
 fn default_fixtures_dir() -> String {

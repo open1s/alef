@@ -142,6 +142,15 @@ fn render_test_file(
     // Determine if we need the "os" import (mock_url args).
     let needs_os = args.iter().any(|a| a.arg_type == "mock_url");
 
+    // Determine if we need "encoding/json" (handle args with non-null config).
+    let needs_json = args.iter().any(|a| a.arg_type == "handle")
+        && fixtures.iter().any(|f| {
+            args.iter().filter(|a| a.arg_type == "handle").any(|a| {
+                let v = f.input.get(&a.field).unwrap_or(&serde_json::Value::Null);
+                !(v.is_null() || v.is_object() && v.as_object().is_some_and(|o| o.is_empty()))
+            })
+        });
+
     // Determine if we need the "strings" import.
     // Only count assertions whose fields are actually valid for the result type.
     let needs_strings = fixtures.iter().any(|f| {
@@ -180,6 +189,9 @@ fn render_test_file(
     let _ = writeln!(out, "package e2e_test");
     let _ = writeln!(out);
     let _ = writeln!(out, "import (");
+    if needs_json {
+        let _ = writeln!(out, "\t\"encoding/json\"");
+    }
     if needs_os {
         let _ = writeln!(out, "\t\"os\"");
     }
@@ -391,12 +403,26 @@ fn build_args_and_setup(
 
         if arg.arg_type == "handle" {
             // Generate a CreateEngine (or equivalent) call and pass the variable.
-            // Call with no args — optional params are variadic in Go.
             let constructor_name = format!("Create{}", arg.name.to_upper_camel_case());
-            setup_lines.push(format!(
-                "{name}, createErr := {import_alias}.{constructor_name}()\n\tif createErr != nil {{\n\t\tt.Fatalf(\"create handle failed: %v\", createErr)\n\t}}",
-                name = arg.name,
-            ));
+            let config_value = input.get(&arg.field).unwrap_or(&serde_json::Value::Null);
+            if config_value.is_null()
+                || config_value.is_object() && config_value.as_object().is_some_and(|o| o.is_empty())
+            {
+                setup_lines.push(format!(
+                    "{name}, createErr := {import_alias}.{constructor_name}()\n\tif createErr != nil {{\n\t\tt.Fatalf(\"create handle failed: %v\", createErr)\n\t}}",
+                    name = arg.name,
+                ));
+            } else {
+                let json_str = serde_json::to_string(config_value).unwrap_or_default();
+                let go_literal = go_string_literal(&json_str);
+                let name = &arg.name;
+                setup_lines.push(format!(
+                    "var {name}Config {import_alias}.CrawlConfig\n\tif err := json.Unmarshal([]byte({go_literal}), &{name}Config); err != nil {{\n\t\tt.Fatalf(\"config parse failed: %v\", err)\n\t}}"
+                ));
+                setup_lines.push(format!(
+                    "{name}, createErr := {import_alias}.{constructor_name}(&{name}Config)\n\tif createErr != nil {{\n\t\tt.Fatalf(\"create handle failed: %v\", createErr)\n\t}}"
+                ));
+            }
             parts.push(arg.name.clone());
             continue;
         }

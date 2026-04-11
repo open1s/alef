@@ -21,6 +21,10 @@ pub struct Fixture {
     /// Skip directive.
     #[serde(default)]
     pub skip: Option<SkipDirective>,
+    /// Named call config to use (references `[e2e.calls.<name>]`).
+    /// When omitted, uses the default `[e2e.call]`.
+    #[serde(default)]
+    pub call: Option<String>,
     /// Input data passed to the function under test.
     #[serde(default)]
     pub input: serde_json::Value,

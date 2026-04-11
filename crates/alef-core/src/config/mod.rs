@@ -311,15 +311,10 @@ impl AlefConfig {
 
     /// Get the Java Maven groupId.
     ///
-    /// Derives from the Java package by dropping the last dot-separated segment.
-    /// E.g., `"dev.kreuzberg.kreuzcrawl"` -> `"dev.kreuzberg"`.
-    /// Falls back to the full package name if there is only one segment.
+    /// Uses the full Java package as the groupId, matching Maven convention
+    /// where groupId equals the package declaration.
     pub fn java_group_id(&self) -> String {
-        let pkg = self.java_package();
-        match pkg.rsplit_once('.') {
-            Some((prefix, _)) => prefix.to_string(),
-            None => pkg,
-        }
+        self.java_package()
     }
 
     /// Get the C# namespace.

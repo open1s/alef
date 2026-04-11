@@ -17,6 +17,7 @@
         "description": { "type": "string", "description": "Human-readable test description" },
         "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional tags for filtering" },
         "skip": { "$ref": "#/$defs/skip" },
+        "call": { "type": "string", "description": "Named call config to use. References [e2e.calls.<name>]. Defaults to [e2e.call] when omitted" },
         "input": { "type": "object", "description": "Input data passed to the function under test. Fields map to args via [e2e.call.args] config" },
         "assertions": { "type": "array", "items": { "$ref": "#/$defs/assertion" }, "description": "List of assertions to check on the result" }
       }

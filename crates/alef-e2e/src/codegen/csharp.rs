@@ -175,7 +175,18 @@ fn render_test_file(
     e2e_config: &E2eConfig,
     enum_fields: &HashMap<String, String>,
 ) -> String {
+    // Determine if any handle arg has a non-null config (needs System.Text.Json).
+    let needs_json = fixtures.iter().any(|f| {
+        args.iter().filter(|a| a.arg_type == "handle").any(|a| {
+            let v = f.input.get(&a.field).unwrap_or(&serde_json::Value::Null);
+            !(v.is_null() || v.is_object() && v.as_object().is_some_and(|o| o.is_empty()))
+        })
+    });
+
     let mut out = String::new();
+    if needs_json {
+        let _ = writeln!(out, "using System.Text.Json;");
+    }
     let _ = writeln!(out, "using System.Threading.Tasks;");
     let _ = writeln!(out, "using Xunit;");
     let _ = writeln!(out, "using {namespace};");
@@ -304,7 +315,24 @@ fn build_args_and_setup(
         if arg.arg_type == "handle" {
             // Generate a CreateEngine (or equivalent) call and pass the variable.
             let constructor_name = format!("Create{}", arg.name.to_upper_camel_case());
-            setup_lines.push(format!("var {} = {class_name}.{constructor_name}(null);", arg.name));
+            let config_value = input.get(&arg.field).unwrap_or(&serde_json::Value::Null);
+            if config_value.is_null()
+                || config_value.is_object() && config_value.as_object().is_some_and(|o| o.is_empty())
+            {
+                setup_lines.push(format!("var {} = {class_name}.{constructor_name}(null);", arg.name,));
+            } else {
+                let json_str = serde_json::to_string(config_value).unwrap_or_default();
+                let name = &arg.name;
+                setup_lines.push(format!(
+                    "var {name}Config = JsonSerializer.Deserialize<CrawlConfig>(\"{}\")!;",
+                    escape_csharp(&json_str),
+                ));
+                setup_lines.push(format!(
+                    "var {} = {class_name}.{constructor_name}({name}Config);",
+                    arg.name,
+                    name = name,
+                ));
+            }
             parts.push(arg.name.clone());
             continue;
         }

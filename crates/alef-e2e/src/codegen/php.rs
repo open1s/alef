@@ -219,9 +219,20 @@ fn render_test_file(
     let _ = writeln!(out);
     let _ = writeln!(out, "namespace Kreuzberg\\E2e;");
     let _ = writeln!(out);
+    // Determine if any handle arg has a non-null config (needs CrawlConfig import).
+    let needs_crawl_config_import = fixtures.iter().any(|f| {
+        args.iter().filter(|a| a.arg_type == "handle").any(|a| {
+            let v = f.input.get(&a.field).unwrap_or(&serde_json::Value::Null);
+            !(v.is_null() || v.is_object() && v.as_object().is_some_and(|o| o.is_empty()))
+        })
+    });
+
     let _ = writeln!(out, "use PHPUnit\\Framework\\TestCase;");
     if !result_is_simple {
         let _ = writeln!(out, "use {namespace}\\{class_name};");
+    }
+    if needs_crawl_config_import {
+        let _ = writeln!(out, "use {namespace}\\CrawlConfig;");
     }
     let _ = writeln!(out);
     let _ = writeln!(out, "/** E2e tests for category: {category}. */");
@@ -328,7 +339,26 @@ fn build_args_and_setup(
         if arg.arg_type == "handle" {
             // Generate a createEngine (or equivalent) call and pass the variable.
             let constructor_name = format!("create{}", arg.name.to_upper_camel_case());
-            setup_lines.push(format!("${} = {class_name}::{constructor_name}(null);", arg.name));
+            let config_value = input.get(&arg.field).unwrap_or(&serde_json::Value::Null);
+            if config_value.is_null()
+                || config_value.is_object() && config_value.as_object().is_some_and(|o| o.is_empty())
+            {
+                setup_lines.push(format!("${} = {class_name}::{constructor_name}(null);", arg.name,));
+            } else {
+                let name = &arg.name;
+                setup_lines.push(format!("${name}_config = CrawlConfig::default();"));
+                if let Some(obj) = config_value.as_object() {
+                    for (key, val) in obj {
+                        let php_val = json_to_php(val);
+                        setup_lines.push(format!("${name}_config->{key} = {php_val};"));
+                    }
+                }
+                setup_lines.push(format!(
+                    "${} = {class_name}::{constructor_name}(${name}_config);",
+                    arg.name,
+                    name = name,
+                ));
+            }
             parts.push(format!("${}", arg.name));
             continue;
         }

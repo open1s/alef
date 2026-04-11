@@ -224,7 +224,8 @@ fn render_accessor(segments: &[PathSegment], language: &str, result_var: &str) -
     match language {
         "rust" => render_rust(segments, result_var),
         "python" => render_dot_access(segments, result_var, "python"),
-        "typescript" | "node" | "wasm" => render_typescript(segments, result_var),
+        "typescript" | "node" => render_typescript(segments, result_var),
+        "wasm" => render_wasm(segments, result_var),
         "go" => render_go(segments, result_var),
         "java" => render_java(segments, result_var),
         "csharp" => render_pascal_dot(segments, result_var),
@@ -328,6 +329,36 @@ fn render_typescript(segments: &[PathSegment], result_var: &str) -> String {
                 out.push('.');
                 out.push_str(&field.to_lower_camel_case());
                 out.push_str(&format!("[\"{key}\"]"));
+            }
+            PathSegment::Length => {
+                out.push_str(".length");
+            }
+        }
+    }
+    out
+}
+
+/// WASM: `result.foo.bar.baz` or `result.foo.bar.get("key")`
+/// WASM bindings return Maps (from BTreeMap via serde_wasm_bindgen),
+/// which require `.get("key")` instead of bracket notation.
+/// Generates camelCase field names, so snake_case segments are converted.
+fn render_wasm(segments: &[PathSegment], result_var: &str) -> String {
+    let mut out = result_var.to_string();
+    for seg in segments {
+        match seg {
+            PathSegment::Field(f) => {
+                out.push('.');
+                out.push_str(&f.to_lower_camel_case());
+            }
+            PathSegment::ArrayField(f) => {
+                out.push('.');
+                out.push_str(&f.to_lower_camel_case());
+                out.push_str("[0]");
+            }
+            PathSegment::MapAccess { field, key } => {
+                out.push('.');
+                out.push_str(&field.to_lower_camel_case());
+                out.push_str(&format!(".get(\"{key}\")"));
             }
             PathSegment::Length => {
                 out.push_str(".length");
@@ -783,6 +814,16 @@ mod tests {
         assert_eq!(
             r.accessor("canonical", "wasm", "result"),
             "result.metadata.document.canonicalUrl"
+        );
+    }
+
+    #[test]
+    fn test_accessor_wasm_map_access() {
+        let r = make_resolver();
+        // WASM returns Maps, which need .get("key") instead of ["key"]
+        assert_eq!(
+            r.accessor("og_tag", "wasm", "result"),
+            "result.metadata.openGraphTags.get(\"og_title\")"
         );
     }
 

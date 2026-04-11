@@ -232,11 +232,19 @@ fn render_test_file(
     let _ = writeln!(out);
 
     // Check if any fixture uses a json_object arg with options_type (needs ObjectMapper).
-    let needs_object_mapper = options_type.is_some()
+    let needs_object_mapper_for_options = options_type.is_some()
         && fixtures.iter().any(|f| {
             args.iter()
                 .any(|arg| arg.arg_type == "json_object" && f.input.get(&arg.field).is_some_and(|v| !v.is_null()))
         });
+    // Also need ObjectMapper when a handle arg has a non-null config.
+    let needs_object_mapper_for_handle = fixtures.iter().any(|f| {
+        args.iter().filter(|a| a.arg_type == "handle").any(|a| {
+            let v = f.input.get(&a.field).unwrap_or(&serde_json::Value::Null);
+            !(v.is_null() || v.is_object() && v.as_object().is_some_and(|o| o.is_empty()))
+        })
+    });
+    let needs_object_mapper = needs_object_mapper_for_options || needs_object_mapper_for_handle;
 
     let _ = writeln!(out, "import org.junit.jupiter.api.Test;");
     let _ = writeln!(out, "import static org.junit.jupiter.api.Assertions.*;");
@@ -258,6 +266,11 @@ fn render_test_file(
             };
             let _ = writeln!(out, "import {opts_package};");
         }
+    }
+    // Import CrawlConfig when handle args need JSON deserialization.
+    if needs_object_mapper_for_handle && !import_path.is_empty() {
+        let pkg = import_path.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
+        let _ = writeln!(out, "import {pkg}.CrawlConfig;");
     }
     let _ = writeln!(out);
 
@@ -396,7 +409,24 @@ fn build_args_and_setup(
         if arg.arg_type == "handle" {
             // Generate a createEngine (or equivalent) call and pass the variable.
             let constructor_name = format!("create{}", arg.name.to_upper_camel_case());
-            setup_lines.push(format!("var {} = {class_name}.{constructor_name}(null);", arg.name));
+            let config_value = input.get(&arg.field).unwrap_or(&serde_json::Value::Null);
+            if config_value.is_null()
+                || config_value.is_object() && config_value.as_object().is_some_and(|o| o.is_empty())
+            {
+                setup_lines.push(format!("var {} = {class_name}.{constructor_name}(null);", arg.name,));
+            } else {
+                let json_str = serde_json::to_string(config_value).unwrap_or_default();
+                let name = &arg.name;
+                setup_lines.push(format!(
+                    "var {name}Config = MAPPER.readValue(\"{}\", CrawlConfig.class);",
+                    escape_java(&json_str),
+                ));
+                setup_lines.push(format!(
+                    "var {} = {class_name}.{constructor_name}({name}Config);",
+                    arg.name,
+                    name = name,
+                ));
+            }
             parts.push(arg.name.clone());
             continue;
         }
