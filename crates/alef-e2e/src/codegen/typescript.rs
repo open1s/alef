@@ -237,6 +237,7 @@ fn render_test_file(
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_test_case(
     out: &mut String,
     fixture: &Fixture,
@@ -400,7 +401,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         }
         "contains_any" => {
             if let Some(values) = &assertion.values {
-                let items: Vec<String> = values.iter().map(|v| json_to_js(v)).collect();
+                let items: Vec<String> = values.iter().map(json_to_js).collect();
                 let arr_str = items.join(", ");
                 let _ = writeln!(
                     out,

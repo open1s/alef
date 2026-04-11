@@ -387,7 +387,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         }
         "contains_any" => {
             if let Some(values) = &assertion.values {
-                let items: Vec<String> = values.iter().map(|v| json_to_elixir(v)).collect();
+                let items: Vec<String> = values.iter().map(json_to_elixir).collect();
                 let list_str = items.join(", ");
                 let _ = writeln!(
                     out,

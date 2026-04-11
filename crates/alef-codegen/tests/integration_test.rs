@@ -75,6 +75,7 @@ fn simple_type_def() -> TypeDef {
         has_default: false,
         has_stripped_cfg_fields: false,
         is_return_type: false,
+        serde_rename_all: None,
         doc: "A minimal config type.".to_string(),
         cfg: None,
     }
@@ -216,6 +217,7 @@ fn test_gen_struct_with_empty_fields() {
         has_default: false,
         has_stripped_cfg_fields: false,
         is_return_type: false,
+        serde_rename_all: None,
         doc: String::new(),
         cfg: None,
     };

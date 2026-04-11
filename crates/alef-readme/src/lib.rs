@@ -212,6 +212,7 @@ mod tests {
                 core_import: None,
                 workspace_root: None,
                 skip_core_import: false,
+                features: vec![],
                 path_mappings: std::collections::HashMap::new(),
             },
             languages: vec![Language::Python, Language::Node],

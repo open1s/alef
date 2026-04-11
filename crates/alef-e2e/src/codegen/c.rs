@@ -330,6 +330,7 @@ fn render_main_c(active_groups: &[(&FixtureGroup, Vec<&Fixture>)]) -> String {
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_test_file(
     category: &str,
     fixtures: &[&Fixture],
@@ -371,6 +372,7 @@ fn render_test_file(
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_test_function(
     out: &mut String,
     fixture: &Fixture,

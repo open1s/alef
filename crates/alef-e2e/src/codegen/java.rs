@@ -57,7 +57,7 @@ impl E2eCodegen for JavaCodegen {
             .unwrap_or_else(|| alef_config.crate_config.name.clone());
 
         // Resolve Java package info for the dependency.
-        let java_group_id = alef_config.java_package();
+        let java_group_id = alef_config.java_group_id();
         let pkg_version = alef_config.resolved_version().unwrap_or_else(|| "0.1.0".to_string());
 
         // Generate pom.xml.
@@ -291,6 +291,7 @@ fn render_test_file(
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_test_method(
     out: &mut String,
     fixture: &Fixture,

@@ -972,11 +972,10 @@ fn gen_param_to_c(
         TypeRef::Named(name) => {
             if opaque_names.contains(name.as_str()) {
                 // Opaque types are pointer wrappers — cast the raw pointer to the C type.
+                let c_type = format!("{}{}", ffi_prefix.to_uppercase(), name.to_pascal_case());
                 writeln!(
                     out,
                     "    {c_name} := (*C.{c_type})(unsafe.Pointer({param}.ptr))",
-                    c_name = c_name,
-                    c_type = format!("{}{}", ffi_prefix.to_uppercase(), name.to_pascal_case()),
                     param = param.name,
                 )
                 .ok();

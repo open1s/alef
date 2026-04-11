@@ -125,6 +125,7 @@ fn render_go_mod(go_module_path: &str, replace_path: Option<&str>, version: &str
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_test_file(
     category: &str,
     fixtures: &[&Fixture],
@@ -187,6 +188,7 @@ fn render_test_file(
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_test_function(
     out: &mut String,
     fixture: &Fixture,
@@ -358,17 +360,17 @@ fn build_args_and_setup(
             }
             Some(v) => {
                 // For json_object args with options_type: construct using functional options.
-                if arg.arg_type == "json_object" && options_type.is_some() {
+                if let (Some(opts_type), "json_object") = (options_type, arg.arg_type.as_str()) {
                     if let Some(obj) = v.as_object() {
                         let with_calls: Vec<String> = obj
                             .iter()
                             .map(|(k, vv)| {
-                                let func_name = format!("With{}{}", options_type.unwrap(), k.to_upper_camel_case());
+                                let func_name = format!("With{}{}", opts_type, k.to_upper_camel_case());
                                 let go_val = json_to_go(vv);
                                 format!("htmd.{func_name}({go_val})")
                             })
                             .collect();
-                        let new_fn = format!("New{}", options_type.unwrap());
+                        let new_fn = format!("New{opts_type}");
                         parts.push(format!("htmd.{new_fn}({})", with_calls.join(", ")));
                         continue;
                     }

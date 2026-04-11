@@ -262,11 +262,7 @@ fn render_test_case(
                                 let _ = writeln!(out, "    const options = {opts_type}.default();");
                                 for (k, v) in obj {
                                     let camel_key = k.to_lower_camel_case();
-                                    let js_val = if enum_fields.contains_key(k) {
-                                        json_to_js(v)
-                                    } else {
-                                        json_to_js(v)
-                                    };
+                                    let js_val = json_to_js(v);
                                     let _ = writeln!(out, "    options.{camel_key} = {js_val};");
                                 }
                             }
@@ -380,7 +376,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         }
         "contains_any" => {
             if let Some(values) = &assertion.values {
-                let items: Vec<String> = values.iter().map(|v| json_to_js(v)).collect();
+                let items: Vec<String> = values.iter().map(json_to_js).collect();
                 let arr_str = items.join(", ");
                 let _ = writeln!(
                     out,

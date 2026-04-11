@@ -184,7 +184,12 @@ fn parse_path(path: &str) -> Vec<PathSegment> {
         } else if let Some(bracket_pos) = part.find('[') {
             let field = part[..bracket_pos].to_string();
             let key = part[bracket_pos + 1..].trim_end_matches(']').to_string();
-            segments.push(PathSegment::MapAccess { field, key });
+            if key.is_empty() {
+                // `field[]` means "first element" — treat as ArrayField
+                segments.push(PathSegment::ArrayField(field));
+            } else {
+                segments.push(PathSegment::MapAccess { field, key });
+            }
         } else {
             segments.push(PathSegment::Field(part.to_string()));
         }

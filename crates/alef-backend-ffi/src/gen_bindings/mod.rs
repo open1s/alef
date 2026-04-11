@@ -261,6 +261,7 @@ mod tests {
                 has_default: false,
                 has_stripped_cfg_fields: false,
                 is_return_type: false,
+                serde_rename_all: None,
                 doc: "Configuration struct.".to_string(),
                 cfg: None,
             }],

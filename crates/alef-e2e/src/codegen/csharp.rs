@@ -198,6 +198,7 @@ fn render_test_file(
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_test_method(
     out: &mut String,
     fixture: &Fixture,
