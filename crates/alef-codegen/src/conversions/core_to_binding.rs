@@ -4,6 +4,7 @@ use std::fmt::Write;
 
 use super::ConversionConfig;
 use super::binding_to_core::field_conversion_to_core;
+use super::helpers::is_newtype;
 use super::helpers::{binding_prim_str, core_type_path, needs_i64_cast};
 
 /// Generate `impl From<core::Type> for BindingType` (core -> binding).
@@ -23,6 +24,22 @@ pub fn gen_from_core_to_binding_cfg(
     let mut out = String::with_capacity(256);
     writeln!(out, "impl From<{core_path}> for {binding_name} {{").ok();
     writeln!(out, "    fn from(val: {core_path}) -> Self {{").ok();
+
+    // Newtype structs: extract inner value with val.0
+    if is_newtype(typ) {
+        let field = &typ.fields[0];
+        let inner_expr = match &field.ty {
+            TypeRef::Named(_) => "val.0.into()".to_string(),
+            TypeRef::Path => "val.0.to_string_lossy().to_string()".to_string(),
+            TypeRef::Duration => "val.0.as_secs()".to_string(),
+            _ => "val.0".to_string(),
+        };
+        writeln!(out, "        Self {{ _0: {inner_expr} }}").ok();
+        writeln!(out, "    }}").ok();
+        write!(out, "}}").ok();
+        return out;
+    }
+
     let optionalized = config.optionalize_defaults && typ.has_default;
     writeln!(out, "        Self {{").ok();
     for field in &typ.fields {

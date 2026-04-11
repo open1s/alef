@@ -2,7 +2,7 @@ use alef_core::ir::{CoreWrapper, PrimitiveType, TypeDef, TypeRef};
 use std::fmt::Write;
 
 use super::ConversionConfig;
-use super::helpers::{core_prim_str, core_type_path, needs_i64_cast};
+use super::helpers::{core_prim_str, core_type_path, is_newtype, is_tuple_type_name, needs_i64_cast};
 
 /// Generate `impl From<BindingType> for core::Type` (binding -> core).
 /// Sanitized fields use `Default::default()` (lossy but functional).
@@ -22,6 +22,22 @@ pub fn gen_from_binding_to_core_cfg(typ: &TypeDef, core_import: &str, config: &C
     }
     writeln!(out, "impl From<{binding_name}> for {core_path} {{").ok();
     writeln!(out, "    fn from(val: {binding_name}) -> Self {{").ok();
+
+    // Newtype structs: generate tuple constructor Self(val._0)
+    if is_newtype(typ) {
+        let field = &typ.fields[0];
+        let inner_expr = match &field.ty {
+            TypeRef::Named(_) => "val._0.into()".to_string(),
+            TypeRef::Path => "val._0.into()".to_string(),
+            TypeRef::Duration => "std::time::Duration::from_secs(val._0)".to_string(),
+            _ => "val._0".to_string(),
+        };
+        writeln!(out, "        Self({inner_expr})").ok();
+        writeln!(out, "    }}").ok();
+        write!(out, "}}").ok();
+        return out;
+    }
+
     writeln!(out, "        Self {{").ok();
     let optionalized = config.optionalize_defaults && typ.has_default;
     for field in &typ.fields {
@@ -74,6 +90,12 @@ pub(super) fn gen_optionalized_field_to_core(name: &str, ty: &TypeRef, config: &
         TypeRef::Named(_) => {
             // Named type: unwrap Option, convert via .into(), or use Default
             format!("{name}: val.{name}.map(Into::into).unwrap_or_default()")
+        }
+        TypeRef::Primitive(PrimitiveType::F32) if config.cast_f32_to_f64 => {
+            format!("{name}: val.{name}.map(|v| v as f32).unwrap_or(0.0)")
+        }
+        TypeRef::Primitive(PrimitiveType::F32 | PrimitiveType::F64) => {
+            format!("{name}: val.{name}.unwrap_or(0.0)")
         }
         TypeRef::Primitive(p) if config.cast_large_ints_to_i64 && needs_i64_cast(p) => {
             let core_ty = core_prim_str(p);
@@ -160,6 +182,10 @@ pub fn field_conversion_to_core(name: &str, ty: &TypeRef, optional: bool) -> Str
             }
         }
         // Named type -- needs .into() to convert between binding and core types
+        // Tuple types (e.g., "(String, String)") are passthrough — no conversion needed
+        TypeRef::Named(type_name) if is_tuple_type_name(type_name) => {
+            format!("{name}: val.{name}")
+        }
         TypeRef::Named(_) => {
             if optional {
                 format!("{name}: val.{name}.map(Into::into)")
@@ -186,6 +212,10 @@ pub fn field_conversion_to_core(name: &str, ty: &TypeRef, optional: bool) -> Str
                 } else {
                     format!("{name}: val.{name}.into_iter().filter_map(|s| serde_json::from_str(&s).ok()).collect()")
                 }
+            }
+            // Vec<(T1, T2)> — tuples are passthrough
+            TypeRef::Named(type_name) if is_tuple_type_name(type_name) => {
+                format!("{name}: val.{name}")
             }
             TypeRef::Named(_) => {
                 if optional {

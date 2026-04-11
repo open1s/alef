@@ -145,8 +145,8 @@ fn test_basic_generation() {
 
     // Should generate 5 files:
     // 1. NativeLib.java
-    // 2. TestLib.java (main class)
-    // 3. TestLibException.java
+    // 2. TestLibRs.java (main class — "Rs" suffix avoids facade/FFI name collision)
+    // 3. TestLibRsException.java
     // 4. Config.java (record)
     // 5. Mode.java (enum)
     assert_eq!(files.len(), 5);
@@ -160,14 +160,14 @@ fn test_basic_generation() {
     assert!(native_lib.content.contains("TEST_EXTRACT"));
     assert!(native_lib.content.contains("MethodHandle"));
 
-    // Check main class
+    // Check main class (PascalCase + "Rs" suffix)
     let main_class = files
         .iter()
-        .find(|f| f.path.to_string_lossy().contains("TestLib.java"))
+        .find(|f| f.path.to_string_lossy().contains("TestLibRs.java"))
         .unwrap();
-    assert!(main_class.content.contains("public final class TestLib"));
+    assert!(main_class.content.contains("public final class TestLibRs"));
     assert!(main_class.content.contains("public static String extract"));
-    assert!(main_class.content.contains("throws TestLibException"));
+    assert!(main_class.content.contains("throws TestLibRsException"));
 
     // Check exception
     let exception = files
@@ -177,7 +177,7 @@ fn test_basic_generation() {
     assert!(
         exception
             .content
-            .contains("public class TestLibException extends Exception")
+            .contains("public class TestLibRsException extends Exception")
     );
     assert!(exception.content.contains("private final int code"));
 

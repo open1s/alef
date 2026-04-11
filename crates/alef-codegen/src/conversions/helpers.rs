@@ -169,6 +169,8 @@ pub(crate) fn is_field_convertible(
             is_field_convertible(k, convertible_enums, known_types)
                 && is_field_convertible(v, convertible_enums, known_types)
         }
+        // Tuple types are passthrough — always convertible
+        TypeRef::Named(name) if is_tuple_type_name(name) => true,
         // Unit-variant enums and known types (including opaques, which use Arc wrap/unwrap) are convertible.
         TypeRef::Named(name) => convertible_enums.contains(name.as_str()) || known_types.contains(name.as_str()),
     }
@@ -215,6 +217,17 @@ pub fn is_tuple_variant(fields: &[FieldDef]) -> bool {
             .name
             .strip_prefix('_')
             .is_some_and(|rest: &str| rest.chars().all(|c: char| c.is_ascii_digit()))
+}
+
+/// Returns true if a TypeDef represents a newtype struct (single unnamed field `_0`).
+pub fn is_newtype(typ: &TypeDef) -> bool {
+    typ.fields.len() == 1 && typ.fields[0].name == "_0"
+}
+
+/// Returns true if a type name looks like a tuple (starts with `(`).
+/// Tuple types are passthrough — no conversion needed.
+pub(crate) fn is_tuple_type_name(name: &str) -> bool {
+    name.starts_with('(')
 }
 
 /// Derive the Rust import path from rust_path, replacing hyphens with underscores.

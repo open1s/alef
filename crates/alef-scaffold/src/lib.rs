@@ -1158,16 +1158,18 @@ mod tests {
         let config = test_config();
         let api = test_api();
         let files = scaffold(&api, &config, &[Language::Ruby]).unwrap();
-        assert_eq!(files.len(), 2);
+        assert_eq!(files.len(), 3);
         let content = &files[0].content;
         assert!(content.contains("spec.required_ruby_version"));
         assert!(content.contains("spec.extensions"));
         assert!(content.contains("spec.metadata[\"keywords\"]"));
+        // Check for .rubocop.yml generation
+        assert_eq!(files[1].path, PathBuf::from("packages/ruby/.rubocop.yml"));
         // Check for Cargo.toml generation
         assert_eq!(
-            files[1].path,
+            files[2].path,
             PathBuf::from("packages/ruby/ext/my-lib_rb/native/Cargo.toml")
         );
-        assert!(files[1].content.contains("magnus"));
+        assert!(files[2].content.contains("magnus"));
     }
 }
