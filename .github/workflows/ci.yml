@@ -51,7 +51,7 @@ jobs:
         run: cargo sort --check --workspace
 
       - name: Check TOML formatting
-        run: taplo check --exclude 'Cargo.toml' --exclude '**/Cargo.toml'
+        run: taplo fmt --check
 
   test:
     name: Test (${{ matrix.os }})
