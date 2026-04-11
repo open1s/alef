@@ -205,7 +205,7 @@ fn render_test_case(
 
 fn build_args_string(input: &serde_json::Value, args: &[crate::config::ArgMapping]) -> String {
     if args.is_empty() {
-        return json_to_r(input);
+        return json_to_r(input, true);
     }
 
     let parts: Vec<String> = args
@@ -215,7 +215,7 @@ fn build_args_string(input: &serde_json::Value, args: &[crate::config::ArgMappin
             if val.is_null() && arg.optional {
                 return None;
             }
-            Some(format!("{} = {}", arg.name, json_to_r(val)))
+            Some(format!("{} = {}", arg.name, json_to_r(val, true)))
         })
         .collect();
 
@@ -266,27 +266,27 @@ fn render_assertion(
     match assertion.assertion_type.as_str() {
         "equals" => {
             if let Some(expected) = &assertion.value {
-                let r_val = json_to_r(expected);
+                let r_val = json_to_r(expected, false);
                 let _ = writeln!(out, "  expect_equal(trimws({field_expr}), {r_val})");
             }
         }
         "contains" => {
             if let Some(expected) = &assertion.value {
-                let r_val = json_to_r(expected);
+                let r_val = json_to_r(expected, false);
                 let _ = writeln!(out, "  expect_true(grepl({r_val}, {field_expr}, fixed = TRUE))");
             }
         }
         "contains_all" => {
             if let Some(values) = &assertion.values {
                 for val in values {
-                    let r_val = json_to_r(val);
+                    let r_val = json_to_r(val, false);
                     let _ = writeln!(out, "  expect_true(grepl({r_val}, {field_expr}, fixed = TRUE))");
                 }
             }
         }
         "not_contains" => {
             if let Some(expected) = &assertion.value {
-                let r_val = json_to_r(expected);
+                let r_val = json_to_r(expected, false);
                 let _ = writeln!(out, "  expect_false(grepl({r_val}, {field_expr}, fixed = TRUE))");
             }
         }
@@ -301,7 +301,7 @@ fn render_assertion(
         }
         "contains_any" => {
             if let Some(values) = &assertion.values {
-                let items: Vec<String> = values.iter().map(json_to_r).collect();
+                let items: Vec<String> = values.iter().map(|v| json_to_r(v, false)).collect();
                 let vec_str = items.join(", ");
                 let _ = writeln!(
                     out,
@@ -311,37 +311,37 @@ fn render_assertion(
         }
         "greater_than" => {
             if let Some(val) = &assertion.value {
-                let r_val = json_to_r(val);
+                let r_val = json_to_r(val, false);
                 let _ = writeln!(out, "  expect_true({field_expr} > {r_val})");
             }
         }
         "less_than" => {
             if let Some(val) = &assertion.value {
-                let r_val = json_to_r(val);
+                let r_val = json_to_r(val, false);
                 let _ = writeln!(out, "  expect_true({field_expr} < {r_val})");
             }
         }
         "greater_than_or_equal" => {
             if let Some(val) = &assertion.value {
-                let r_val = json_to_r(val);
+                let r_val = json_to_r(val, false);
                 let _ = writeln!(out, "  expect_true({field_expr} >= {r_val})");
             }
         }
         "less_than_or_equal" => {
             if let Some(val) = &assertion.value {
-                let r_val = json_to_r(val);
+                let r_val = json_to_r(val, false);
                 let _ = writeln!(out, "  expect_true({field_expr} <= {r_val})");
             }
         }
         "starts_with" => {
             if let Some(expected) = &assertion.value {
-                let r_val = json_to_r(expected);
+                let r_val = json_to_r(expected, false);
                 let _ = writeln!(out, "  expect_true(startsWith({field_expr}, {r_val}))");
             }
         }
         "ends_with" => {
             if let Some(expected) = &assertion.value {
-                let r_val = json_to_r(expected);
+                let r_val = json_to_r(expected, false);
                 let _ = writeln!(out, "  expect_true(endsWith({field_expr}, {r_val}))");
             }
         }
@@ -379,11 +379,17 @@ fn render_assertion(
 }
 
 /// Convert a `serde_json::Value` to an R literal string.
-fn json_to_r(value: &serde_json::Value) -> String {
+///
+/// # Arguments
+///
+/// * `value` - The JSON value to convert
+/// * `lowercase_enum_values` - If true, lowercase strings starting with uppercase letter (for enum values).
+///   If false, preserve original case (for assertion expected values).
+fn json_to_r(value: &serde_json::Value, lowercase_enum_values: bool) -> String {
     match value {
         serde_json::Value::String(s) => {
-            // Lowercase enum values (strings starting with uppercase letter)
-            let normalized = if s.chars().next().is_some_and(|c| c.is_uppercase()) {
+            // Lowercase enum values (strings starting with uppercase letter) only if requested
+            let normalized = if lowercase_enum_values && s.chars().next().is_some_and(|c| c.is_uppercase()) {
                 s.to_lowercase()
             } else {
                 s.clone()
@@ -395,13 +401,13 @@ fn json_to_r(value: &serde_json::Value) -> String {
         serde_json::Value::Number(n) => n.to_string(),
         serde_json::Value::Null => "NULL".to_string(),
         serde_json::Value::Array(arr) => {
-            let items: Vec<String> = arr.iter().map(json_to_r).collect();
+            let items: Vec<String> = arr.iter().map(|v| json_to_r(v, lowercase_enum_values)).collect();
             format!("c({})", items.join(", "))
         }
         serde_json::Value::Object(map) => {
             let entries: Vec<String> = map
                 .iter()
-                .map(|(k, v)| format!("\"{}\" = {}", escape_r(k), json_to_r(v)))
+                .map(|(k, v)| format!("\"{}\" = {}", escape_r(k), json_to_r(v, lowercase_enum_values)))
                 .collect();
             format!("list({})", entries.join(", "))
         }

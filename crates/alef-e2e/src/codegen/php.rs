@@ -11,7 +11,8 @@ use crate::fixture::{Assertion, Fixture, FixtureGroup};
 use alef_core::backend::GeneratedFile;
 use alef_core::config::AlefConfig;
 use anyhow::Result;
-use heck::ToUpperCamelCase;
+use heck::{ToSnakeCase, ToUpperCamelCase};
+use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::path::PathBuf;
 
@@ -50,6 +51,8 @@ impl E2eCodegen for PhpCodegen {
                 call.module.to_upper_camel_case()
             }
         });
+        let empty_enum_fields = HashMap::new();
+        let enum_fields = overrides.map(|o| &o.enum_fields).unwrap_or(&empty_enum_fields);
         let result_is_simple = overrides.is_some_and(|o| o.result_is_simple);
         let result_var = &call.result_var;
 
@@ -117,6 +120,7 @@ impl E2eCodegen for PhpCodegen {
                 &test_class,
                 &e2e_config.call.args,
                 &field_resolver,
+                enum_fields,
                 result_is_simple,
             );
             files.push(GeneratedFile {
@@ -205,6 +209,7 @@ fn render_test_file(
     test_class: &str,
     args: &[crate::config::ArgMapping],
     field_resolver: &FieldResolver,
+    enum_fields: &HashMap<String, String>,
     result_is_simple: bool,
 ) -> String {
     let mut out = String::new();
@@ -232,6 +237,7 @@ fn render_test_file(
             result_var,
             args,
             field_resolver,
+            enum_fields,
             result_is_simple,
         );
         if i + 1 < fixtures.len() {
@@ -252,13 +258,14 @@ fn render_test_method(
     result_var: &str,
     args: &[crate::config::ArgMapping],
     field_resolver: &FieldResolver,
+    enum_fields: &HashMap<String, String>,
     result_is_simple: bool,
 ) {
     let method_name = sanitize_filename(&fixture.id);
     let description = &fixture.description;
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
 
-    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, class_name, &fixture.id);
+    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, class_name, enum_fields, &fixture.id);
 
     // When result_is_simple, emit a simple function call instead of a class method.
     let call_expr = if result_is_simple {
@@ -298,6 +305,7 @@ fn build_args_and_setup(
     input: &serde_json::Value,
     args: &[crate::config::ArgMapping],
     class_name: &str,
+    enum_fields: &HashMap<String, String>,
     fixture_id: &str,
 ) -> (Vec<String>, String) {
     if args.is_empty() {
@@ -343,6 +351,30 @@ fn build_args_and_setup(
                 parts.push(default_val);
             }
             Some(v) => {
+                // For json_object args, convert keys to snake_case and enum values appropriately.
+                if arg.arg_type == "json_object" && !v.is_null() {
+                    if let Some(obj) = v.as_object() {
+                        let items: Vec<String> = obj
+                            .iter()
+                            .map(|(k, vv)| {
+                                let snake_key = k.to_snake_case();
+                                let php_val = if enum_fields.contains_key(k) {
+                                    if let Some(s) = vv.as_str() {
+                                        let snake_val = s.to_snake_case();
+                                        format!("\"{}\"", escape_php(&snake_val))
+                                    } else {
+                                        json_to_php(vv)
+                                    }
+                                } else {
+                                    json_to_php(vv)
+                                };
+                                format!("\"{}\" => {}", escape_php(&snake_key), php_val)
+                            })
+                            .collect();
+                        parts.push(format!("[{}]", items.join(", ")));
+                        continue;
+                    }
+                }
                 parts.push(json_to_php(v));
             }
         }

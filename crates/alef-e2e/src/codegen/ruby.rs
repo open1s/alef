@@ -370,7 +370,7 @@ fn build_args_and_setup(
     for arg in args {
         if arg.arg_type == "mock_url" {
             setup_lines.push(format!(
-                "{} = ENV['MOCK_SERVER_URL'] + '/fixtures/{fixture_id}'",
+                "{} = \"#{{ENV.fetch('MOCK_SERVER_URL')}}/fixtures/{fixture_id}\"",
                 arg.name,
             ));
             parts.push(arg.name.clone());
