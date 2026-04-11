@@ -285,6 +285,12 @@ fn render_test_function(
                 && string_assertion_types.contains(&assertion.assertion_type.as_str())
                 && !unwrapped_fields.iter().any(|(ff, _)| ff == f)
             {
+                // Only unwrap optional string fields — numeric optionals (u64, usize)
+                // don't support .as_deref() and should be compared directly.
+                let is_string_assertion = assertion.value.as_ref().is_none_or(|v| v.is_string());
+                if !is_string_assertion {
+                    continue;
+                }
                 if let Some((binding, local_var)) = field_resolver.rust_unwrap_binding(f, result_var) {
                     let _ = writeln!(out, "    {binding}");
                     unwrapped_fields.push((f.clone(), local_var));
@@ -525,40 +531,56 @@ fn render_assertion(
                         "    assert_eq!({field_access}.trim(), {expected}, \"equals assertion failed\");"
                     );
                 } else {
-                    let _ = writeln!(
-                        out,
-                        "    assert_eq!({field_access}, {expected}, \"equals assertion failed\");"
-                    );
+                    // Wrap expected value in Some() for optional fields.
+                    let is_opt = assertion.field.as_ref().is_some_and(|f| {
+                        let resolved = field_resolver.resolve(f);
+                        field_resolver.is_optional(resolved)
+                    });
+                    if is_opt
+                        && !unwrapped_fields
+                            .iter()
+                            .any(|(ff, _)| assertion.field.as_ref() == Some(ff))
+                    {
+                        let _ = writeln!(
+                            out,
+                            "    assert_eq!({field_access}, Some({expected}), \"equals assertion failed\");"
+                        );
+                    } else {
+                        let _ = writeln!(
+                            out,
+                            "    assert_eq!({field_access}, {expected}, \"equals assertion failed\");"
+                        );
+                    }
                 }
             }
         }
         "contains" => {
             if let Some(val) = &assertion.value {
                 let expected = value_to_rust_string(val);
-                let _ = writeln!(
-                    out,
-                    "    assert!({field_access}.to_string().contains({expected}), \"expected to contain: {{}}\", {expected});"
+                let line = format!(
+                    "    assert!(format!(\"{{:?}}\", {field_access}).to_lowercase().contains({expected}), \"expected to contain: {{}}\", {expected});"
                 );
+                let _ = writeln!(out, "{line}");
             }
         }
         "contains_all" => {
             if let Some(values) = &assertion.values {
                 for val in values {
                     let expected = value_to_rust_string(val);
-                    let _ = writeln!(
-                        out,
-                        "    assert!({field_access}.to_string().contains({expected}), \"expected to contain: {{}}\", {expected});"
+                    let line = format!(
+                        "    assert!(format!(\"{{:?}}\", {field_access}).to_lowercase().contains({expected}), \"expected to contain: {{}}\", {expected});"
                     );
+                    let _ = writeln!(out, "{line}");
                 }
             }
         }
         "not_contains" => {
             if let Some(val) = &assertion.value {
                 let expected = value_to_rust_string(val);
-                let _ = writeln!(
-                    out,
-                    "    assert!(!{field_access}.to_string().contains({expected}), \"expected NOT to contain: {{}}\", {expected});"
+                let line = format!(
+                    "    assert!(!format!(\"{{:?}}\", {field_access}).to_lowercase().contains({expected}), \"expected NOT to contain: {{}}\", {expected});"
                 );
+                let _ = writeln!(out, "{line}");
             }
         }
         "not_empty" => {
@@ -615,8 +637,16 @@ fn render_assertion(
         }
         "greater_than" => {
             if let Some(val) = &assertion.value {
-                let lit = numeric_literal(val);
-                let _ = writeln!(out, "    assert!({field_access} > {lit}, \"expected > {lit}\");");
+                // Skip comparisons with negative values against unsigned types (.len() etc.)
+                if val.as_f64().is_some_and(|n| n < 0.0) {
+                    let _ = writeln!(
+                        out,
+                        "    // skipped: greater_than with negative value is always true for unsigned types"
+                    );
+                } else {
+                    let lit = numeric_literal(val);
+                    let _ = writeln!(out, "    assert!({field_access} > {lit}, \"expected > {lit}\");");
+                }
             }
         }
         "less_than" => {
