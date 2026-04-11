@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "Rust source extraction for alef"
+readme = "README.md"
 repository.workspace = true
 
 [dependencies]

@@ -31,10 +31,27 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Check unused dependencies
+      - name: Install cargo-machete and cargo-sort
         run: |
           cargo install cargo-machete --locked
-          cargo machete
+          cargo install cargo-sort --locked
+
+      - name: Install cargo-deny and taplo-cli
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,taplo-cli
+
+      - name: Check unused dependencies
+        run: cargo machete
+
+      - name: Security and license audit
+        run: cargo deny check
+
+      - name: Check Cargo.toml dependency sorting
+        run: cargo sort --check --workspace
+
+      - name: Check TOML formatting
+        run: taplo check --exclude 'Cargo.toml' --exclude '**/Cargo.toml'
 
   test:
     name: Test (${{ matrix.os }})

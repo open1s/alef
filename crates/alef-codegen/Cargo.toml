@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Shared codegen utilities for the alef polyglot binding generator"
+readme = "README.md"
 
 [dependencies]
 ahash = { workspace = true }

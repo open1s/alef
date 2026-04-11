@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "README generator for alef"
+readme = "README.md"
 repository.workspace = true
 
 [dependencies]

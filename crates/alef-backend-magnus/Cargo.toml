@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 description = "Ruby (Magnus) backend for alef"
 repository.workspace = true
+readme = "README.md"
 
 [dependencies]
 ahash = { workspace = true }
