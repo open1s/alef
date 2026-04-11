@@ -611,7 +611,7 @@ fn gen_sync_function_method(
 
     // Collect non-opaque Named params that need FFI pointer cleanup after the call.
     // These are Rust-allocated by _from_json and must be freed with _free.
-    let _ffi_ptr_params: Vec<(String, String)> = func
+    let ffi_ptr_params: Vec<(String, String)> = func
         .params
         .iter()
         .filter_map(|p| {
@@ -653,8 +653,21 @@ fn gen_sync_function_method(
         .map(|p| ffi_param_name(&to_java_name(&p.name), &p.ty, opaque_types))
         .collect();
 
+    // Emit a helper closure to free FFI-allocated param pointers (e.g. options created by _from_json)
+    let emit_ffi_ptr_cleanup = |out: &mut String| {
+        for (cname, free_handle) in &ffi_ptr_params {
+            writeln!(
+                out,
+                "            if (!{}.equals(MemorySegment.NULL)) {{ {}.invoke({}); }}",
+                cname, free_handle, cname
+            )
+            .ok();
+        }
+    };
+
     if matches!(func.return_type, TypeRef::Unit) {
         writeln!(out, "            {}.invoke({});", ffi_handle, call_args.join(", ")).ok();
+        emit_ffi_ptr_cleanup(out);
         writeln!(out, "        }} catch (Throwable e) {{").ok();
         writeln!(
             out,
@@ -672,6 +685,7 @@ fn gen_sync_function_method(
             call_args.join(", ")
         )
         .ok();
+        emit_ffi_ptr_cleanup(out);
         writeln!(out, "            if (resultPtr.equals(MemorySegment.NULL)) {{").ok();
         writeln!(out, "                return null;").ok();
         writeln!(out, "            }}").ok();
@@ -705,6 +719,7 @@ fn gen_sync_function_method(
             call_args.join(", ")
         )
         .ok();
+        emit_ffi_ptr_cleanup(out);
         writeln!(out, "            if (resultPtr.equals(MemorySegment.NULL)) {{").ok();
         writeln!(out, "                return null;").ok();
         writeln!(out, "            }}").ok();
@@ -769,6 +784,7 @@ fn gen_sync_function_method(
             call_args.join(", ")
         )
         .ok();
+        emit_ffi_ptr_cleanup(out);
         writeln!(out, "            if (resultPtr.equals(MemorySegment.NULL)) {{").ok();
         writeln!(out, "                return java.util.List.of();").ok();
         writeln!(out, "            }}").ok();
@@ -800,12 +816,14 @@ fn gen_sync_function_method(
     } else {
         writeln!(
             out,
-            "            return ({}) {}.invoke({});",
+            "            var primitiveResult = ({}) {}.invoke({});",
             java_ffi_return_cast(&func.return_type),
             ffi_handle,
             call_args.join(", ")
         )
         .ok();
+        emit_ffi_ptr_cleanup(out);
+        writeln!(out, "            return primitiveResult;").ok();
         writeln!(out, "        }} catch (Throwable e) {{").ok();
         writeln!(
             out,
