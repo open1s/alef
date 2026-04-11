@@ -539,7 +539,13 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
                 let expected = value_to_python_string(val);
                 // Use `is` for boolean/None comparisons (ruff E712).
                 let op = if val.is_boolean() || val.is_null() { "is" } else { "==" };
-                let _ = writeln!(out, "    assert {field_access} {op} {expected}");
+                // For string equality, strip trailing whitespace to handle trailing newlines
+                // from the converter.
+                if val.is_string() {
+                    let _ = writeln!(out, "    assert {field_access}.strip() {op} {expected}");
+                } else {
+                    let _ = writeln!(out, "    assert {field_access} {op} {expected}");
+                }
             }
         }
         "contains" => {

@@ -125,10 +125,12 @@ impl FieldResolver {
         // replace Field with ArrayField so renderers emit `[0]` indexing.
         let segments = self.inject_array_indexing(segments);
 
-        if language == "java" {
-            return render_java_with_optionals(&segments, result_var, &self.optional_fields);
+        match language {
+            "java" => render_java_with_optionals(&segments, result_var, &self.optional_fields),
+            "rust" => render_rust_with_optionals(&segments, result_var, &self.optional_fields),
+            "csharp" => render_csharp_with_optionals(&segments, result_var, &self.optional_fields),
+            _ => render_accessor(&segments, language, result_var),
         }
-        render_accessor(&segments, language, result_var)
     }
 
     /// Replace `Field` segments with `ArrayField` when the field is in `fields_array`
@@ -441,6 +443,54 @@ fn render_java_with_optionals(segments: &[PathSegment], result_var: &str, option
     out
 }
 
+/// Rust accessor with Option unwrapping for intermediate fields.
+///
+/// When an intermediate field is in the `optional_fields` set, `.as_ref().unwrap()`
+/// is appended after the field access to unwrap the `Option<T>`.
+fn render_rust_with_optionals(segments: &[PathSegment], result_var: &str, optional_fields: &HashSet<String>) -> String {
+    let mut out = result_var.to_string();
+    let mut path_so_far = String::new();
+    for (i, seg) in segments.iter().enumerate() {
+        let is_leaf = i == segments.len() - 1;
+        match seg {
+            PathSegment::Field(f) => {
+                if !path_so_far.is_empty() {
+                    path_so_far.push('.');
+                }
+                path_so_far.push_str(f);
+                out.push('.');
+                out.push_str(&f.to_snake_case());
+                // Unwrap intermediate Optional fields so downstream accessors work.
+                if !is_leaf && optional_fields.contains(&path_so_far) {
+                    out.push_str(".as_ref().unwrap()");
+                }
+            }
+            PathSegment::ArrayField(f) => {
+                if !path_so_far.is_empty() {
+                    path_so_far.push('.');
+                }
+                path_so_far.push_str(f);
+                out.push('.');
+                out.push_str(&f.to_snake_case());
+                out.push_str("[0]");
+            }
+            PathSegment::MapAccess { field, key } => {
+                if !path_so_far.is_empty() {
+                    path_so_far.push('.');
+                }
+                path_so_far.push_str(field);
+                out.push('.');
+                out.push_str(&field.to_snake_case());
+                out.push_str(&format!(".get(\"{key}\").map(|s| s.as_str())"));
+            }
+            PathSegment::Length => {
+                out.push_str(".len()");
+            }
+        }
+    }
+    out
+}
+
 /// C#: `result.Foo.Bar.Baz` (PascalCase properties)
 fn render_pascal_dot(segments: &[PathSegment], result_var: &str) -> String {
     let mut out = result_var.to_string();
@@ -456,6 +506,58 @@ fn render_pascal_dot(segments: &[PathSegment], result_var: &str) -> String {
                 out.push_str("[0]");
             }
             PathSegment::MapAccess { field, key } => {
+                out.push('.');
+                out.push_str(&field.to_pascal_case());
+                out.push_str(&format!("[\"{key}\"]"));
+            }
+            PathSegment::Length => {
+                out.push_str(".Count");
+            }
+        }
+    }
+    out
+}
+
+/// C# accessor with nullable unwrapping for intermediate fields.
+///
+/// When an intermediate field is in the `optional_fields` set, `!` (null-forgiving)
+/// is appended after the field access to unwrap the nullable type.
+fn render_csharp_with_optionals(
+    segments: &[PathSegment],
+    result_var: &str,
+    optional_fields: &HashSet<String>,
+) -> String {
+    let mut out = result_var.to_string();
+    let mut path_so_far = String::new();
+    for (i, seg) in segments.iter().enumerate() {
+        let is_leaf = i == segments.len() - 1;
+        match seg {
+            PathSegment::Field(f) => {
+                if !path_so_far.is_empty() {
+                    path_so_far.push('.');
+                }
+                path_so_far.push_str(f);
+                out.push('.');
+                out.push_str(&f.to_pascal_case());
+                // Unwrap intermediate nullable fields so downstream accessors work.
+                if !is_leaf && optional_fields.contains(&path_so_far) {
+                    out.push('!');
+                }
+            }
+            PathSegment::ArrayField(f) => {
+                if !path_so_far.is_empty() {
+                    path_so_far.push('.');
+                }
+                path_so_far.push_str(f);
+                out.push('.');
+                out.push_str(&f.to_pascal_case());
+                out.push_str("[0]");
+            }
+            PathSegment::MapAccess { field, key } => {
+                if !path_so_far.is_empty() {
+                    path_so_far.push('.');
+                }
+                path_so_far.push_str(field);
                 out.push('.');
                 out.push_str(&field.to_pascal_case());
                 out.push_str(&format!("[\"{key}\"]"));
@@ -563,6 +665,19 @@ mod tests {
 
         let mut optional = HashSet::new();
         optional.insert("metadata.document.title".to_string());
+
+        FieldResolver::new(&fields, &optional, &HashSet::new(), &HashSet::new())
+    }
+
+    fn make_resolver_with_doc_optional() -> FieldResolver {
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), "metadata.document.title".to_string());
+        fields.insert("tags".to_string(), "metadata.tags[name]".to_string());
+
+        let mut optional = HashSet::new();
+        optional.insert("document".to_string());
+        optional.insert("metadata.document.title".to_string());
+        optional.insert("metadata.document".to_string());
 
         FieldResolver::new(&fields, &optional, &HashSet::new(), &HashSet::new())
     }
@@ -732,5 +847,39 @@ mod tests {
         let r = make_resolver();
         assert_eq!(r.accessor("content", "rust", "result"), "result.content");
         assert_eq!(r.accessor("content", "go", "result"), "result.Content");
+    }
+
+    #[test]
+    fn test_accessor_rust_with_optionals() {
+        let r = make_resolver_with_doc_optional();
+        // "metadata.document" is optional, so it should be unwrapped
+        assert_eq!(
+            r.accessor("title", "rust", "result"),
+            "result.metadata.document.as_ref().unwrap().title"
+        );
+    }
+
+    #[test]
+    fn test_accessor_csharp_with_optionals() {
+        let r = make_resolver_with_doc_optional();
+        // "metadata.document" is optional, so it should be unwrapped
+        assert_eq!(
+            r.accessor("title", "csharp", "result"),
+            "result.Metadata.Document!.Title"
+        );
+    }
+
+    #[test]
+    fn test_accessor_rust_non_optional_field() {
+        let r = make_resolver();
+        // "content" is not optional, so no unwrapping needed
+        assert_eq!(r.accessor("content", "rust", "result"), "result.content");
+    }
+
+    #[test]
+    fn test_accessor_csharp_non_optional_field() {
+        let r = make_resolver();
+        // "content" is not optional, so no unwrapping needed
+        assert_eq!(r.accessor("content", "csharp", "result"), "result.Content");
     }
 }

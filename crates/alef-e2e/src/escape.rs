@@ -102,7 +102,7 @@ pub fn escape_php(s: &str) -> String {
         .replace('\t', "\\t")
 }
 
-/// Escape a string for embedding in a Ruby string literal.
+/// Escape a string for embedding in a double-quoted Ruby string literal.
 pub fn escape_ruby(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('"', "\\\"")
@@ -110,6 +110,27 @@ pub fn escape_ruby(s: &str) -> String {
         .replace('\n', "\\n")
         .replace('\r', "\\r")
         .replace('\t', "\\t")
+}
+
+/// Escape a string for embedding in a single-quoted Ruby string literal.
+/// Single-quoted Ruby strings only interpret `\\` and `\'`.
+pub fn escape_ruby_single(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// Returns true if the string needs double quotes (contains control characters
+/// that require escape sequences only available in double-quoted strings).
+pub fn ruby_needs_double_quotes(s: &str) -> bool {
+    s.contains('\n') || s.contains('\r') || s.contains('\t') || s.contains('\0')
+}
+
+/// Format a string as a Ruby literal, preferring single quotes.
+pub fn ruby_string_literal(s: &str) -> String {
+    if ruby_needs_double_quotes(s) {
+        format!("\"{}\"", escape_ruby(s))
+    } else {
+        format!("'{}'", escape_ruby_single(s))
+    }
 }
 
 /// Escape a string for embedding in an Elixir string literal.

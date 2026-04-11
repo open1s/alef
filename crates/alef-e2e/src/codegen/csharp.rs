@@ -11,6 +11,7 @@ use alef_core::backend::GeneratedFile;
 use alef_core::config::AlefConfig;
 use anyhow::Result;
 use heck::ToUpperCamelCase;
+use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::path::PathBuf;
 
@@ -82,6 +83,10 @@ impl E2eCodegen for CSharpCodegen {
             &e2e_config.fields_array,
         );
 
+        // Resolve enum_fields from C# override config.
+        static EMPTY_ENUM_FIELDS: std::sync::LazyLock<HashMap<String, String>> = std::sync::LazyLock::new(HashMap::new);
+        let enum_fields = overrides.map(|o| &o.enum_fields).unwrap_or(&EMPTY_ENUM_FIELDS);
+
         for group in groups {
             let active: Vec<&Fixture> = group
                 .fixtures
@@ -107,6 +112,8 @@ impl E2eCodegen for CSharpCodegen {
                 &field_resolver,
                 result_is_simple,
                 is_async,
+                e2e_config,
+                enum_fields,
             );
             files.push(GeneratedFile {
                 path: tests_base.join(filename),
@@ -165,6 +172,8 @@ fn render_test_file(
     field_resolver: &FieldResolver,
     result_is_simple: bool,
     is_async: bool,
+    e2e_config: &E2eConfig,
+    enum_fields: &HashMap<String, String>,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "using System.Threading.Tasks;");
@@ -188,6 +197,8 @@ fn render_test_file(
             field_resolver,
             result_is_simple,
             is_async,
+            e2e_config,
+            enum_fields,
         );
         if i + 1 < fixtures.len() {
             let _ = writeln!(out);
@@ -209,12 +220,14 @@ fn render_test_method(
     field_resolver: &FieldResolver,
     result_is_simple: bool,
     is_async: bool,
+    e2e_config: &E2eConfig,
+    enum_fields: &HashMap<String, String>,
 ) {
     let method_name = fixture.id.to_upper_camel_case();
     let description = &fixture.description;
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
 
-    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, class_name);
+    let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, class_name, e2e_config, enum_fields);
 
     let return_type = if is_async { "async Task" } else { "void" };
     let await_kw = if is_async { "await " } else { "" };
@@ -263,10 +276,15 @@ fn build_args_and_setup(
     input: &serde_json::Value,
     args: &[crate::config::ArgMapping],
     class_name: &str,
+    e2e_config: &E2eConfig,
+    enum_fields: &HashMap<String, String>,
 ) -> (Vec<String>, String) {
     if args.is_empty() {
         return (Vec::new(), json_to_csharp(input));
     }
+
+    let overrides = e2e_config.call.overrides.get("csharp");
+    let options_type = overrides.and_then(|o| o.options_type.as_deref());
 
     let mut setup_lines: Vec<String> = Vec::new();
     let mut parts: Vec<String> = Vec::new();
@@ -300,6 +318,32 @@ fn build_args_and_setup(
                 parts.push(default_val);
             }
             Some(v) => {
+                // For json_object args with options_type, construct a typed C# object.
+                if let (Some(opts_type), "json_object") = (options_type, arg.arg_type.as_str()) {
+                    if let Some(obj) = v.as_object() {
+                        let props: Vec<String> = obj
+                            .iter()
+                            .map(|(k, vv)| {
+                                let pascal_key = k.to_upper_camel_case();
+                                // Check if this field maps to an enum type.
+                                let cs_val = if let Some(enum_type) = enum_fields.get(k) {
+                                    // Map string value to enum constant (PascalCase).
+                                    if let Some(s) = vv.as_str() {
+                                        let pascal_val = s.to_upper_camel_case();
+                                        format!("{enum_type}.{pascal_val}")
+                                    } else {
+                                        json_to_csharp(vv)
+                                    }
+                                } else {
+                                    json_to_csharp(vv)
+                                };
+                                format!("{pascal_key} = {cs_val}")
+                            })
+                            .collect();
+                        parts.push(format!("new {opts_type} {{ {} }}", props.join(", ")));
+                        continue;
+                    }
+                }
                 parts.push(json_to_csharp(v));
             }
         }

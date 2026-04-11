@@ -32,9 +32,11 @@ impl super::E2eCodegen for RustE2eCodegen {
         let dep_name = crate_name.replace('-', "_");
 
         // Cargo.toml
+        // Check if any fixture uses json_object args (needs serde_json dep).
+        let needs_serde_json = e2e_config.call.args.iter().any(|a| a.arg_type == "json_object");
         files.push(GeneratedFile {
             path: output_base.join("Cargo.toml"),
-            content: render_cargo_toml(&crate_name, &dep_name, &crate_path),
+            content: render_cargo_toml(&crate_name, &dep_name, &crate_path, needs_serde_json),
             generated_header: true,
         });
 
@@ -110,7 +112,7 @@ fn is_skipped(fixture: &Fixture, language: &str) -> bool {
 // Rendering
 // ---------------------------------------------------------------------------
 
-fn render_cargo_toml(crate_name: &str, dep_name: &str, crate_path: &str) -> String {
+fn render_cargo_toml(crate_name: &str, dep_name: &str, crate_path: &str, needs_serde_json: bool) -> String {
     let e2e_name = format!("{dep_name}-e2e-rust");
     // When the crate name has hyphens, Cargo needs `package = "name-with-hyphens"`
     // because the dep key uses underscores (Rust identifier).
@@ -119,6 +121,7 @@ fn render_cargo_toml(crate_name: &str, dep_name: &str, crate_path: &str) -> Stri
     } else {
         format!("{dep_name} = {{ path = \"{crate_path}\" }}")
     };
+    let serde_line = if needs_serde_json { "\nserde_json = \"1\"" } else { "" };
     format!(
         r#"[package]
 name = "{e2e_name}"
@@ -130,8 +133,7 @@ publish = false
 [workspace]
 
 [dependencies]
-{dep_spec}
-serde_json = "1"
+{dep_spec}{serde_line}
 tokio = {{ version = "1", features = ["full"] }}
 wiremock = "0.6"
 "#
@@ -189,8 +191,14 @@ fn render_test_function(
     let module = resolve_module(e2e_config, dep_name);
     let result_var = &e2e_config.call.result_var;
 
-    let _ = writeln!(out, "#[test]");
-    let _ = writeln!(out, "fn test_{fn_name}() {{");
+    let is_async = e2e_config.call.r#async;
+    if is_async {
+        let _ = writeln!(out, "#[tokio::test]");
+        let _ = writeln!(out, "async fn test_{fn_name}() {{");
+    } else {
+        let _ = writeln!(out, "#[test]");
+        let _ = writeln!(out, "fn test_{fn_name}() {{");
+    }
     let _ = writeln!(out, "    // {description}");
 
     // Check if any assertion is an error assertion.
@@ -210,8 +218,10 @@ fn render_test_function(
 
     let args_str = arg_exprs.join(", ");
 
+    let await_suffix = if is_async { ".await" } else { "" };
+
     if has_error_assertion {
-        let _ = writeln!(out, "    let {result_var} = {function_name}({args_str});");
+        let _ = writeln!(out, "    let {result_var} = {function_name}({args_str}){await_suffix};");
         // Render error assertions.
         for assertion in &fixture.assertions {
             render_assertion(out, assertion, result_var, dep_name, true, &[], field_resolver);
@@ -245,10 +255,13 @@ fn render_test_function(
     if has_not_error || !fixture.assertions.is_empty() {
         let _ = writeln!(
             out,
-            "    let {result_binding} = {function_name}({args_str}).expect(\"should succeed\");"
+            "    let {result_binding} = {function_name}({args_str}){await_suffix}.expect(\"should succeed\");"
         );
     } else {
-        let _ = writeln!(out, "    let {result_binding} = {function_name}({args_str});");
+        let _ = writeln!(
+            out,
+            "    let {result_binding} = {function_name}({args_str}){await_suffix};"
+        );
     }
 
     // Emit Option field unwrap bindings for any fields accessed in assertions.
@@ -340,15 +353,24 @@ fn render_rust_arg(
             "bool" | "boolean" => "false".to_string(),
             _ => "Default::default()".to_string(),
         };
-        return (vec![format!("let {name} = {default_val};")], name.to_string());
+        // String args are passed by reference in Rust.
+        let expr = if arg_type == "string" {
+            format!("&{name}")
+        } else {
+            name.to_string()
+        };
+        return (vec![format!("let {name} = {default_val};")], expr);
     }
     let literal = json_to_rust_literal(value, arg_type);
+    // String args are passed by reference in Rust.
+    let pass_by_ref = arg_type == "string";
+    let expr = |n: &str| if pass_by_ref { format!("&{n}") } else { n.to_string() };
     if optional && value.is_null() {
-        (vec![format!("let {name} = None;")], name.to_string())
+        (vec![format!("let {name} = None;")], expr(name))
     } else if optional {
-        (vec![format!("let {name} = Some({literal});")], name.to_string())
+        (vec![format!("let {name} = Some({literal});")], expr(name))
     } else {
-        (vec![format!("let {name} = {literal};")], name.to_string())
+        (vec![format!("let {name} = {literal};")], expr(name))
     }
 }
 
@@ -488,10 +510,19 @@ fn render_assertion(
                 if is_error_context {
                     return;
                 }
-                let _ = writeln!(
-                    out,
-                    "    assert_eq!({field_access}, {expected}, \"equals assertion failed\");"
-                );
+                // For string equality, trim trailing whitespace to handle trailing newlines
+                // from the converter.
+                if val.is_string() {
+                    let _ = writeln!(
+                        out,
+                        "    assert_eq!({field_access}.trim(), {expected}, \"equals assertion failed\");"
+                    );
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "    assert_eq!({field_access}, {expected}, \"equals assertion failed\");"
+                    );
+                }
             }
         }
         "contains" => {

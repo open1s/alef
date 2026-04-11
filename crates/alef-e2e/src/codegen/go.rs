@@ -140,12 +140,36 @@ fn render_test_file(
     let mut out = String::new();
 
     // Determine if we need the "strings" import.
+    // Only count assertions whose fields are actually valid for the result type.
     let needs_strings = fixtures.iter().any(|f| {
         f.assertions.iter().any(|a| {
-            matches!(
-                a.assertion_type.as_str(),
-                "equals" | "contains" | "contains_all" | "not_contains" | "starts_with"
-            )
+            let type_needs_strings = if a.assertion_type == "equals" {
+                // equals with string values needs strings.TrimSpace
+                a.value.as_ref().is_some_and(|v| v.is_string())
+            } else {
+                matches!(
+                    a.assertion_type.as_str(),
+                    "contains" | "contains_all" | "not_contains" | "starts_with"
+                )
+            };
+            let field_valid = a
+                .field
+                .as_ref()
+                .map(|f| f.is_empty() || field_resolver.is_valid_for_result(f))
+                .unwrap_or(true);
+            type_needs_strings && field_valid
+        })
+    });
+
+    // Determine if we need the testify assert import (used for count_min, count_max).
+    let needs_assert = fixtures.iter().any(|f| {
+        f.assertions.iter().any(|a| {
+            let field_valid = a
+                .field
+                .as_ref()
+                .map(|f| f.is_empty() || field_resolver.is_valid_for_result(f))
+                .unwrap_or(true);
+            matches!(a.assertion_type.as_str(), "count_min" | "count_max") && field_valid
         })
     });
 
@@ -157,6 +181,10 @@ fn render_test_file(
         let _ = writeln!(out, "\t\"strings\"");
     }
     let _ = writeln!(out, "\t\"testing\"");
+    if needs_assert {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "\t\"github.com/stretchr/testify/assert\"");
+    }
     let _ = writeln!(out);
     let _ = writeln!(out, "\t{import_alias} \"{go_module_path}\"");
     let _ = writeln!(out, ")");
@@ -269,7 +297,7 @@ fn render_test_function(
                         continue;
                     }
                     let field_expr = field_resolver.accessor(f, "go", result_var);
-                    let local_var = resolved.replace(['.', '['], "_").replace(']', "");
+                    let local_var = go_local_name(&resolved.replace(['.', '[', ']'], "_"));
                     if field_resolver.has_map_access(f) {
                         // Go map access returns a value type (string), not a pointer.
                         // Use the value directly — empty string means not present.
@@ -304,9 +332,15 @@ fn render_test_function(
                     }
                 }
                 if let Some(guard) = guard_expr {
-                    let _ = writeln!(out, "\tif {guard} != nil {{");
-                    render_assertion(out, assertion, result_var, field_resolver, &optional_locals);
-                    let _ = writeln!(out, "\t}}");
+                    // Only emit nil guard if the assertion will actually produce code
+                    // (not just a skip comment), to avoid empty branches (SA9003).
+                    if field_resolver.is_valid_for_result(f) {
+                        let _ = writeln!(out, "\tif {guard} != nil {{");
+                        render_assertion(out, assertion, result_var, field_resolver, &optional_locals);
+                        let _ = writeln!(out, "\t}}");
+                    } else {
+                        render_assertion(out, assertion, result_var, field_resolver, &optional_locals);
+                    }
                     continue;
                 }
             }
@@ -464,22 +498,44 @@ fn render_assertion(
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let go_val = json_to_go(expected);
-                if is_optional && !field_expr.starts_with("len(") {
-                    let _ = writeln!(out, "\tif {field_expr} != nil && {deref_field_expr} != {go_val} {{");
+                // For string equality, trim whitespace to handle trailing newlines from the converter.
+                if expected.is_string() {
+                    // Wrap field expression with strings.TrimSpace() for string comparisons.
+                    let trimmed_field = if is_optional && !field_expr.starts_with("len(") {
+                        format!("strings.TrimSpace(*{field_expr})")
+                    } else {
+                        format!("strings.TrimSpace({field_expr})")
+                    };
+                    if is_optional && !field_expr.starts_with("len(") {
+                        let _ = writeln!(out, "\tif {field_expr} != nil && {trimmed_field} != {go_val} {{");
+                    } else {
+                        let _ = writeln!(out, "\tif {trimmed_field} != {go_val} {{");
+                    }
                 } else {
-                    let _ = writeln!(out, "\tif {field_expr} != {go_val} {{");
+                    if is_optional && !field_expr.starts_with("len(") {
+                        let _ = writeln!(out, "\tif {field_expr} != nil && {deref_field_expr} != {go_val} {{");
+                    } else {
+                        let _ = writeln!(out, "\tif {field_expr} != {go_val} {{");
+                    }
                 }
-                let _ = writeln!(out, "\t\tt.Errorf(\"equals mismatch: got %q\", {field_expr})");
+                let _ = writeln!(out, "\t\tt.Errorf(\"equals mismatch: got %v\", {field_expr})");
                 let _ = writeln!(out, "\t}}");
             }
         }
         "contains" => {
             if let Some(expected) = &assertion.value {
                 let go_val = json_to_go(expected);
-                let _ = writeln!(out, "\tif !strings.Contains(string({field_expr}), {go_val}) {{");
+                let field_for_contains = if is_optional
+                    && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()))
+                {
+                    format!("string(*{field_expr})")
+                } else {
+                    format!("string({field_expr})")
+                };
+                let _ = writeln!(out, "\tif !strings.Contains({field_for_contains}, {go_val}) {{");
                 let _ = writeln!(
                     out,
-                    "\t\tt.Errorf(\"expected to contain %s, got %q\", {go_val}, {field_expr})"
+                    "\t\tt.Errorf(\"expected to contain %s, got %v\", {go_val}, {field_expr})"
                 );
                 let _ = writeln!(out, "\t}}");
             }
@@ -488,7 +544,14 @@ fn render_assertion(
             if let Some(values) = &assertion.values {
                 for val in values {
                     let go_val = json_to_go(val);
-                    let _ = writeln!(out, "\tif !strings.Contains(string({field_expr}), {go_val}) {{");
+                    let field_for_contains = if is_optional
+                        && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()))
+                    {
+                        format!("string(*{field_expr})")
+                    } else {
+                        format!("string({field_expr})")
+                    };
+                    let _ = writeln!(out, "\tif !strings.Contains({field_for_contains}, {go_val}) {{");
                     let _ = writeln!(out, "\t\tt.Errorf(\"expected to contain %s\", {go_val})");
                     let _ = writeln!(out, "\t}}");
                 }
@@ -497,10 +560,17 @@ fn render_assertion(
         "not_contains" => {
             if let Some(expected) = &assertion.value {
                 let go_val = json_to_go(expected);
-                let _ = writeln!(out, "\tif strings.Contains(string({field_expr}), {go_val}) {{");
+                let field_for_contains = if is_optional
+                    && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()))
+                {
+                    format!("string(*{field_expr})")
+                } else {
+                    format!("string({field_expr})")
+                };
+                let _ = writeln!(out, "\tif strings.Contains({field_for_contains}, {go_val}) {{");
                 let _ = writeln!(
                     out,
-                    "\t\tt.Errorf(\"expected NOT to contain %s, got %q\", {go_val}, {field_expr})"
+                    "\t\tt.Errorf(\"expected NOT to contain %s, got %v\", {go_val}, {field_expr})"
                 );
                 let _ = writeln!(out, "\t}}");
             }
@@ -520,18 +590,25 @@ fn render_assertion(
             } else {
                 let _ = writeln!(out, "\tif len({field_expr}) != 0 {{");
             }
-            let _ = writeln!(out, "\t\tt.Errorf(\"expected empty value, got %q\", {field_expr})");
+            let _ = writeln!(out, "\t\tt.Errorf(\"expected empty value, got %v\", {field_expr})");
             let _ = writeln!(out, "\t}}");
         }
         "contains_any" => {
             if let Some(values) = &assertion.values {
+                let field_for_contains = if is_optional
+                    && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()))
+                {
+                    format!("*{field_expr}")
+                } else {
+                    field_expr.clone()
+                };
                 let _ = writeln!(out, "\t{{");
                 let _ = writeln!(out, "\t\tfound := false");
                 for val in values {
                     let go_val = json_to_go(val);
                     let _ = writeln!(
                         out,
-                        "\t\tif strings.Contains({field_expr}, {go_val}) {{ found = true }}"
+                        "\t\tif strings.Contains({field_for_contains}, {go_val}) {{ found = true }}"
                     );
                 }
                 let _ = writeln!(out, "\t\tif !found {{");
@@ -546,7 +623,14 @@ fn render_assertion(
         "greater_than" => {
             if let Some(val) = &assertion.value {
                 let go_val = json_to_go(val);
-                let _ = writeln!(out, "\tif {field_expr} <= {go_val} {{");
+                // Use `< N+1` instead of `<= N` to avoid golangci-lint sloppyLen
+                // warning when N is 0 (len(x) <= 0 → len(x) < 1).
+                if let Some(n) = val.as_u64() {
+                    let next = n + 1;
+                    let _ = writeln!(out, "\tif {field_expr} < {next} {{");
+                } else {
+                    let _ = writeln!(out, "\tif {field_expr} <= {go_val} {{");
+                }
                 let _ = writeln!(out, "\t\tt.Errorf(\"expected > {go_val}, got %v\", {field_expr})");
                 let _ = writeln!(out, "\t}}");
             }
@@ -586,10 +670,17 @@ fn render_assertion(
         "starts_with" => {
             if let Some(expected) = &assertion.value {
                 let go_val = json_to_go(expected);
-                let _ = writeln!(out, "\tif !strings.HasPrefix(string({field_expr}), {go_val}) {{");
+                let field_for_prefix = if is_optional
+                    && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()))
+                {
+                    format!("string(*{field_expr})")
+                } else {
+                    format!("string({field_expr})")
+                };
+                let _ = writeln!(out, "\tif !strings.HasPrefix({field_for_prefix}, {go_val}) {{");
                 let _ = writeln!(
                     out,
-                    "\t\tt.Errorf(\"expected to start with %s, got %q\", {go_val}, {field_expr})"
+                    "\t\tt.Errorf(\"expected to start with %s, got %v\", {go_val}, {field_expr})"
                 );
                 let _ = writeln!(out, "\t}}");
             }
@@ -598,7 +689,7 @@ fn render_assertion(
             if let Some(val) = &assertion.value {
                 if let Some(n) = val.as_u64() {
                     if is_optional {
-                        let _ = writeln!(out, "\tif {field_expr} != nil && len(*{field_expr}) >= {n} {{");
+                        let _ = writeln!(out, "\tif {field_expr} != nil {{");
                         let _ = writeln!(
                             out,
                             "\t\tassert.GreaterOrEqual(t, len(*{field_expr}), {n}, \"expected at least {n} elements\")"
@@ -623,6 +714,47 @@ fn render_assertion(
             let _ = writeln!(out, "\t// TODO: unsupported assertion type: {other}");
         }
     }
+}
+
+/// Go common initialisms — words that must be all-caps in Go names.
+/// Sourced from revive's var-naming rule (github.com/mgechev/revive).
+const GO_INITIALISMS: &[&str] = &[
+    "ACL", "API", "ASCII", "CPU", "CSS", "DNS", "EOF", "GUID", "HTML", "HTTP", "HTTPS", "ID", "IDS", "IP", "JSON",
+    "LHS", "QPS", "RAM", "RHS", "RPC", "SLA", "SMTP", "SQL", "SSH", "TCP", "TLS", "TTL", "UDP", "UI", "UID", "UUID",
+    "URI", "URL", "UTF8", "VM", "XML", "XMPP", "XSRF", "XSS",
+];
+
+/// Convert a snake_case field name to a Go-idiomatic local variable name.
+/// Splits on `_`, applies Go initialism rules (HTML, URL, ID, etc.),
+/// and joins as lowerCamelCase.
+fn go_local_name(snake: &str) -> String {
+    let words: Vec<&str> = snake.split('_').filter(|w| !w.is_empty()).collect();
+    if words.is_empty() {
+        return String::new();
+    }
+    let mut result = String::new();
+    for (i, word) in words.iter().enumerate() {
+        let upper = word.to_uppercase();
+        if GO_INITIALISMS.contains(&upper.as_str()) {
+            if i == 0 {
+                // First word of a local var → all lowercase initialism
+                result.push_str(&upper.to_lowercase());
+            } else {
+                result.push_str(&upper);
+            }
+        } else if i == 0 {
+            // First word → all lowercase
+            result.push_str(&word.to_lowercase());
+        } else {
+            // Subsequent words → capitalize first letter
+            let mut chars = word.chars();
+            if let Some(c) = chars.next() {
+                result.extend(c.to_uppercase());
+                result.push_str(&chars.as_str().to_lowercase());
+            }
+        }
+    }
+    result
 }
 
 /// Convert a `serde_json::Value` to a Go literal string.

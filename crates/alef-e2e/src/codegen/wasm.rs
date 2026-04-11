@@ -10,7 +10,7 @@ use crate::fixture::{Assertion, Fixture, FixtureGroup};
 use alef_core::backend::GeneratedFile;
 use alef_core::config::AlefConfig;
 use anyhow::Result;
-use heck::ToLowerCamelCase;
+use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::path::PathBuf;
@@ -180,8 +180,30 @@ fn render_test_file(
                 .any(|arg| arg.arg_type == "json_object" && f.input.get(&arg.field).is_some_and(|v| !v.is_null()))
         });
 
+    // Collect all enum types that need to be imported.
+    let mut enum_imports: std::collections::BTreeSet<&String> = std::collections::BTreeSet::new();
+    if needs_options_import {
+        for fixture in fixtures {
+            for arg in args {
+                if arg.arg_type == "json_object" {
+                    if let Some(val) = fixture.input.get(&arg.field) {
+                        if let Some(obj) = val.as_object() {
+                            for k in obj.keys() {
+                                if let Some(enum_type) = enum_fields.get(k) {
+                                    enum_imports.insert(enum_type);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if let (true, Some(opts_type)) = (needs_options_import, options_type) {
-        let _ = writeln!(out, "import {{ {function_name}, {opts_type} }} from '{pkg_name}';");
+        let mut imports = vec![function_name.to_string(), opts_type.to_string()];
+        imports.extend(enum_imports.iter().map(|s| s.to_string()));
+        let _ = writeln!(out, "import {{ {} }} from '{pkg_name}';", imports.join(", "));
     } else {
         let _ = writeln!(out, "import {{ {function_name} }} from '{pkg_name}';");
     }
@@ -262,7 +284,18 @@ fn render_test_case(
                                 let _ = writeln!(out, "    const options = {opts_type}.default();");
                                 for (k, v) in obj {
                                     let camel_key = k.to_lower_camel_case();
-                                    let js_val = json_to_js(v);
+                                    // Check if this field maps to an enum type.
+                                    let js_val = if let Some(enum_type) = enum_fields.get(k) {
+                                        // Map string value to enum constant (PascalCase).
+                                        if let Some(s) = v.as_str() {
+                                            let pascal_val = s.to_upper_camel_case();
+                                            format!("{enum_type}.{pascal_val}")
+                                        } else {
+                                            json_to_js(v)
+                                        }
+                                    } else {
+                                        json_to_js(v)
+                                    };
                                     let _ = writeln!(out, "    options.{camel_key} = {js_val};");
                                 }
                             }
