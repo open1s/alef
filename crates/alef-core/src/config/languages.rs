@@ -9,6 +9,10 @@ pub struct PythonConfig {
     pub module_name: Option<String>,
     pub async_runtime: Option<String>,
     pub stubs: Option<StubsConfig>,
+    /// Per-language feature override. When set, these features are used instead of
+    /// `[crate] features` for this language's binding crate.
+    #[serde(default)]
+    pub features: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,12 +23,20 @@ pub struct StubsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeConfig {
     pub package_name: Option<String>,
+    /// Per-language feature override. When set, these features are used instead of
+    /// `[crate] features` for this language's binding crate.
+    #[serde(default)]
+    pub features: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RubyConfig {
     pub gem_name: Option<String>,
     pub stubs: Option<StubsConfig>,
+    /// Per-language feature override. When set, these features are used instead of
+    /// `[crate] features` for this language's binding crate.
+    #[serde(default)]
+    pub features: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,11 +49,15 @@ pub struct PhpConfig {
     /// Output directory for generated PHP facade / stubs (e.g., `packages/php/src/`).
     #[serde(default)]
     pub stubs: Option<StubsConfig>,
+    #[serde(default)]
+    pub features: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElixirConfig {
     pub app_name: Option<String>,
+    #[serde(default)]
+    pub features: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +68,8 @@ pub struct WasmConfig {
     pub exclude_types: Vec<String>,
     #[serde(default)]
     pub type_overrides: HashMap<String, String>,
+    #[serde(default)]
+    pub features: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,13 +82,11 @@ pub struct FfiConfig {
     /// Defaults to `{prefix}_ffi`.
     #[serde(default)]
     pub lib_name: Option<String>,
-    /// If true, generate visitor/callback FFI support:
-    /// a `#[repr(C)]` callbacks struct, an opaque `Visitor` handle that implements
-    /// the core visitor trait by calling the C function pointers, and
-    /// `{prefix}_visitor_create` / `{prefix}_visitor_free` /
-    /// `{prefix}_convert_with_visitor` exports.
+    /// If true, generate visitor/callback FFI support.
     #[serde(default)]
     pub visitor_callbacks: bool,
+    #[serde(default)]
+    pub features: Option<Vec<String>>,
 }
 
 fn default_error_style() -> String {
@@ -82,6 +98,8 @@ pub struct GoConfig {
     pub module: Option<String>,
     /// Override the Go package name (default: derived from module path)
     pub package_name: Option<String>,
+    #[serde(default)]
+    pub features: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +107,8 @@ pub struct JavaConfig {
     pub package: Option<String>,
     #[serde(default = "default_java_ffi_style")]
     pub ffi_style: String,
+    #[serde(default)]
+    pub features: Option<Vec<String>>,
 }
 
 fn default_java_ffi_style() -> String {
@@ -99,11 +119,15 @@ fn default_java_ffi_style() -> String {
 pub struct CSharpConfig {
     pub namespace: Option<String>,
     pub target_framework: Option<String>,
+    #[serde(default)]
+    pub features: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RConfig {
     pub package_name: Option<String>,
+    #[serde(default)]
+    pub features: Option<Vec<String>>,
 }
 
 /// Custom modules that alef should declare (mod X;) but not generate.

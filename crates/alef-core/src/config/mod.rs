@@ -175,6 +175,25 @@ impl Default for GenerateConfig {
 // ---------------------------------------------------------------------------
 
 impl AlefConfig {
+    /// Get the features to use for a specific language's binding crate.
+    /// Checks for a per-language override first, then falls back to `[crate] features`.
+    pub fn features_for_language(&self, lang: extras::Language) -> &[String] {
+        let override_features = match lang {
+            extras::Language::Python => self.python.as_ref().and_then(|c| c.features.as_deref()),
+            extras::Language::Node => self.node.as_ref().and_then(|c| c.features.as_deref()),
+            extras::Language::Ruby => self.ruby.as_ref().and_then(|c| c.features.as_deref()),
+            extras::Language::Php => self.php.as_ref().and_then(|c| c.features.as_deref()),
+            extras::Language::Elixir => self.elixir.as_ref().and_then(|c| c.features.as_deref()),
+            extras::Language::Wasm => self.wasm.as_ref().and_then(|c| c.features.as_deref()),
+            extras::Language::Ffi => self.ffi.as_ref().and_then(|c| c.features.as_deref()),
+            extras::Language::Go => self.go.as_ref().and_then(|c| c.features.as_deref()),
+            extras::Language::Java => self.java.as_ref().and_then(|c| c.features.as_deref()),
+            extras::Language::Csharp => self.csharp.as_ref().and_then(|c| c.features.as_deref()),
+            extras::Language::R => self.r.as_ref().and_then(|c| c.features.as_deref()),
+        };
+        override_features.unwrap_or(&self.crate_config.features)
+    }
+
     /// Get the core crate import path (e.g., "liter_llm"). Used by codegen to call into the core crate.
     pub fn core_import(&self) -> String {
         self.crate_config

@@ -29,6 +29,7 @@ fn make_config(app_name: &str) -> AlefConfig {
         php: None,
         elixir: Some(ElixirConfig {
             app_name: Some(app_name.to_string()),
+            features: None,
         }),
         wasm: None,
         ffi: None,

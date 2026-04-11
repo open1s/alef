@@ -7,19 +7,16 @@ use std::path::PathBuf;
 
 /// Format the features clause for the core crate dependency in generated Cargo.toml files.
 ///
+/// Checks for per-language feature overrides first, then falls back to `[crate] features`.
 /// Returns an empty string if no features are configured, otherwise returns
 /// `, features = ["feat1", "feat2"]`.
-fn core_dep_features(config: &AlefConfig) -> String {
-    if config.crate_config.features.is_empty() {
+fn core_dep_features(config: &AlefConfig, lang: Language) -> String {
+    let features = config.features_for_language(lang);
+    if features.is_empty() {
         String::new()
     } else {
-        let features: Vec<String> = config
-            .crate_config
-            .features
-            .iter()
-            .map(|f| format!("\"{f}\""))
-            .collect();
-        format!(", features = [{}]", features.join(", "))
+        let quoted: Vec<String> = features.iter().map(|f| format!("\"{f}\"")).collect();
+        format!(", features = [{}]", quoted.join(", "))
     }
 }
 
@@ -129,7 +126,7 @@ tokio = {{ version = "1", features = ["full"] }}
         module_name = module_name,
         core_import = core_import,
         crate_name = name,
-        features = core_dep_features(config),
+        features = core_dep_features(config, Language::Python),
     );
 
     Ok(vec![GeneratedFile {
@@ -241,7 +238,7 @@ napi-build = "2"
         version = version,
         core_import = core_import,
         crate_name = name,
-        features = core_dep_features(config),
+        features = core_dep_features(config, Language::Node),
     );
 
     Ok(vec![GeneratedFile {
@@ -352,7 +349,7 @@ tokio = {{ version = "1", features = ["full"] }}
         version = version,
         core_import = core_import,
         crate_name = name,
-        features = core_dep_features(config),
+        features = core_dep_features(config, Language::Ruby),
     );
 
     Ok(vec![GeneratedFile {
@@ -507,7 +504,7 @@ tokio = {{ version = "1", features = ["full"] }}
         version = version,
         core_import = core_import,
         crate_name = name,
-        features = core_dep_features(config),
+        features = core_dep_features(config, Language::Php),
     );
 
     Ok(vec![GeneratedFile {
@@ -582,7 +579,7 @@ tokio = {{ version = "1", features = ["full"] }}
         version = version,
         core_import = core_import,
         crate_name = name,
-        features = core_dep_features(config),
+        features = core_dep_features(config, Language::Elixir),
     );
 
     Ok(vec![GeneratedFile {
@@ -833,7 +830,7 @@ cbindgen = "0.28"
         repository = meta.repository,
         core_crate = core_crate,
         crate_name = name,
-        features = core_dep_features(config),
+        features = core_dep_features(config, Language::Ffi),
     );
 
     Ok(vec![GeneratedFile {
@@ -876,7 +873,7 @@ js-sys = "0.3"
         repository = meta.repository,
         core_import = core_import,
         crate_name = name,
-        features = core_dep_features(config),
+        features = core_dep_features(config, Language::Wasm),
     );
 
     Ok(vec![GeneratedFile {
@@ -977,7 +974,7 @@ serde_json = "1"
         version = version,
         core_import = core_import,
         crate_name = name,
-        features = core_dep_features(config),
+        features = core_dep_features(config, Language::R),
     );
 
     Ok(vec![GeneratedFile {

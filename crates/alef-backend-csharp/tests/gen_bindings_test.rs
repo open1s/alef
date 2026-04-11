@@ -133,12 +133,14 @@ fn test_basic_generation() {
             header_name: None,
             lib_name: None,
             visitor_callbacks: false,
+            features: None,
         }),
         go: None,
         java: None,
         csharp: Some(CSharpConfig {
             namespace: Some("Kreuzberg".to_string()),
             target_framework: None,
+            features: None,
         }),
         r: None,
         scaffold: None,
@@ -276,6 +278,7 @@ fn test_namespace_resolution() {
         csharp: Some(CSharpConfig {
             namespace: Some("MyCompany.MyLib".to_string()),
             target_framework: None,
+            features: None,
         }),
         r: None,
         scaffold: None,

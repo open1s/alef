@@ -238,11 +238,13 @@ fn print_generated_java_code() {
             header_name: None,
             lib_name: None,
             visitor_callbacks: false,
+            features: None,
         }),
         go: None,
         java: Some(JavaConfig {
             package: Some("dev.kreuzberg.extraction".to_string()),
             ffi_style: "panama".to_string(),
+            features: None,
         }),
         csharp: None,
         r: None,
