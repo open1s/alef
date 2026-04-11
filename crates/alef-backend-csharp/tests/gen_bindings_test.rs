@@ -68,6 +68,7 @@ fn test_basic_generation() {
                     default: None,
                     sanitized: false,
                     typed_default: None,
+                    is_ref: false,
                 },
                 ParamDef {
                     name: "config".to_string(),
@@ -76,6 +77,7 @@ fn test_basic_generation() {
                     default: None,
                     sanitized: false,
                     typed_default: None,
+                    is_ref: false,
                 },
             ],
             return_type: TypeRef::String,

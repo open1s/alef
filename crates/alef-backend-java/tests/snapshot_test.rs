@@ -118,6 +118,7 @@ fn print_generated_java_code() {
                         default: None,
                         sanitized: false,
                         typed_default: None,
+                        is_ref: false,
                     },
                     ParamDef {
                         name: "config".to_string(),
@@ -126,6 +127,7 @@ fn print_generated_java_code() {
                         default: None,
                         sanitized: false,
                         typed_default: None,
+                        is_ref: false,
                     },
                 ],
                 return_type: TypeRef::Named("ExtractionResult".to_string()),
@@ -147,6 +149,7 @@ fn print_generated_java_code() {
                         default: None,
                         sanitized: false,
                         typed_default: None,
+                        is_ref: false,
                     },
                     ParamDef {
                         name: "config".to_string(),
@@ -155,6 +158,7 @@ fn print_generated_java_code() {
                         default: None,
                         sanitized: false,
                         typed_default: None,
+                        is_ref: false,
                     },
                 ],
                 return_type: TypeRef::Named("ExtractionResult".to_string()),

@@ -1,7 +1,7 @@
 use ahash::AHashSet;
 use alef_codegen::generators::{
-    AdapterBodies, AsyncPattern, RustBindingConfig, gen_constructor, gen_enum, gen_function, gen_impl_block,
-    gen_method, gen_static_method, gen_struct,
+    AdapterBodies, AsyncPattern, RustBindingConfig, binding_helpers, gen_constructor, gen_enum, gen_function,
+    gen_impl_block, gen_method, gen_static_method, gen_struct,
 };
 use alef_codegen::type_mapper::TypeMapper;
 use alef_core::ir::{
@@ -556,70 +556,35 @@ fn test_wrap_return_primitive_passthrough() {
 #[test]
 fn test_wrap_return_unit_passthrough() {
     let opaque_types = AHashSet::new();
-    let result = binding_helpers::wrap_return(
-        "result",
-        &TypeRef::Unit,
-        "MyType",
-        &opaque_types,
-        false,
-        false,
-    );
+    let result = binding_helpers::wrap_return("result", &TypeRef::Unit, "MyType", &opaque_types, false, false);
     assert_eq!(result, "result");
 }
 
 #[test]
 fn test_wrap_return_string_ref_conversion() {
     let opaque_types = AHashSet::new();
-    let result = binding_helpers::wrap_return(
-        "result",
-        &TypeRef::String,
-        "MyType",
-        &opaque_types,
-        false,
-        true,
-    );
+    let result = binding_helpers::wrap_return("result", &TypeRef::String, "MyType", &opaque_types, false, true);
     assert_eq!(result, "result.into()");
 }
 
 #[test]
 fn test_wrap_return_string_owned_passthrough() {
     let opaque_types = AHashSet::new();
-    let result = binding_helpers::wrap_return(
-        "result",
-        &TypeRef::String,
-        "MyType",
-        &opaque_types,
-        false,
-        false,
-    );
+    let result = binding_helpers::wrap_return("result", &TypeRef::String, "MyType", &opaque_types, false, false);
     assert_eq!(result, "result");
 }
 
 #[test]
 fn test_wrap_return_path_conversion() {
     let opaque_types = AHashSet::new();
-    let result = binding_helpers::wrap_return(
-        "result",
-        &TypeRef::Path,
-        "MyType",
-        &opaque_types,
-        false,
-        false,
-    );
+    let result = binding_helpers::wrap_return("result", &TypeRef::Path, "MyType", &opaque_types, false, false);
     assert_eq!(result, "result.to_string_lossy().to_string()");
 }
 
 #[test]
 fn test_wrap_return_duration_conversion() {
     let opaque_types = AHashSet::new();
-    let result = binding_helpers::wrap_return(
-        "result",
-        &TypeRef::Duration,
-        "MyType",
-        &opaque_types,
-        false,
-        false,
-    );
+    let result = binding_helpers::wrap_return("result", &TypeRef::Duration, "MyType", &opaque_types, false, false);
     assert_eq!(result, "result.as_secs()");
 }
 
@@ -691,10 +656,7 @@ fn test_wrap_return_vec_named() {
         false,
         false,
     );
-    assert_eq!(
-        result,
-        "result.into_iter().map(Into::into).collect()"
-    );
+    assert_eq!(result, "result.into_iter().map(Into::into).collect()");
 }
 
 #[test]
@@ -706,6 +668,7 @@ fn test_gen_call_args_string_param() {
         default: None,
         sanitized: false,
         typed_default: None,
+        is_ref: false,
     }];
     let opaque_types = AHashSet::new();
 
@@ -722,6 +685,7 @@ fn test_gen_call_args_primitive_param() {
         default: None,
         sanitized: false,
         typed_default: None,
+        is_ref: false,
     }];
     let opaque_types = AHashSet::new();
 
@@ -740,6 +704,7 @@ fn test_gen_call_args_opaque_param() {
         default: None,
         sanitized: false,
         typed_default: None,
+        is_ref: false,
     }];
 
     let result = binding_helpers::gen_call_args(&params, &opaque_types);
@@ -756,6 +721,7 @@ fn test_gen_call_args_non_opaque_param() {
         default: None,
         sanitized: false,
         typed_default: None,
+        is_ref: false,
     }];
 
     let result = binding_helpers::gen_call_args(&params, &opaque_types);
@@ -771,6 +737,7 @@ fn test_gen_call_args_path_param() {
         default: None,
         sanitized: false,
         typed_default: None,
+        is_ref: false,
     }];
     let opaque_types = AHashSet::new();
 
@@ -787,6 +754,7 @@ fn test_gen_call_args_duration_param() {
         default: None,
         sanitized: false,
         typed_default: None,
+        is_ref: false,
     }];
     let opaque_types = AHashSet::new();
 
@@ -805,6 +773,7 @@ fn test_gen_call_args_multiple_params() {
             default: None,
             sanitized: false,
             typed_default: None,
+            is_ref: false,
         },
         ParamDef {
             name: "count".to_string(),
@@ -813,6 +782,7 @@ fn test_gen_call_args_multiple_params() {
             default: None,
             sanitized: false,
             typed_default: None,
+            is_ref: false,
         },
     ];
 
@@ -831,6 +801,7 @@ fn test_gen_call_args_with_let_bindings_opaque() {
         default: None,
         sanitized: false,
         typed_default: None,
+        is_ref: false,
     }];
 
     let result = binding_helpers::gen_call_args_with_let_bindings(&params, &opaque_types);
@@ -847,6 +818,7 @@ fn test_gen_call_args_with_let_bindings_non_opaque() {
         default: None,
         sanitized: false,
         typed_default: None,
+        is_ref: false,
     }];
 
     let result = binding_helpers::gen_call_args_with_let_bindings(&params, &opaque_types);
@@ -872,6 +844,7 @@ fn test_gen_named_let_bindings_non_opaque_param() {
         default: None,
         sanitized: false,
         typed_default: None,
+        is_ref: false,
     }];
 
     let result = binding_helpers::gen_named_let_bindings_pub(&params, &opaque_types);
@@ -889,6 +862,7 @@ fn test_gen_named_let_bindings_opaque_skipped() {
         default: None,
         sanitized: false,
         typed_default: None,
+        is_ref: false,
     }];
 
     let result = binding_helpers::gen_named_let_bindings_pub(&params, &opaque_types);
@@ -905,6 +879,7 @@ fn test_has_named_params_returns_true() {
         default: None,
         sanitized: false,
         typed_default: None,
+        is_ref: false,
     }];
 
     assert!(binding_helpers::has_named_params(&params, &opaque_types));
@@ -921,6 +896,7 @@ fn test_has_named_params_returns_false() {
         default: None,
         sanitized: false,
         typed_default: None,
+        is_ref: false,
     }];
 
     assert!(!binding_helpers::has_named_params(&params, &opaque_types));
@@ -933,9 +909,9 @@ fn test_is_simple_non_opaque_param_string() {
 
 #[test]
 fn test_is_simple_non_opaque_param_primitive() {
-    assert!(binding_helpers::is_simple_non_opaque_param(
-        &TypeRef::Primitive(PrimitiveType::U32)
-    ));
+    assert!(binding_helpers::is_simple_non_opaque_param(&TypeRef::Primitive(
+        PrimitiveType::U32
+    )));
 }
 
 #[test]
@@ -950,16 +926,16 @@ fn test_is_simple_non_opaque_param_duration() {
 
 #[test]
 fn test_is_simple_non_opaque_param_vec_is_false() {
-    assert!(!binding_helpers::is_simple_non_opaque_param(&TypeRef::Vec(
-        Box::new(TypeRef::String)
-    )));
+    assert!(!binding_helpers::is_simple_non_opaque_param(&TypeRef::Vec(Box::new(
+        TypeRef::String
+    ))));
 }
 
 #[test]
 fn test_is_simple_non_opaque_param_named_is_false() {
-    assert!(!binding_helpers::is_simple_non_opaque_param(
-        &TypeRef::Named("Config".to_string())
-    ));
+    assert!(!binding_helpers::is_simple_non_opaque_param(&TypeRef::Named(
+        "Config".to_string()
+    )));
 }
 
 #[test]
@@ -967,15 +943,7 @@ fn test_gen_async_body_pyo3_with_error() {
     let mut cfg = default_cfg();
     cfg.async_pattern = AsyncPattern::Pyo3FutureIntoPy;
 
-    let result = binding_helpers::gen_async_body(
-        "inner.process()",
-        &cfg,
-        true,
-        "result",
-        false,
-        "",
-        false,
-    );
+    let result = binding_helpers::gen_async_body("inner.process()", &cfg, true, "result", false, "", false);
 
     assert!(result.contains("pyo3_async_runtimes::tokio::future_into_py"));
     assert!(result.contains("await"));
@@ -987,15 +955,7 @@ fn test_gen_async_body_napi_with_error() {
     let mut cfg = default_cfg();
     cfg.async_pattern = AsyncPattern::NapiNativeAsync;
 
-    let result = binding_helpers::gen_async_body(
-        "CoreType::process()",
-        &cfg,
-        true,
-        "result",
-        false,
-        "",
-        false,
-    );
+    let result = binding_helpers::gen_async_body("CoreType::process()", &cfg, true, "result", false, "", false);
 
     assert!(result.contains("await"));
     assert!(result.contains("map_err"));
@@ -1007,15 +967,7 @@ fn test_gen_async_body_wasm_with_error() {
     let mut cfg = default_cfg();
     cfg.async_pattern = AsyncPattern::WasmNativeAsync;
 
-    let result = binding_helpers::gen_async_body(
-        "process_async()",
-        &cfg,
-        true,
-        "result",
-        false,
-        "",
-        false,
-    );
+    let result = binding_helpers::gen_async_body("process_async()", &cfg, true, "result", false, "", false);
 
     assert!(result.contains("await"));
     assert!(result.contains("JsValue"));
@@ -1050,15 +1002,10 @@ fn test_gen_unimplemented_body_with_error() {
         default: None,
         sanitized: false,
         typed_default: None,
+        is_ref: false,
     }];
 
-    let result = binding_helpers::gen_unimplemented_body(
-        &TypeRef::String,
-        "unimplemented_fn",
-        true,
-        &cfg,
-        &params,
-    );
+    let result = binding_helpers::gen_unimplemented_body(&TypeRef::String, "unimplemented_fn", true, &cfg, &params);
 
     assert!(result.contains("let _ = input;"));
     assert!(result.contains("Err(\"Not implemented"));
@@ -1069,13 +1016,7 @@ fn test_gen_unimplemented_body_string_return() {
     let cfg = default_cfg();
     let params = vec![];
 
-    let result = binding_helpers::gen_unimplemented_body(
-        &TypeRef::String,
-        "unimplemented_fn",
-        false,
-        &cfg,
-        &params,
-    );
+    let result = binding_helpers::gen_unimplemented_body(&TypeRef::String, "unimplemented_fn", false, &cfg, &params);
 
     assert!(result.contains("[unimplemented"));
 }

@@ -65,6 +65,7 @@ fn test_generated_code_example() {
                     default: None,
                     sanitized: false,
                     typed_default: None,
+                    is_ref: false,
                 },
                 ParamDef {
                     name: "config".to_string(),
@@ -73,6 +74,7 @@ fn test_generated_code_example() {
                     default: None,
                     sanitized: false,
                     typed_default: None,
+                    is_ref: false,
                 },
             ],
             return_type: TypeRef::String,

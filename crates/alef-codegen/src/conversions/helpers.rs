@@ -190,23 +190,6 @@ pub fn can_generate_enum_conversion_from_core(enum_def: &EnumDef) -> bool {
     !enum_def.variants.is_empty()
 }
 
-/// Returns true for types that are trivially convertible without needing
-/// to consult the convertible_enums/known_types sets.
-pub(crate) fn is_simple_type(ty: &TypeRef) -> bool {
-    match ty {
-        TypeRef::Primitive(_)
-        | TypeRef::String
-        | TypeRef::Char
-        | TypeRef::Bytes
-        | TypeRef::Path
-        | TypeRef::Unit
-        | TypeRef::Duration => true,
-        TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_simple_type(inner),
-        TypeRef::Map(k, v) => is_simple_type(k) && is_simple_type(v),
-        TypeRef::Named(_) | TypeRef::Json => false,
-    }
-}
-
 /// Returns true if fields represent a tuple variant (positional: _0, _1, ...).
 pub fn is_tuple_variant(fields: &[FieldDef]) -> bool {
     !fields.is_empty()
