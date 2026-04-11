@@ -229,7 +229,15 @@ pub fn format_default_value(default: &DefaultValue) -> String {
         DefaultValue::BoolLiteral(b) => format!("{}", b),
         DefaultValue::StringLiteral(s) => format!("\"{}\".to_string()", s.escape_default()),
         DefaultValue::IntLiteral(i) => format!("{}", i),
-        DefaultValue::FloatLiteral(f) => format!("{}", f),
+        DefaultValue::FloatLiteral(f) => {
+            let s = format!("{}", f);
+            // Ensure the literal is a valid Rust float (must contain '.' or 'e'/'E')
+            if s.contains('.') || s.contains('e') || s.contains('E') {
+                s
+            } else {
+                format!("{s}.0")
+            }
+        }
         DefaultValue::EnumVariant(v) => v.clone(),
         DefaultValue::Empty => "Default::default()".to_string(),
         DefaultValue::None => "None".to_string(),

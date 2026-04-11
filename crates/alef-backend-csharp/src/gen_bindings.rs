@@ -566,7 +566,6 @@ fn gen_wrapper_class(
     out.push_str("{\n");
     out.push_str("    private static readonly JsonSerializerOptions JsonOptions = new()\n");
     out.push_str("    {\n");
-    out.push_str("        Converters = { new JsonStringEnumConverter() },\n");
     out.push_str("        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull\n");
     out.push_str("    };\n\n");
 

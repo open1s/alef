@@ -166,7 +166,8 @@ fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config: &E2eConfi
         .any(|f| f.assertions.iter().any(|a| a.assertion_type == "error"));
     let has_skipped = fixtures.iter().any(|f| is_skipped(f, "python"));
 
-    let needs_pytest = has_error_test || has_skipped;
+    let is_async = e2e_config.call.r#async;
+    let needs_pytest = has_error_test || has_skipped || is_async;
 
     // "json" mode needs `import json`.
     let needs_json_import = options_via == "json"
@@ -350,7 +351,13 @@ fn render_test_function(
         let _ = writeln!(out, "@pytest.mark.skip(reason=\"{reason}\")");
     }
 
-    let _ = writeln!(out, "def test_{fn_name}() -> None:");
+    let is_async = e2e_config.call.r#async;
+    if is_async {
+        let _ = writeln!(out, "@pytest.mark.asyncio");
+        let _ = writeln!(out, "async def test_{fn_name}() -> None:");
+    } else {
+        let _ = writeln!(out, "def test_{fn_name}() -> None:");
+    }
     let _ = writeln!(out, "    \"\"\"{desc_with_period}\"\"\"");
 
     // Check if any assertion is an error assertion.
@@ -479,7 +486,8 @@ fn render_test_function(
     }
 
     let call_args = kwarg_exprs.join(", ");
-    let call_expr = format!("{function_name}({call_args})");
+    let await_prefix = if is_async { "await " } else { "" };
+    let call_expr = format!("{await_prefix}{function_name}({call_args})");
 
     if has_error_assertion {
         // Find error assertion for optional message check.

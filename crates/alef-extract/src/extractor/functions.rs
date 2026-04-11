@@ -416,6 +416,7 @@ pub(crate) fn extract_params(inputs: &syn::punctuated::Punctuated<syn::FnArg, sy
                     sanitized: false,
                     typed_default: None,
                     is_ref,
+                    newtype_wrapper: None,
                 })
             } else {
                 None // Skip self receiver

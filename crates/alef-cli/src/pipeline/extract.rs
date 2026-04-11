@@ -156,8 +156,9 @@ fn sanitize_unknown_types(api: &mut ApiSurface) {
     // Build a set of known rust_paths for types and enums.
     // This enables disambiguation of types with the same short name but different
     // module paths (e.g., `kreuzberg::types::OutputFormat` vs `kreuzberg::OutputFormat`).
-    let known_type_paths: AHashSet<String> = api.types.iter().map(|t| t.rust_path.clone()).collect();
-    let known_enum_paths: AHashSet<String> = api.enums.iter().map(|e| e.rust_path.clone()).collect();
+    // Normalize hyphens to underscores in paths for consistent comparison.
+    let known_type_paths: AHashSet<String> = api.types.iter().map(|t| t.rust_path.replace('-', "_")).collect();
+    let known_enum_paths: AHashSet<String> = api.enums.iter().map(|e| e.rust_path.replace('-', "_")).collect();
 
     for typ in &mut api.types {
         for field in &mut typ.fields {
@@ -170,12 +171,20 @@ fn sanitize_unknown_types(api: &mut ApiSurface) {
             // (e.g., crate::types::OutputFormat vs crate::core::config::OutputFormat).
             if !field.sanitized {
                 if let Some(ref path) = field.type_rust_path {
+                    let normalized_path = path.replace('-', "_");
                     if let TypeRef::Named(ref name) = field.ty {
                         // Only check if the name matches a known type/enum — otherwise it's
                         // already handled by the standard sanitization above.
                         if known_types.contains(name.as_str()) || known_enums.contains(name.as_str()) {
-                            // Check if the full path matches any known rust_path
-                            if !known_type_paths.contains(path) && !known_enum_paths.contains(path) {
+                            // Check if the full path's last segment matches any known type/enum path's last segment.
+                            // This handles cases where module paths differ but the type is the same
+                            // (e.g., crate::metadata::HtmlMetadata vs html-to-markdown-rs::HtmlMetadata).
+                            let path_type_name = normalized_path.rsplit("::").next().unwrap_or("");
+                            let path_matches = known_type_paths
+                                .iter()
+                                .chain(known_enum_paths.iter())
+                                .any(|kp| kp.rsplit("::").next().unwrap_or("") == path_type_name);
+                            if !path_matches {
                                 field.ty = TypeRef::String;
                                 field.sanitized = true;
                             }
@@ -184,9 +193,13 @@ fn sanitize_unknown_types(api: &mut ApiSurface) {
                     // Also check Named types inside Optional/Vec wrappers
                     if let TypeRef::Vec(ref inner) = field.ty {
                         if let TypeRef::Named(ref name) = **inner {
+                            let vec_path_type = normalized_path.rsplit("::").next().unwrap_or("");
+                            let vec_matches = known_type_paths
+                                .iter()
+                                .chain(known_enum_paths.iter())
+                                .any(|kp| kp.rsplit("::").next().unwrap_or("") == vec_path_type);
                             if (known_types.contains(name.as_str()) || known_enums.contains(name.as_str()))
-                                && !known_type_paths.contains(path)
-                                && !known_enum_paths.contains(path)
+                                && !vec_matches
                             {
                                 field.ty = TypeRef::String;
                                 field.sanitized = true;

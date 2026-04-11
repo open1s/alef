@@ -123,6 +123,8 @@ pub fn wrap_return(
 /// - Opaque Named types: unwrap Arc wrapper via `(*param.inner).clone()`
 /// - Non-opaque Named types: `.into()` for From conversion
 /// - String/Path/Bytes: `&param` since core functions typically take `&str`/`&Path`/`&[u8]`
+/// - Params with `newtype_wrapper` set: re-wrap the raw value in the newtype constructor
+///   (e.g., `NodeIndex(parent)`) since the binding resolved `NodeIndex(u32)` → `u32`.
 pub fn gen_call_args(params: &[ParamDef], opaque_types: &AHashSet<String>) -> String {
     params
         .iter()
@@ -135,6 +137,17 @@ pub fn gen_call_args(params: &[ParamDef], opaque_types: &AHashSet<String>) -> St
             } else {
                 String::new()
             };
+            // If this param's type was resolved from a newtype (e.g. NodeIndex(u32) → u32),
+            // re-wrap the raw value back into the newtype when calling core.
+            if let Some(newtype_path) = &p.newtype_wrapper {
+                return if p.optional {
+                    format!("{}.map({newtype_path})", p.name)
+                } else if promoted {
+                    format!("{newtype_path}({}{})", p.name, unwrap_suffix)
+                } else {
+                    format!("{newtype_path}({})", p.name)
+                };
+            }
             match &p.ty {
                 TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
                     // Opaque type: borrow through Arc to get &CoreType
@@ -212,6 +225,16 @@ pub fn gen_call_args_with_let_bindings(params: &[ParamDef], opaque_types: &AHash
             } else {
                 String::new()
             };
+            // If this param's type was resolved from a newtype, re-wrap when calling core.
+            if let Some(newtype_path) = &p.newtype_wrapper {
+                return if p.optional {
+                    format!("{}.map({newtype_path})", p.name)
+                } else if promoted {
+                    format!("{newtype_path}({}{})", p.name, unwrap_suffix)
+                } else {
+                    format!("{newtype_path}({})", p.name)
+                };
+            }
             match &p.ty {
                 TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
                     if p.optional {
@@ -424,8 +447,32 @@ pub fn gen_lossy_binding_to_core_fields(typ: &TypeDef, core_import: &str) -> Str
                     }
                     _ => format!("self.{name}.clone()"),
                 },
-                TypeRef::Map(_, _) => format!("self.{name}.clone()"),
-                TypeRef::Unit | TypeRef::Json => format!("self.{name}.clone()"),
+                TypeRef::Map(_, v) => match v.as_ref() {
+                    TypeRef::Json => {
+                        // HashMap<String, String> (binding) → HashMap<String, Value> (core)
+                        if field.optional {
+                            format!(
+                                "self.{name}.clone().map(|m| m.into_iter().map(|(k, v)| \
+                                 (k, serde_json::from_str(&v).unwrap_or(serde_json::Value::String(v)))).collect())"
+                            )
+                        } else {
+                            format!(
+                                "self.{name}.clone().into_iter().map(|(k, v)| \
+                                 (k, serde_json::from_str(&v).unwrap_or(serde_json::Value::String(v)))).collect()"
+                            )
+                        }
+                    }
+                    _ => format!("self.{name}.clone()"),
+                },
+                TypeRef::Unit => format!("self.{name}.clone()"),
+                TypeRef::Json => {
+                    // String (binding) → serde_json::Value (core)
+                    if field.optional {
+                        format!("self.{name}.as_ref().and_then(|s| serde_json::from_str(s).ok())")
+                    } else {
+                        format!("serde_json::from_str(&self.{name}).unwrap_or_default()")
+                    }
+                }
             };
             writeln!(out, "            {name}: {expr},").ok();
         }

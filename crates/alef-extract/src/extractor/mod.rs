@@ -125,6 +125,15 @@ fn resolve_newtypes(surface: &mut ApiSurface) {
         return;
     }
 
+    // Capture the full rust_path for each newtype before removing them.
+    // This is needed by codegen to re-wrap resolved primitives when calling core methods.
+    let newtype_rust_paths: AHashMap<String, String> = surface
+        .types
+        .iter()
+        .filter(|t| newtype_map.contains_key(&t.name))
+        .map(|t| (t.name.clone(), t.rust_path.replace('-', "_")))
+        .collect();
+
     // Remove newtype TypeDefs from the surface.
     surface.types.retain(|t| !newtype_map.contains_key(&t.name));
 
@@ -135,6 +144,12 @@ fn resolve_newtypes(surface: &mut ApiSurface) {
         }
         for method in &mut typ.methods {
             for param in &mut method.params {
+                // Record the newtype wrapper path before resolving, so codegen can re-wrap when calling core.
+                if let alef_core::ir::TypeRef::Named(name) = &param.ty {
+                    if let Some(rust_path) = newtype_rust_paths.get(name.as_str()) {
+                        param.newtype_wrapper = Some(rust_path.clone());
+                    }
+                }
                 resolve_typeref(&newtype_map, &mut param.ty);
             }
             resolve_typeref(&newtype_map, &mut method.return_type);
@@ -142,6 +157,11 @@ fn resolve_newtypes(surface: &mut ApiSurface) {
     }
     for func in &mut surface.functions {
         for param in &mut func.params {
+            if let alef_core::ir::TypeRef::Named(name) = &param.ty {
+                if let Some(rust_path) = newtype_rust_paths.get(name.as_str()) {
+                    param.newtype_wrapper = Some(rust_path.clone());
+                }
+            }
             resolve_typeref(&newtype_map, &mut param.ty);
         }
         resolve_typeref(&newtype_map, &mut func.return_type);

@@ -282,6 +282,7 @@ mod tests {
                     sanitized: false,
                     typed_default: None,
                     is_ref: false,
+                    newtype_wrapper: None,
                 }],
                 return_type: TypeRef::Named("ExtractionResult".to_string()),
                 is_async: false,

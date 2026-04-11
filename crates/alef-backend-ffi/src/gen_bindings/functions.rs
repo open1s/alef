@@ -163,7 +163,9 @@ pub(super) fn gen_method_wrapper(typ: &TypeDef, method: &MethodDef, prefix: &str
                     format!("&{rs}")
                 }
                 TypeRef::String | TypeRef::Char | TypeRef::Bytes if p.optional => {
-                    format!("{rs}.as_deref()")
+                    // Only convert to &str slice when the core param is a reference (&str).
+                    // When is_ref=false, the core takes Option<String> — pass owned.
+                    if p.is_ref { format!("{rs}.as_deref()") } else { rs }
                 }
                 TypeRef::Path if p.optional => rs, // Optional<PathBuf> passed owned
                 _ => rs,
@@ -331,7 +333,9 @@ pub(super) fn gen_free_function(func: &FunctionDef, prefix: &str, core_import: &
                     format!("&{rs}")
                 }
                 TypeRef::String | TypeRef::Char | TypeRef::Bytes if p.optional => {
-                    format!("{rs}.as_deref()")
+                    // Only convert to &str slice when the core param is a reference (&str).
+                    // When is_ref=false, the core takes Option<String> — pass owned.
+                    if p.is_ref { format!("{rs}.as_deref()") } else { rs }
                 }
                 TypeRef::Path if p.optional => rs, // Optional<PathBuf> passed owned
                 _ => rs,
