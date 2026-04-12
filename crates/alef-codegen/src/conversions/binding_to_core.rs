@@ -58,11 +58,12 @@ pub fn gen_from_binding_to_core_cfg(typ: &TypeDef, core_import: &str, config: &C
                 // sanitized fields keep the default value — skip
                 continue;
             }
-            // Duration field stored as Option<u64>: only override when Some
+            // Duration field stored as Option<u64/i64>: only override when Some
             if !field.optional && matches!(field.ty, TypeRef::Duration) {
+                let cast = if config.cast_large_ints_to_i64 { " as u64" } else { "" };
                 writeln!(
                     out,
-                    "        if let Some(__v) = val.{} {{ __result.{} = std::time::Duration::from_secs(__v); }}",
+                    "        if let Some(__v) = val.{} {{ __result.{} = std::time::Duration::from_secs(__v{cast}); }}",
                     field.name, field.name
                 )
                 .ok();
