@@ -266,16 +266,17 @@ fn gen_go_file(
 
 /// Generate the lastError() helper function.
 fn gen_last_error_helper(ffi_prefix: &str) -> String {
+    // Note: ctx is a borrowed pointer into thread-local storage, NOT a heap allocation.
+    // Do NOT call free_string on it — that causes a double-free crash on the next FFI call.
     format!(
         "// lastError retrieves the last error from the FFI layer.\nfunc lastError() error {{\n    \
          code := int32(C.{}_last_error_code())\n    \
          if code == 0 {{\n        return nil\n    }}\n    \
          ctx := C.{}_last_error_context()\n    \
          message := C.GoString(ctx)\n    \
-         C.{}_free_string(ctx)\n    \
          return fmt.Errorf(\"[%d] %s\", code, message)\n\
          }}",
-        ffi_prefix, ffi_prefix, ffi_prefix
+        ffi_prefix, ffi_prefix
     )
 }
 

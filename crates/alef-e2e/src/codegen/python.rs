@@ -10,7 +10,7 @@ use crate::fixture::{Assertion, Fixture, FixtureGroup};
 use alef_core::backend::GeneratedFile;
 use alef_core::config::AlefConfig;
 use anyhow::Result;
-use heck::{ToPascalCase, ToSnakeCase};
+use heck::{ToShoutySnakeCase, ToSnakeCase};
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::path::PathBuf;
@@ -577,8 +577,8 @@ fn render_test_function(
                                 let py_val = if let Some(enum_type) = enum_fields.get(k) {
                                     // Map string value to enum constant.
                                     if let Some(s) = v.as_str() {
-                                        let pascal_val = s.to_pascal_case();
-                                        format!("{enum_type}.{pascal_val}")
+                                        let upper_val = s.to_shouty_snake_case();
+                                        format!("{enum_type}.{upper_val}")
                                     } else {
                                         json_to_python_literal(v)
                                     }

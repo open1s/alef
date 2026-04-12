@@ -1064,12 +1064,12 @@ fn gen_api_py(api: &ApiSurface, module_name: &str) -> String {
                         let map_name = format!("_TO_RUST_{}_MAP", nested_name.to_uppercase());
                         if matches!(&field.ty, TypeRef::Optional(_)) || field.optional {
                             out.push_str(&format!(
-                                "        {name}={map_name}[str(value.{name})] if value.{name} is not None else None,\n",
+                                "        {name}={map_name}[value.{name}.value] if value.{name} is not None else None,\n",
                                 name = field.name,
                             ));
                         } else {
                             out.push_str(&format!(
-                                "        {name}={map_name}[str(value.{name})],\n",
+                                "        {name}={map_name}[value.{name}.value],\n",
                                 name = field.name,
                             ));
                         }
