@@ -1022,7 +1022,15 @@ fn wasm_wrap_return(
                     format!("{expr}.map(|v| Js{name} {{ inner: Arc::new(v) }})")
                 }
             }
-            _ => generators::wrap_return(expr, return_type, type_name, opaque_types, self_is_opaque, returns_ref),
+            _ => generators::wrap_return(
+                expr,
+                return_type,
+                type_name,
+                opaque_types,
+                self_is_opaque,
+                returns_ref,
+                false,
+            ),
         },
         // Vec<opaque>: wrap with Js prefix
         TypeRef::Vec(inner) => match inner.as_ref() {
@@ -1033,9 +1041,25 @@ fn wasm_wrap_return(
                     format!("{expr}.into_iter().map(|v| Js{name} {{ inner: Arc::new(v) }}).collect()")
                 }
             }
-            _ => generators::wrap_return(expr, return_type, type_name, opaque_types, self_is_opaque, returns_ref),
+            _ => generators::wrap_return(
+                expr,
+                return_type,
+                type_name,
+                opaque_types,
+                self_is_opaque,
+                returns_ref,
+                false,
+            ),
         },
-        _ => generators::wrap_return(expr, return_type, type_name, opaque_types, self_is_opaque, returns_ref),
+        _ => generators::wrap_return(
+            expr,
+            return_type,
+            type_name,
+            opaque_types,
+            self_is_opaque,
+            returns_ref,
+            false,
+        ),
     }
 }
 

@@ -579,6 +579,7 @@ fn test_wrap_return_primitive_passthrough() {
         &opaque_types,
         false,
         false,
+        false,
     );
     assert_eq!(result, "result");
 }
@@ -586,35 +587,43 @@ fn test_wrap_return_primitive_passthrough() {
 #[test]
 fn test_wrap_return_unit_passthrough() {
     let opaque_types = AHashSet::new();
-    let result = binding_helpers::wrap_return("result", &TypeRef::Unit, "MyType", &opaque_types, false, false);
+    let result = binding_helpers::wrap_return("result", &TypeRef::Unit, "MyType", &opaque_types, false, false, false);
     assert_eq!(result, "result");
 }
 
 #[test]
 fn test_wrap_return_string_ref_conversion() {
     let opaque_types = AHashSet::new();
-    let result = binding_helpers::wrap_return("result", &TypeRef::String, "MyType", &opaque_types, false, true);
+    let result = binding_helpers::wrap_return("result", &TypeRef::String, "MyType", &opaque_types, false, true, false);
     assert_eq!(result, "result.into()");
 }
 
 #[test]
 fn test_wrap_return_string_owned_passthrough() {
     let opaque_types = AHashSet::new();
-    let result = binding_helpers::wrap_return("result", &TypeRef::String, "MyType", &opaque_types, false, false);
+    let result = binding_helpers::wrap_return("result", &TypeRef::String, "MyType", &opaque_types, false, false, false);
     assert_eq!(result, "result");
 }
 
 #[test]
 fn test_wrap_return_path_conversion() {
     let opaque_types = AHashSet::new();
-    let result = binding_helpers::wrap_return("result", &TypeRef::Path, "MyType", &opaque_types, false, false);
+    let result = binding_helpers::wrap_return("result", &TypeRef::Path, "MyType", &opaque_types, false, false, false);
     assert_eq!(result, "result.to_string_lossy().to_string()");
 }
 
 #[test]
 fn test_wrap_return_duration_conversion() {
     let opaque_types = AHashSet::new();
-    let result = binding_helpers::wrap_return("result", &TypeRef::Duration, "MyType", &opaque_types, false, false);
+    let result = binding_helpers::wrap_return(
+        "result",
+        &TypeRef::Duration,
+        "MyType",
+        &opaque_types,
+        false,
+        false,
+        false,
+    );
     assert_eq!(result, "result.as_secs()");
 }
 
@@ -627,6 +636,7 @@ fn test_wrap_return_opaque_self_owned() {
         "MyType",
         &opaque_types,
         true,
+        false,
         false,
     );
     assert_eq!(result, "Self { inner: Arc::new(result) }");
@@ -643,6 +653,7 @@ fn test_wrap_return_other_opaque_type() {
         &opaque_types,
         false,
         false,
+        false,
     );
     assert_eq!(result, "OtherType { inner: Arc::new(result) }");
 }
@@ -655,6 +666,7 @@ fn test_wrap_return_non_opaque_named() {
         &TypeRef::Named("SomeType".to_string()),
         "MyType",
         &opaque_types,
+        false,
         false,
         false,
     );
@@ -671,6 +683,7 @@ fn test_wrap_return_optional_named() {
         &opaque_types,
         false,
         false,
+        false,
     );
     assert_eq!(result, "result.map(Into::into)");
 }
@@ -683,6 +696,7 @@ fn test_wrap_return_vec_named() {
         &TypeRef::Vec(Box::new(TypeRef::Named("Item".to_string()))),
         "MyType",
         &opaque_types,
+        false,
         false,
         false,
     );

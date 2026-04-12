@@ -18,12 +18,24 @@ fn python_safe_name(name: &str) -> String {
 /// For constructor parameters, use the enum type name for enum fields.
 /// The enum stub has `__init__(self, value: int | str)` so callers can pass
 /// either a raw string/int or an enum instance.
+/// Data enum fields accept a `dict`.
 fn constructor_param_type(ty: &TypeRef, api: &ApiSurface) -> String {
+    use alef_codegen::generators::enum_has_data_variants;
     let enum_names: std::collections::HashSet<String> = api.enums.iter().map(|e| e.name.clone()).collect();
+    let data_enum_names: std::collections::HashSet<String> = api
+        .enums
+        .iter()
+        .filter(|e| enum_has_data_variants(e))
+        .map(|e| e.name.clone())
+        .collect();
 
     match ty {
+        TypeRef::Named(name) if data_enum_names.contains(name) => format!("{} | dict", name),
         TypeRef::Named(name) if enum_names.contains(name) => format!("{} | str", name),
         TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Named(name) if data_enum_names.contains(name) => {
+                format!("{} | dict | None", name)
+            }
             TypeRef::Named(name) if enum_names.contains(name) => format!("{} | str | None", name),
             _ => python_type(ty),
         },
@@ -261,15 +273,20 @@ fn gen_method_stub(method: &MethodDef, is_static: bool) -> String {
 
 /// Generate a Python enum stub.
 fn gen_enum_stub(enum_def: &EnumDef) -> String {
+    use alef_codegen::generators::enum_has_data_variants;
     let mut lines = vec![];
 
     lines.push(format!("class {}:", enum_def.name));
 
-    for (idx, variant) in enum_def.variants.iter().enumerate() {
-        lines.push(format!("    {}: int = {}", variant.name, idx));
+    if enum_has_data_variants(enum_def) {
+        // Data enums are frozen structs accepting a dict.
+        lines.push("    def __init__(self, value: dict) -> None: ...".to_string());
+    } else {
+        for (idx, variant) in enum_def.variants.iter().enumerate() {
+            lines.push(format!("    {}: int = {}", variant.name, idx));
+        }
+        lines.push("    def __init__(self, value: int | str) -> None: ...".to_string());
     }
-
-    lines.push("    def __init__(self, value: int | str) -> None: ...".to_string());
 
     lines.join("\n")
 }

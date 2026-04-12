@@ -357,6 +357,7 @@ fn gen_opaque_instance_method(
                     opaque_types,
                     true,
                     method.returns_ref,
+                    method.returns_cow,
                 );
                 format!(
                     "let result = {core_call}.map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))?;\n        Ok({wrap})"
@@ -370,6 +371,7 @@ fn gen_opaque_instance_method(
                 opaque_types,
                 true,
                 method.returns_ref,
+                method.returns_cow,
             )
         }
     } else {
@@ -411,6 +413,7 @@ fn gen_opaque_async_instance_method(
             opaque_types,
             true,
             method.returns_ref,
+            method.returns_cow,
         );
         if method.error_type.is_some() {
             format!(
@@ -758,12 +761,28 @@ fn gen_function(
         let call_args = generators::gen_call_args(&func.params, opaque_types);
         let core_call = format!("{core_import}::{}({call_args})", func.name);
         if func.error_type.is_some() {
-            let wrap = generators::wrap_return("result", &func.return_type, "", opaque_types, false, func.returns_ref);
+            let wrap = generators::wrap_return(
+                "result",
+                &func.return_type,
+                "",
+                opaque_types,
+                false,
+                func.returns_ref,
+                false,
+            );
             format!(
                 "let result = {core_call}.map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))?;\n    Ok({wrap})"
             )
         } else {
-            generators::wrap_return(&core_call, &func.return_type, "", opaque_types, false, func.returns_ref)
+            generators::wrap_return(
+                &core_call,
+                &func.return_type,
+                "",
+                opaque_types,
+                false,
+                func.returns_ref,
+                false,
+            )
         }
     } else {
         gen_magnus_unimplemented_body(&func.return_type, &func.name, func.error_type.is_some())
@@ -791,8 +810,15 @@ fn gen_async_function(
     let body = if can_delegate {
         let call_args = generators::gen_call_args(&func.params, opaque_types);
         let core_call = format!("{core_import}::{}({call_args})", func.name);
-        let result_wrap =
-            generators::wrap_return("result", &func.return_type, "", opaque_types, false, func.returns_ref);
+        let result_wrap = generators::wrap_return(
+            "result",
+            &func.return_type,
+            "",
+            opaque_types,
+            false,
+            func.returns_ref,
+            false,
+        );
         if func.error_type.is_some() {
             format!(
                 "let rt = tokio::runtime::Runtime::new().map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))?;\n    \

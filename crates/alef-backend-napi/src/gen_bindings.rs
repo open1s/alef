@@ -824,7 +824,15 @@ fn napi_wrap_return(
                 format!("{expr}.into()")
             }
         }
-        _ => generators::wrap_return(expr, return_type, type_name, opaque_types, self_is_opaque, returns_ref),
+        _ => generators::wrap_return(
+            expr,
+            return_type,
+            type_name,
+            opaque_types,
+            self_is_opaque,
+            returns_ref,
+            false,
+        ),
     }
 }
 

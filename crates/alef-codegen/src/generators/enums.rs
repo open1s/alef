@@ -60,6 +60,28 @@ pub fn gen_pyo3_data_enum(enum_def: &EnumDef, core_import: &str) -> String {
     writeln!(out, "impl From<{core_path}> for {name} {{").ok();
     writeln!(out, "    fn from(val: {core_path}) -> Self {{ Self {{ inner: val }} }}").ok();
     writeln!(out, "}}").ok();
+    writeln!(out).ok();
+
+    // Serialize: forward to inner so parent structs that derive serde::Serialize compile.
+    writeln!(out, "impl serde::Serialize for {name} {{").ok();
+    writeln!(
+        out,
+        "    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {{"
+    )
+    .ok();
+    writeln!(out, "        self.inner.serialize(serializer)").ok();
+    writeln!(out, "    }}").ok();
+    writeln!(out, "}}").ok();
+    writeln!(out).ok();
+
+    // Default: forward to inner's Default so parent structs that derive Default compile.
+    writeln!(out, "impl Default for {name} {{").ok();
+    writeln!(
+        out,
+        "    fn default() -> Self {{ Self {{ inner: Default::default() }} }}"
+    )
+    .ok();
+    writeln!(out, "}}").ok();
 
     out
 }

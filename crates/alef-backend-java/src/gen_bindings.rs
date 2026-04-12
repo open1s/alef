@@ -1642,11 +1642,6 @@ fn gen_helper_methods(out: &mut String) {
         writeln!(out, "            .findAndRegisterModules()").ok();
         writeln!(
             out,
-            "            .setPropertyNamingStrategy(com.fasterxml.jackson.databind.PropertyNamingStrategies.SNAKE_CASE)"
-        )
-        .ok();
-        writeln!(
-            out,
             "            .configure(com.fasterxml.jackson.databind.MapperFeature.ACCEPT_CASE_INSENSITIVE_ENUMS, true);"
         )
         .ok();

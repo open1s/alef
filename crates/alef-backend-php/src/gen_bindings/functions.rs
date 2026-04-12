@@ -54,6 +54,7 @@ pub(crate) fn gen_instance_method(
                     opaque_types,
                     true,
                     method.returns_ref,
+                    method.returns_cow,
                 );
                 format!(
                     "let result = {core_call}.map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))?;\n    Ok({wrap})"
@@ -67,6 +68,7 @@ pub(crate) fn gen_instance_method(
                 opaque_types,
                 true,
                 method.returns_ref,
+                method.returns_cow,
             )
         }
     } else {
@@ -212,6 +214,7 @@ pub(crate) fn gen_static_method(
                     opaque_types,
                     typ.is_opaque,
                     method.returns_ref,
+                    method.returns_cow,
                 );
                 if wrap == "val" {
                     format!("{core_call}.map_err(|e| PhpException::default(e.to_string()))")
@@ -229,6 +232,7 @@ pub(crate) fn gen_static_method(
                 opaque_types,
                 typ.is_opaque,
                 method.returns_ref,
+                method.returns_cow,
             )
         }
     } else {
@@ -275,14 +279,30 @@ pub(crate) fn gen_function(
         let call_args = gen_php_call_args_with_let_bindings(&func.params, opaque_types);
         let core_call = format!("{core_import}::{}({call_args})", func.name);
         if func.error_type.is_some() {
-            let wrap = generators::wrap_return("result", &func.return_type, "", opaque_types, false, func.returns_ref);
+            let wrap = generators::wrap_return(
+                "result",
+                &func.return_type,
+                "",
+                opaque_types,
+                false,
+                func.returns_ref,
+                false,
+            );
             format!(
                 "{let_bindings}let result = {core_call}.map_err(|e| ext_php_rs::exception::PhpException::default(e.to_string()))?;\n    Ok({wrap})"
             )
         } else {
             format!(
                 "{let_bindings}{}",
-                generators::wrap_return(&core_call, &func.return_type, "", opaque_types, false, func.returns_ref)
+                generators::wrap_return(
+                    &core_call,
+                    &func.return_type,
+                    "",
+                    opaque_types,
+                    false,
+                    func.returns_ref,
+                    false
+                )
             )
         }
     } else {
@@ -323,8 +343,15 @@ pub(crate) fn gen_async_function(
         let let_bindings = gen_php_named_let_bindings(&func.params, opaque_types, core_import);
         let call_args = gen_php_call_args_with_let_bindings(&func.params, opaque_types);
         let core_call = format!("{core_import}::{}({call_args})", func.name);
-        let result_wrap =
-            generators::wrap_return("result", &func.return_type, "", opaque_types, false, func.returns_ref);
+        let result_wrap = generators::wrap_return(
+            "result",
+            &func.return_type,
+            "",
+            opaque_types,
+            false,
+            func.returns_ref,
+            false,
+        );
         if func.error_type.is_some() {
             format!(
                 "{let_bindings}WORKER_RUNTIME.block_on(async {{\n        \
@@ -386,6 +413,7 @@ pub(crate) fn gen_async_instance_method(
             opaque_types,
             true,
             method.returns_ref,
+            method.returns_cow,
         );
         if method.error_type.is_some() {
             format!(

@@ -166,6 +166,7 @@ pub fn gen_function(
                 opaque_types,
                 false,
                 func.returns_ref,
+                false,
             ),
         };
         let async_body = gen_async_body(

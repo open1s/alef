@@ -128,6 +128,7 @@ pub fn gen_method(
             opaque_types,
             is_opaque,
             method.returns_ref,
+            method.returns_cow,
         )
     } else {
         // For non-opaque types, only use From conversion if the return type is simple
@@ -175,6 +176,7 @@ pub fn gen_method(
                     opaque_types,
                     is_opaque,
                     method.returns_ref,
+                    method.returns_cow,
                 );
                 format!("{serde_bindings}let result = {core_call}{err_conv}?;\n        Ok({wrap})")
             }
@@ -196,10 +198,13 @@ pub fn gen_method(
             };
             let core_call = format!("core_self.{}({call_args})", method.name);
             let result_wrap = match &method.return_type {
-                // When returns_ref=true for Named types, the core method returns Cow<'_, T>
-                // (or &T). Use .into_owned() to get an owned T before converting.
-                TypeRef::Named(n) if n == type_name && method.returns_ref => ".into_owned().into()".to_string(),
-                TypeRef::Named(_) if method.returns_ref => ".into_owned().into()".to_string(),
+                // When returns_cow=true the core returns Cow<'_, T>: call .into_owned() to
+                // obtain an owned T before the binding→core From conversion.
+                // When returns_ref=true (or &T / Cow<'_, T> via the old flag), same treatment.
+                TypeRef::Named(n) if n == type_name && (method.returns_cow || method.returns_ref) => {
+                    ".into_owned().into()".to_string()
+                }
+                TypeRef::Named(_) if method.returns_cow || method.returns_ref => ".into_owned().into()".to_string(),
                 TypeRef::Named(n) if n == type_name => ".into()".to_string(),
                 TypeRef::Named(_) => ".into()".to_string(),
                 TypeRef::String | TypeRef::Bytes | TypeRef::Path => {
@@ -293,6 +298,7 @@ pub fn gen_method(
                         opaque_types,
                         is_opaque,
                         method.returns_ref,
+                        method.returns_cow,
                     );
                     format!("let result = {core_call}{err_conv}?;\n        Ok({wrap})")
                 }
@@ -307,6 +313,7 @@ pub fn gen_method(
                 opaque_types,
                 is_opaque,
                 method.returns_ref,
+                method.returns_cow,
             )
         } else {
             core_call
@@ -459,6 +466,7 @@ pub fn gen_static_method(
                 opaque_types,
                 typ.is_opaque,
                 method.returns_ref,
+                method.returns_cow,
             );
             if wrapped == "val" {
                 format!("{core_call}{err_conv}")
@@ -474,6 +482,7 @@ pub fn gen_static_method(
                 opaque_types,
                 typ.is_opaque,
                 method.returns_ref,
+                method.returns_cow,
             )
         }
     };

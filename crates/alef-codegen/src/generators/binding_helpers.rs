@@ -10,6 +10,9 @@ use std::fmt::Write;
 /// - `TypeRef::Named(n)` where `n` is a non-opaque type → `todo!()` placeholder (From may not exist)
 /// - Everything else (primitives, String, Vec, etc.) → pass through unchanged
 /// - `TypeRef::Unit` → pass through unchanged
+///
+/// When `returns_cow` is true the core method returns `Cow<'_, T>`. `.into_owned()` is emitted
+/// before any further type conversion to obtain an owned `T`.
 pub fn wrap_return(
     expr: &str,
     return_type: &TypeRef,
@@ -17,17 +20,22 @@ pub fn wrap_return(
     opaque_types: &AHashSet<String>,
     self_is_opaque: bool,
     returns_ref: bool,
+    returns_cow: bool,
 ) -> String {
     match return_type {
         TypeRef::Named(n) if n == type_name && self_is_opaque => {
-            if returns_ref {
+            if returns_cow {
+                format!("Self {{ inner: Arc::new({expr}.into_owned()) }}")
+            } else if returns_ref {
                 format!("Self {{ inner: Arc::new({expr}.clone()) }}")
             } else {
                 format!("Self {{ inner: Arc::new({expr}) }}")
             }
         }
         TypeRef::Named(n) if opaque_types.contains(n.as_str()) => {
-            if returns_ref {
+            if returns_cow {
+                format!("{n} {{ inner: Arc::new({expr}.into_owned()) }}")
+            } else if returns_ref {
                 format!("{n} {{ inner: Arc::new({expr}.clone()) }}")
             } else {
                 format!("{n} {{ inner: Arc::new({expr}) }}")
@@ -35,8 +43,11 @@ pub fn wrap_return(
         }
         TypeRef::Named(_) => {
             // Non-opaque Named return type — use .into() for core→binding From conversion.
+            // When the core returns a Cow, call .into_owned() first to get an owned T.
             // When the core returns a reference, clone first since From<&T> typically doesn't exist.
-            if returns_ref {
+            if returns_cow {
+                format!("{expr}.into_owned().into()")
+            } else if returns_ref {
                 format!("{expr}.clone().into()")
             } else {
                 format!("{expr}.into()")

@@ -568,6 +568,7 @@ fn gen_wrapper_class(
     out.push_str("{\n");
     out.push_str("    private static readonly JsonSerializerOptions JsonOptions = new()\n");
     out.push_str("    {\n");
+    out.push_str("        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) },\n");
     out.push_str("        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull\n");
     out.push_str("    };\n\n");
 
@@ -1314,9 +1315,6 @@ fn gen_enum(enum_def: &EnumDef, namespace: &str) -> String {
     }
 
     let enum_pascal = enum_def.name.to_pascal_case();
-    out.push_str(&format!(
-        "[JsonConverter(typeof(JsonStringEnumConverter<{enum_pascal}>))]\n"
-    ));
     out.push_str(&format!("public enum {enum_pascal}\n"));
     out.push_str("{\n");
 
