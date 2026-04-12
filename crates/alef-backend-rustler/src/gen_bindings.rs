@@ -268,7 +268,6 @@ impl Backend for RustlerBackend {
                 func.name.to_snake_case()
             };
             let doc_line = func.doc.lines().next().unwrap_or("Function");
-            content.push_str(&format!("  @doc \"{doc_line}\"\n"));
 
             let param_types: Vec<String> = func
                 .params
@@ -279,20 +278,51 @@ impl Backend for RustlerBackend {
                 })
                 .collect();
             let return_spec = elixir_return_typespec(&func.return_type, func.error_type.is_some(), &opaque_types);
-            content.push_str(&format!("  @spec {nif_fn_name}("));
-            content.push_str(&param_types.join(", "));
-            content.push_str(&format!(") :: {return_spec}\n"));
+            let all_params: Vec<String> = func.params.iter().map(|p| p.name.to_snake_case()).collect();
 
-            let params: Vec<String> = func.params.iter().map(|p| p.name.to_snake_case()).collect();
-            if params.is_empty() {
-                content.push_str(&format!("  def {nif_fn_name} do\n"));
-                content.push_str(&format!("    {native_mod}.{nif_fn_name}()\n"));
+            // Count how many trailing parameters are optional so we can emit shorter-arity overloads.
+            let trailing_optional_count = func.params.iter().rev().take_while(|p| p.optional).count();
+
+            // Emit one @spec/@doc per arity variant (shortest to longest).
+            // The shortest arity fills optional params with nil.
+            let arity_variants: Vec<usize> = if trailing_optional_count > 0 {
+                ((all_params.len() - trailing_optional_count)..=all_params.len()).collect()
             } else {
-                content.push_str(&format!("  def {nif_fn_name}({})", params.join(", ")));
-                content.push_str(" do\n");
-                content.push_str(&format!("    {native_mod}.{nif_fn_name}({})\n", params.join(", ")));
+                vec![all_params.len()]
+            };
+
+            for arity in &arity_variants {
+                let arity_params = &all_params[..*arity];
+                let arity_types = &param_types[..*arity];
+
+                content.push_str(&format!("  @doc \"{doc_line}\"\n"));
+                content.push_str(&format!("  @spec {nif_fn_name}("));
+                content.push_str(&arity_types.join(", "));
+                content.push_str(&format!(") :: {return_spec}\n"));
+
+                // Build the call: fill missing optional params with nil
+                let nif_call_args: Vec<String> = all_params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| if i < *arity { p.clone() } else { "nil".to_string() })
+                    .collect();
+
+                if arity_params.is_empty() {
+                    content.push_str(&format!("  def {nif_fn_name} do\n"));
+                    content.push_str(&format!(
+                        "    {native_mod}.{nif_fn_name}({})\n",
+                        nif_call_args.join(", ")
+                    ));
+                } else {
+                    content.push_str(&format!("  def {nif_fn_name}({})", arity_params.join(", ")));
+                    content.push_str(" do\n");
+                    content.push_str(&format!(
+                        "    {native_mod}.{nif_fn_name}({})\n",
+                        nif_call_args.join(", ")
+                    ));
+                }
+                content.push_str("  end\n\n");
             }
-            content.push_str("  end\n\n");
         }
 
         // Wrapper functions for type methods (e.g., conversionoptions_default)

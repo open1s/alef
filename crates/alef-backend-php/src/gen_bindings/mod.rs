@@ -252,6 +252,9 @@ impl Backend for PhpBackend {
             ));
         }
 
+        // PHP module entry point — required for ext-php-rs to register the extension
+        builder.add_item("#[php_module]\npub fn get_module(module: ModuleBuilder) -> ModuleBuilder {\n    module\n}");
+
         let content = builder.build();
 
         Ok(vec![GeneratedFile {

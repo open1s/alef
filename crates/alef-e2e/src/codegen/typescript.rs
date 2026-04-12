@@ -259,19 +259,16 @@ fn render_test_case(
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
 
     if expects_error {
-        let _ = writeln!(out, "  it('{test_name}: {description}', {async_kw}() => {{");
+        let _ = writeln!(out, "  it('{test_name}: {description}', async () => {{");
         let (setup_lines, args_str) = build_args_and_setup(&fixture.input, args, options_type, &fixture.id);
+        // Wrap ALL setup lines and the function call inside the expect block so that
+        // synchronous throws from handle constructors (e.g. createEngine) are also caught.
+        let _ = writeln!(out, "    await expect(async () => {{");
         for line in &setup_lines {
-            let _ = writeln!(out, "    {line}");
+            let _ = writeln!(out, "      {line}");
         }
-        if is_async {
-            let _ = writeln!(
-                out,
-                "    await expect({async_kw}() => {await_kw}{function_name}({args_str})).rejects.toThrow();"
-            );
-        } else {
-            let _ = writeln!(out, "    expect(() => {function_name}({args_str})).toThrow();");
-        }
+        let _ = writeln!(out, "      await {function_name}({args_str});");
+        let _ = writeln!(out, "    }}).rejects.toThrow();");
         let _ = writeln!(out, "  }});");
         return;
     }
@@ -415,9 +412,14 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
             if let Some(expected) = &assertion.value {
                 let js_val = json_to_js(expected);
                 // For string equality, trim trailing whitespace to handle trailing newlines
-                // from the converter.
+                // from the converter. Use null-coalescing for optional fields.
                 if expected.is_string() {
-                    let _ = writeln!(out, "    expect({field_expr}.trim()).toBe({js_val});");
+                    let resolved = assertion.field.as_deref().unwrap_or("");
+                    if !resolved.is_empty() && field_resolver.is_optional(field_resolver.resolve(resolved)) {
+                        let _ = writeln!(out, "    expect(({field_expr} ?? \"\").trim()).toBe({js_val});");
+                    } else {
+                        let _ = writeln!(out, "    expect({field_expr}.trim()).toBe({js_val});");
+                    }
                 } else {
                     let _ = writeln!(out, "    expect({field_expr}).toBe({js_val});");
                 }
@@ -426,7 +428,16 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         "contains" => {
             if let Some(expected) = &assertion.value {
                 let js_val = json_to_js(expected);
-                let _ = writeln!(out, "    expect({field_expr}).toContain({js_val});");
+                // Use null-coalescing for optional string fields to handle null/undefined values.
+                let resolved = assertion.field.as_deref().unwrap_or("");
+                if !resolved.is_empty()
+                    && expected.is_string()
+                    && field_resolver.is_optional(field_resolver.resolve(resolved))
+                {
+                    let _ = writeln!(out, "    expect({field_expr} ?? \"\").toContain({js_val});");
+                } else {
+                    let _ = writeln!(out, "    expect({field_expr}).toContain({js_val});");
+                }
             }
         }
         "contains_all" => {
@@ -444,7 +455,13 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
             }
         }
         "not_empty" => {
-            let _ = writeln!(out, "    expect({field_expr}.length).toBeGreaterThan(0);");
+            // Use null-coalescing for optional fields to handle null/undefined values.
+            let resolved = assertion.field.as_deref().unwrap_or("");
+            if !resolved.is_empty() && field_resolver.is_optional(field_resolver.resolve(resolved)) {
+                let _ = writeln!(out, "    expect(({field_expr} ?? \"\").length).toBeGreaterThan(0);");
+            } else {
+                let _ = writeln!(out, "    expect({field_expr}.length).toBeGreaterThan(0);");
+            }
         }
         "is_empty" => {
             // Use null-coalescing for optional string fields to handle null/undefined values.
@@ -492,7 +509,16 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         "starts_with" => {
             if let Some(expected) = &assertion.value {
                 let js_val = json_to_js(expected);
-                let _ = writeln!(out, "    expect({field_expr}.startsWith({js_val})).toBe(true);");
+                // Use null-coalescing for optional fields to handle null/undefined values.
+                let resolved = assertion.field.as_deref().unwrap_or("");
+                if !resolved.is_empty() && field_resolver.is_optional(field_resolver.resolve(resolved)) {
+                    let _ = writeln!(
+                        out,
+                        "    expect(({field_expr} ?? \"\").startsWith({js_val})).toBe(true);"
+                    );
+                } else {
+                    let _ = writeln!(out, "    expect({field_expr}.startsWith({js_val})).toBe(true);");
+                }
             }
         }
         "count_min" => {

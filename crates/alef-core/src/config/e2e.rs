@@ -64,6 +64,18 @@ pub struct E2eConfig {
     /// ```
     #[serde(default)]
     pub fields_c_types: HashMap<String, String>,
+    /// Fields whose resolved type is an enum in the generated bindings.
+    ///
+    /// When a `contains` / `contains_all` / etc. assertion targets one of these
+    /// fields, language generators that cannot call `.contains()` directly on an
+    /// enum (e.g., Java) will emit a string-conversion call first.
+    ///
+    /// Use the fixture field path (before alias resolution), e.g.:
+    /// ```toml
+    /// fields_enum = ["links[].link_type", "browser.js_render_hint"]
+    /// ```
+    #[serde(default)]
+    pub fields_enum: HashSet<String>,
 }
 
 impl E2eConfig {
@@ -196,6 +208,24 @@ pub struct CallOverride {
     /// `AuthConfig(type="basic", ...)`.
     #[serde(default)]
     pub handle_dict_types: HashSet<String>,
+    /// Elixir struct module name for the handle config argument.
+    ///
+    /// When set, the generated Elixir handle config uses struct literal syntax
+    /// (`%Module.StructType{key: val}`) instead of a plain string-keyed map.
+    /// Rustler `NifStruct` requires a proper Elixir struct — plain maps are rejected.
+    ///
+    /// E.g., `"CrawlConfig"` generates `%Kreuzcrawl.CrawlConfig{download_assets: true}`.
+    #[serde(default)]
+    pub handle_struct_type: Option<String>,
+    /// Handle config fields whose list values are Elixir atoms (Rustler NifUnitEnum).
+    ///
+    /// When a config field is a `Vec<EnumType>` in Rust, the Elixir side must pass
+    /// a list of atoms (e.g., `[:image, :document]`) not strings (`["image"]`).
+    /// List the field names here so the generator emits atom literals instead of strings.
+    ///
+    /// E.g., `["asset_types"]` generates `asset_types: [:image]` instead of `["image"]`.
+    #[serde(default)]
+    pub handle_atom_list_fields: HashSet<String>,
 }
 
 /// Per-language package reference configuration.

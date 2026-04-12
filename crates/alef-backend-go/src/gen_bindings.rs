@@ -2,7 +2,7 @@ use crate::type_map::{go_optional_type, go_type};
 use alef_codegen::naming::to_go_name;
 use alef_core::backend::{Backend, BuildConfig, Capabilities, GeneratedFile};
 use alef_core::config::{AlefConfig, Language, resolve_output_dir};
-use alef_core::ir::{ApiSurface, EnumDef, FieldDef, FunctionDef, MethodDef, TypeDef, TypeRef};
+use alef_core::ir::{ApiSurface, DefaultValue, EnumDef, FieldDef, FunctionDef, MethodDef, TypeDef, TypeRef};
 use heck::{ToLowerCamelCase, ToPascalCase, ToSnakeCase};
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -24,6 +24,35 @@ fn apply_serde_rename(field_name: &str, rename_all: Option<&str>) -> String {
         Some("SCREAMING_SNAKE_CASE") => field_name.to_uppercase(),
         // snake_case is the Rust default — field names are already snake_case.
         _ => field_name.to_string(),
+    }
+}
+
+/// Returns true if a non-optional struct field should be emitted as a pointer type with
+/// `omitempty` in a struct that has `has_default: true`.
+///
+/// This is necessary when the Go zero value for a field differs from the Rust `Default` value.
+/// Without pointer+omitempty, unset fields serialize as their Go zero value (0, false, ""), which
+/// the Rust FFI layer may reject or misinterpret (e.g., `request_timeout: 0` is invalid).
+///
+/// Cases that require pointer+omitempty:
+/// - `TypeRef::Duration` — Duration zero is always invalid; real defaults are non-zero (e.g., 30s)
+/// - `BoolLiteral(true)` — Rust default is `true`, Go zero is `false`
+/// - `IntLiteral(n)` where n != 0 — Rust default is n, Go zero is 0
+/// - `FloatLiteral(f)` where f != 0.0 — Rust default is f, Go zero is 0.0
+/// - `StringLiteral(s)` where !s.is_empty() — Rust default is s, Go zero is ""
+/// - `EnumVariant(_)` — Rust default is a specific variant, Go zero is ""
+fn needs_omitempty_pointer(field: &FieldDef) -> bool {
+    // Duration fields always need pointer+omitempty: zero duration is invalid in Rust
+    if matches!(field.ty, TypeRef::Duration) {
+        return true;
+    }
+    match &field.typed_default {
+        Some(DefaultValue::BoolLiteral(true)) => true,
+        Some(DefaultValue::IntLiteral(n)) if *n != 0 => true,
+        Some(DefaultValue::FloatLiteral(f)) if *f != 0.0 => true,
+        Some(DefaultValue::StringLiteral(s)) if !s.is_empty() => true,
+        Some(DefaultValue::EnumVariant(_)) => true,
+        _ => false,
     }
 }
 
@@ -453,18 +482,27 @@ fn gen_struct_type(typ: &TypeDef) -> String {
             continue;
         }
 
+        // A non-optional field in a defaulted struct may still need pointer+omitempty when
+        // the Go zero value differs from the Rust Default value (e.g., Duration, bool true, int != 0).
+        let use_default_pointer = !field.optional && typ.has_default && needs_omitempty_pointer(field);
+
         let field_type = if field.optional {
+            go_optional_type(&field.ty)
+        } else if use_default_pointer {
+            // Emit as pointer so that an unset field serializes as absent (omitempty),
+            // letting Rust serde fill in the real default instead of seeing a zero value.
             go_optional_type(&field.ty)
         } else {
             go_type(&field.ty)
         };
 
         // Determine json tag - apply serde rename_all strategy.
-        // Use omitempty for optional fields and slice/map types (nil slices serialize to null
-        // in Go, which breaks Rust serde deserialization expecting an array).
+        // Use omitempty for optional fields, slice/map types (nil slices serialize to null
+        // in Go, which breaks Rust serde deserialization expecting an array), and fields
+        // where the Go zero value differs from the Rust Default value.
         let json_name = apply_serde_rename(&field.name, typ.serde_rename_all.as_deref());
         let is_collection = matches!(&field.ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
-        let json_tag = if field.optional || is_collection {
+        let json_tag = if field.optional || is_collection || use_default_pointer {
             format!("json:\"{},omitempty\"", json_name)
         } else {
             format!("json:\"{}\"", json_name)
@@ -1276,9 +1314,10 @@ fn gen_config_options(typ: &TypeDef, enum_names: &std::collections::HashSet<&str
             typ.name, field_go_name, param_type, typ.name
         )
         .ok();
-        // Optional fields use pointer types in the struct (e.g., *string), so we need
-        // to take the address of v when assigning to produce the correct pointer value.
-        let assign_val = if field.optional { "&v" } else { "v" };
+        // Optional fields and fields that use pointer+omitempty (to preserve Rust defaults) both
+        // store pointer types in the struct, so we must take the address of v when assigning.
+        let use_ptr = field.optional || needs_omitempty_pointer(field);
+        let assign_val = if use_ptr { "&v" } else { "v" };
         writeln!(
             out,
             "    return func(c *{}) {{ c.{} = {} }}",
@@ -1306,8 +1345,10 @@ fn gen_config_options(typ: &TypeDef, enum_names: &std::collections::HashSet<&str
         }
 
         let field_go_name = to_go_name(&field.name);
-        let default_val = if field.optional {
-            // Optional fields in Go are pointer types — always default to nil
+        let default_val = if field.optional || needs_omitempty_pointer(field) {
+            // Optional fields and fields that use pointer+omitempty (to preserve Rust defaults)
+            // are pointer types. Set to nil so they serialize as absent, letting Rust serde
+            // fill in the real default instead of seeing a Go zero value.
             "nil".to_string()
         } else {
             let mut val = alef_codegen::config_gen::default_value_for_field(field, "go");

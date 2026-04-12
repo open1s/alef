@@ -515,6 +515,22 @@ require '{ext_name}'
         ext_name = ext_name,
     );
 
+    let extconf_content = format!(
+        r#"# frozen_string_literal: true
+
+require 'mkmf'
+require 'rb_sys/mkmf'
+
+default_profile = ENV.fetch('CARGO_PROFILE', 'release')
+
+create_rust_makefile('{ext_name}') do |config|
+  config.profile = default_profile.to_sym
+  config.ext_dir = 'native'
+end
+"#,
+        ext_name = ext_name,
+    );
+
     Ok(vec![
         GeneratedFile {
             path: PathBuf::from(format!("packages/ruby/{}.gemspec", gem_name)),
@@ -534,6 +550,11 @@ require '{ext_name}'
         GeneratedFile {
             path: PathBuf::from(format!("packages/ruby/lib/{}.rb", gem_name)),
             content: lib_content,
+            generated_header: true,
+        },
+        GeneratedFile {
+            path: PathBuf::from(format!("packages/ruby/ext/{ext_name}/extconf.rb", ext_name = ext_name)),
+            content: extconf_content,
             generated_header: true,
         },
     ])
@@ -1234,7 +1255,7 @@ mod tests {
         let config = test_config();
         let api = test_api();
         let files = scaffold(&api, &config, &[Language::Ruby]).unwrap();
-        assert_eq!(files.len(), 5);
+        assert_eq!(files.len(), 6);
         let content = &files[0].content;
         assert!(content.contains("spec.required_ruby_version"));
         assert!(content.contains("spec.extensions"));
@@ -1248,11 +1269,15 @@ mod tests {
         // Check for lib entry point generation
         assert_eq!(files[3].path, PathBuf::from("packages/ruby/lib/my_lib.rb"));
         assert!(files[3].content.contains("require 'my_lib_rb'"));
+        // Check for extconf.rb generation
+        assert_eq!(files[4].path, PathBuf::from("packages/ruby/ext/my_lib_rb/extconf.rb"));
+        assert!(files[4].content.contains("create_rust_makefile"));
+        assert!(files[4].content.contains("rb_sys/mkmf"));
         // Check for Cargo.toml generation
         assert_eq!(
-            files[4].path,
+            files[5].path,
             PathBuf::from("packages/ruby/ext/my-lib_rb/native/Cargo.toml")
         );
-        assert!(files[4].content.contains("magnus"));
+        assert!(files[5].content.contains("magnus"));
     }
 }
