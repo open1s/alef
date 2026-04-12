@@ -898,7 +898,9 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 {crate_name} = {{ path = "../{core_crate_dir}"{features} }}
+serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
+tokio = {{ version = "1", features = ["full"] }}
 
 [build-dependencies]
 cbindgen = "0.28"
