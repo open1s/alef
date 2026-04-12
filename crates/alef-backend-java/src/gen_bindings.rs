@@ -88,6 +88,22 @@ impl Backend for JavaBackend {
 
         let mut files = Vec::new();
 
+        // 0. package-info.java - required by Checkstyle
+        let description = config
+            .scaffold
+            .as_ref()
+            .and_then(|s| s.description.as_deref())
+            .unwrap_or("High-performance HTML to Markdown converter.");
+        files.push(GeneratedFile {
+            path: base_path.join("package-info.java"),
+            content: format!(
+                "/**\n * {description}\n */\npackage {package};\n",
+                description = description,
+                package = package,
+            ),
+            generated_header: true,
+        });
+
         // 1. NativeLib.java - FFI method handles
         files.push(GeneratedFile {
             path: base_path.join("NativeLib.java"),
