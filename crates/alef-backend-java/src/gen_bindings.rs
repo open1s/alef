@@ -1442,7 +1442,7 @@ fn gen_java_tagged_union(package: &str, enum_def: &EnumDef) -> String {
                 .collect();
 
             let single = format!(
-                "    record {}({}) implements {} {{}}",
+                "    record {}({}) implements {} {{ }}",
                 variant.name,
                 field_parts.join(", "),
                 enum_def.name
@@ -1459,7 +1459,7 @@ fn gen_java_tagged_union(package: &str, enum_def: &EnumDef) -> String {
             } else {
                 writeln!(
                     out,
-                    "    record {}({}) implements {} {{}}",
+                    "    record {}({}) implements {} {{ }}",
                     variant.name,
                     field_parts.join(", "),
                     enum_def.name

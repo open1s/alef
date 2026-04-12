@@ -387,7 +387,7 @@ fn scaffold_ruby(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<Ge
   spec.description   = "{description}"
   spec.homepage      = "{repository}"
   spec.license       = "{license}"
-  spec.required_ruby_version = ">= 2.7.0"
+  spec.required_ruby_version = ">= 3.2.0"
 {metadata}
   spec.files         = Dir.glob(["lib/**/*", "ext/**/*"])
   spec.require_paths = ["lib"]
@@ -718,9 +718,6 @@ fn scaffold_java(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<Ge
                 <configuration>
                     <source>21</source>
                     <target>21</target>
-                    <compilerArgs>
-                        <arg>--enable-preview</arg>
-                    </compilerArgs>
                 </configuration>
             </plugin>
             <plugin>
@@ -728,8 +725,28 @@ fn scaffold_java(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<Ge
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
                 <configuration>
-                    <argLine>--enable-preview --enable-native-access=ALL-UNNAMED -Djava.library.path=${{project.basedir}}/../../target/release</argLine>
+                    <argLine>--enable-native-access=ALL-UNNAMED -Djava.library.path=${{project.basedir}}/../../target/release</argLine>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>com.diffplug.spotless</groupId>
+                <artifactId>spotless-maven-plugin</artifactId>
+                <version>3.4.0</version>
+                <configuration>
+                    <java>
+                        <googleJavaFormat>
+                            <version>1.25.2</version>
+                        </googleJavaFormat>
+                    </java>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>apply</goal>
+                        </goals>
+                        <phase>process-sources</phase>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>
@@ -1148,7 +1165,6 @@ mod tests {
         assert!(content.contains("<dependencies>"));
         assert!(content.contains("<build>"));
         assert!(content.contains("maven-compiler-plugin"));
-        assert!(content.contains("--enable-preview"));
         assert!(content.contains("maven-surefire-plugin"));
         assert!(content.contains("--enable-native-access=ALL-UNNAMED"));
         assert!(content.contains("-Djava.library.path=${project.basedir}/../../target/release"));
