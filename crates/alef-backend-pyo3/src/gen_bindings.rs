@@ -391,7 +391,7 @@ impl Backend for Pyo3Backend {
 /// it is emitted as a `TypedDict` (with `total=False`) instead of a `@dataclass`.
 fn gen_options_py(api: &ApiSurface, _package_name: &str, dto: &DtoConfig) -> String {
     use alef_core::ir::TypeRef;
-    use heck::ToSnakeCase;
+    use heck::{ToShoutySnakeCase, ToSnakeCase};
 
     // Determine whether any type will be emitted as TypedDict so we know which imports to add.
     let output_style = dto.python_output_style();
@@ -489,7 +489,11 @@ fn gen_options_py(api: &ApiSurface, _package_name: &str, dto: &DtoConfig) -> Str
         }
         for variant in &enum_def.variants {
             let value = variant.name.to_snake_case();
-            out.push_str(&format!("    {} = \"{}\"\n", variant.name.to_uppercase(), value));
+            out.push_str(&format!(
+                "    {} = \"{}\"\n",
+                variant.name.to_shouty_snake_case(),
+                value
+            ));
         }
         out.push_str("\n\n");
     }
@@ -1064,12 +1068,12 @@ fn gen_api_py(api: &ApiSurface, module_name: &str) -> String {
                         let map_name = format!("_TO_RUST_{}_MAP", nested_name.to_uppercase());
                         if matches!(&field.ty, TypeRef::Optional(_)) || field.optional {
                             out.push_str(&format!(
-                                "        {name}={map_name}[value.{name}.value] if value.{name} is not None else None,\n",
+                                "        {name}={map_name}[value.{name}] if value.{name} is not None else None,\n",
                                 name = field.name,
                             ));
                         } else {
                             out.push_str(&format!(
-                                "        {name}={map_name}[value.{name}.value],\n",
+                                "        {name}={map_name}[value.{name}],\n",
                                 name = field.name,
                             ));
                         }
