@@ -348,6 +348,25 @@ impl AlefConfig {
             })
     }
 
+    /// Get the directory name of the core crate (derived from sources or falling back to name).
+    ///
+    /// For example, if `sources` contains `"crates/html-to-markdown/src/lib.rs"`, this returns
+    /// `"html-to-markdown"`.  Used by the scaffold to generate correct `path = "../../crates/…"`
+    /// references in binding-crate `Cargo.toml` files.
+    pub fn core_crate_dir(&self) -> String {
+        // Try to derive from first source path: "crates/foo/src/lib.rs" → "foo"
+        if let Some(first_source) = self.crate_config.sources.first() {
+            let path = std::path::Path::new(first_source);
+            // Walk up from src/lib.rs to get the crate directory (parent of "src").
+            if let Some(crate_dir) = path.parent().and_then(|p| p.parent()) {
+                if let Some(dir_name) = crate_dir.file_name() {
+                    return dir_name.to_string_lossy().into_owned();
+                }
+            }
+        }
+        self.crate_config.name.clone()
+    }
+
     /// Get the R package name.
     pub fn r_package_name(&self) -> String {
         self.r

@@ -262,6 +262,11 @@ impl Backend for RustlerBackend {
 
         // Wrapper functions for top-level API functions
         for func in &api.functions {
+            let nif_fn_name = if func.is_async {
+                format!("{}_async", func.name.to_snake_case())
+            } else {
+                func.name.to_snake_case()
+            };
             let doc_line = func.doc.lines().next().unwrap_or("Function");
             content.push_str(&format!("  @doc \"{doc_line}\"\n"));
 
@@ -274,19 +279,15 @@ impl Backend for RustlerBackend {
                 })
                 .collect();
             let return_spec = elixir_return_typespec(&func.return_type, func.error_type.is_some(), &opaque_types);
-            content.push_str(&format!("  @spec {}(", func.name.to_snake_case()));
+            content.push_str(&format!("  @spec {nif_fn_name}("));
             content.push_str(&param_types.join(", "));
             content.push_str(&format!(") :: {return_spec}\n"));
 
             let params: Vec<String> = func.params.iter().map(|p| p.name.to_snake_case()).collect();
-            content.push_str(&format!("  def {}(", func.name.to_snake_case()));
+            content.push_str(&format!("  def {nif_fn_name}("));
             content.push_str(&params.join(", "));
             content.push_str(") do\n");
-            content.push_str(&format!(
-                "    {native_mod}.{}({})\n",
-                func.name.to_snake_case(),
-                params.join(", ")
-            ));
+            content.push_str(&format!("    {native_mod}.{nif_fn_name}({})\n", params.join(", ")));
             content.push_str("  end\n\n");
         }
 

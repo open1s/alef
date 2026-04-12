@@ -98,14 +98,14 @@ fn scaffold_meta(config: &AlefConfig) -> ScaffoldMeta {
 }
 
 fn scaffold_python_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
-    let name = &config.crate_config.name;
     let version = &api.version;
     let module_name = config.python_module_name();
     let core_import = config.core_import();
+    let core_crate_dir = config.core_crate_dir();
 
     let content = format!(
         r#"[package]
-name = "{name}-py"
+name = "{core_crate_dir}-py"
 version = "{version}"
 edition = "2024"
 
@@ -121,16 +121,16 @@ serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 tokio = {{ version = "1", features = ["full"] }}
 "#,
-        name = name,
+        core_crate_dir = core_crate_dir,
         version = version,
         module_name = module_name,
         core_import = core_import,
-        crate_name = name,
+        crate_name = core_crate_dir,
         features = core_dep_features(config, Language::Python),
     );
 
     Ok(vec![GeneratedFile {
-        path: PathBuf::from(format!("crates/{}-py/Cargo.toml", name)),
+        path: PathBuf::from(format!("crates/{}-py/Cargo.toml", core_crate_dir)),
         content,
         generated_header: true,
     }])
@@ -176,7 +176,7 @@ name = "{name}"
 version = "{version}"
 description = "{description}"
 license = "{license}"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 {authors}{keywords}{homepage}[project.urls]
 repository = "{repository}"
 
@@ -210,13 +210,13 @@ select = ["E", "F", "W"]
 }
 
 fn scaffold_node_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
-    let name = &config.crate_config.name;
     let version = &api.version;
     let core_import = config.core_import();
+    let core_crate_dir = config.core_crate_dir();
 
     let content = format!(
         r#"[package]
-name = "{name}-node"
+name = "{core_crate_dir}-node"
 version = "{version}"
 edition = "2024"
 
@@ -234,15 +234,15 @@ tokio = {{ version = "1", features = ["full"] }}
 [build-dependencies]
 napi-build = "2"
 "#,
-        name = name,
+        core_crate_dir = core_crate_dir,
         version = version,
         core_import = core_import,
-        crate_name = name,
+        crate_name = core_crate_dir,
         features = core_dep_features(config, Language::Node),
     );
 
     Ok(vec![GeneratedFile {
-        path: PathBuf::from(format!("crates/{}-node/Cargo.toml", name)),
+        path: PathBuf::from(format!("crates/{}-node/Cargo.toml", core_crate_dir)),
         content,
         generated_header: true,
     }])
@@ -325,13 +325,13 @@ fn scaffold_node(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<Ge
 }
 
 fn scaffold_ruby_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
-    let name = &config.crate_config.name;
     let version = &api.version;
     let core_import = config.core_import();
+    let core_crate_dir = config.core_crate_dir();
 
     let content = format!(
         r#"[package]
-name = "{name}-rb"
+name = "{core_crate_dir}-rb"
 version = "{version}"
 edition = "2024"
 
@@ -345,15 +345,15 @@ serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 tokio = {{ version = "1", features = ["full"] }}
 "#,
-        name = name,
+        core_crate_dir = core_crate_dir,
         version = version,
         core_import = core_import,
-        crate_name = name,
+        crate_name = core_crate_dir,
         features = core_dep_features(config, Language::Ruby),
     );
 
     Ok(vec![GeneratedFile {
-        path: PathBuf::from(format!("packages/ruby/ext/{}_rb/native/Cargo.toml", name)),
+        path: PathBuf::from(format!("packages/ruby/ext/{}_rb/native/Cargo.toml", core_crate_dir)),
         content,
         generated_header: true,
     }])
@@ -480,13 +480,13 @@ RSpec/NestedGroups:
 }
 
 fn scaffold_php_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
-    let name = &config.crate_config.name;
     let version = &api.version;
     let core_import = config.core_import();
+    let core_crate_dir = config.core_crate_dir();
 
     let content = format!(
         r#"[package]
-name = "{name}-php"
+name = "{core_crate_dir}-php"
 version = "{version}"
 edition = "2024"
 
@@ -500,15 +500,15 @@ serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 tokio = {{ version = "1", features = ["full"] }}
 "#,
-        name = name,
+        core_crate_dir = core_crate_dir,
         version = version,
         core_import = core_import,
-        crate_name = name,
+        crate_name = core_crate_dir,
         features = core_dep_features(config, Language::Php),
     );
 
     Ok(vec![GeneratedFile {
-        path: PathBuf::from(format!("crates/{}-php/Cargo.toml", name)),
+        path: PathBuf::from(format!("crates/{}-php/Cargo.toml", core_crate_dir)),
         content,
         generated_header: true,
     }])
@@ -558,6 +558,7 @@ fn scaffold_elixir_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Resul
     let name = &config.crate_config.name;
     let version = &api.version;
     let core_import = config.core_import();
+    let core_crate_dir = config.core_crate_dir();
 
     let content = format!(
         r#"[package]
@@ -578,7 +579,7 @@ tokio = {{ version = "1", features = ["full"] }}
         name = name,
         version = version,
         core_import = core_import,
-        crate_name = name,
+        crate_name = core_crate_dir,
         features = core_dep_features(config, Language::Elixir),
     );
 
@@ -816,13 +817,13 @@ fn scaffold_csharp(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<
 
 fn scaffold_ffi(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
     let meta = scaffold_meta(config);
-    let name = &config.crate_config.name;
     let version = &api.version;
     let core_crate = config.core_import();
+    let core_crate_dir = config.core_crate_dir();
 
     let content = format!(
         r#"[package]
-name = "{name}-ffi"
+name = "{core_crate_dir}-ffi"
 version = "{version}"
 edition = "2021"
 description = "{description}"
@@ -840,18 +841,18 @@ serde_json = "1"
 [build-dependencies]
 cbindgen = "0.28"
 "#,
-        name = name,
+        core_crate_dir = core_crate_dir,
         version = version,
         description = meta.description,
         license = meta.license,
         repository = meta.repository,
         core_crate = core_crate,
-        crate_name = name,
+        crate_name = core_crate_dir,
         features = core_dep_features(config, Language::Ffi),
     );
 
     Ok(vec![GeneratedFile {
-        path: PathBuf::from(format!("crates/{}-ffi/Cargo.toml", name)),
+        path: PathBuf::from(format!("crates/{}-ffi/Cargo.toml", core_crate_dir)),
         content,
         generated_header: true,
     }])
@@ -859,13 +860,13 @@ cbindgen = "0.28"
 
 fn scaffold_wasm(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
     let meta = scaffold_meta(config);
-    let name = &config.crate_config.name;
     let version = &api.version;
     let core_import = config.core_import();
+    let core_crate_dir = config.core_crate_dir();
 
     let content = format!(
         r#"[package]
-name = "{name}-wasm"
+name = "{core_crate_dir}-wasm"
 version = "{version}"
 edition = "2024"
 description = "{description}"
@@ -884,18 +885,18 @@ serde_json = "1"
 serde-wasm-bindgen = "0.6"
 js-sys = "0.3"
 "#,
-        name = name,
+        core_crate_dir = core_crate_dir,
         version = version,
         description = meta.description,
         license = meta.license,
         repository = meta.repository,
         core_import = core_import,
-        crate_name = name,
+        crate_name = core_crate_dir,
         features = core_dep_features(config, Language::Wasm),
     );
 
     Ok(vec![GeneratedFile {
-        path: PathBuf::from(format!("crates/{}-wasm/Cargo.toml", name)),
+        path: PathBuf::from(format!("crates/{}-wasm/Cargo.toml", core_crate_dir)),
         content,
         generated_header: true,
     }])
@@ -969,13 +970,13 @@ Config/testthat/edition: 3
 }
 
 fn scaffold_r_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
-    let name = &config.crate_config.name;
     let version = &api.version;
     let core_import = config.core_import();
+    let core_crate_dir = config.core_crate_dir();
 
     let content = format!(
         r#"[package]
-name = "{name}-r"
+name = "{core_crate_dir}-r"
 version = "{version}"
 edition = "2024"
 
@@ -988,10 +989,10 @@ extendr-api = {{ version = "0.7", features = ["use-precompiled-bindings"] }}
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 "#,
-        name = name,
+        core_crate_dir = core_crate_dir,
         version = version,
         core_import = core_import,
-        crate_name = name,
+        crate_name = core_crate_dir,
         features = core_dep_features(config, Language::R),
     );
 
