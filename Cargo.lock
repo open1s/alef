@@ -111,6 +111,7 @@ dependencies = [
  "alef-codegen",
  "alef-core",
  "anyhow",
+ "heck",
 ]
 
 [[package]]

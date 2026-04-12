@@ -98,6 +98,7 @@ fn scaffold_meta(config: &AlefConfig) -> ScaffoldMeta {
 }
 
 fn scaffold_python_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+    let meta = scaffold_meta(config);
     let version = &api.version;
     let module_name = config.python_module_name();
     let core_crate_dir = config.core_crate_dir();
@@ -107,6 +108,7 @@ fn scaffold_python_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Resul
 name = "{core_crate_dir}-py"
 version = "{version}"
 edition = "2024"
+license = "{license}"
 
 [lib]
 name = "{module_name}"
@@ -122,6 +124,7 @@ tokio = {{ version = "1", features = ["full"] }}
 "#,
         core_crate_dir = core_crate_dir,
         version = version,
+        license = meta.license,
         module_name = module_name,
         crate_name = &config.crate_config.name,
         features = core_dep_features(config, Language::Python),
@@ -208,6 +211,7 @@ select = ["E", "F", "W"]
 }
 
 fn scaffold_node_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+    let meta = scaffold_meta(config);
     let version = &api.version;
     let core_crate_dir = config.core_crate_dir();
 
@@ -216,6 +220,7 @@ fn scaffold_node_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<
 name = "{core_crate_dir}-node"
 version = "{version}"
 edition = "2024"
+license = "{license}"
 
 [lib]
 crate-type = ["cdylib"]
@@ -224,15 +229,13 @@ crate-type = ["cdylib"]
 {crate_name} = {{ path = "../{core_crate_dir}"{features} }}
 napi = {{ version = "3", features = ["async"] }}
 napi-derive = "3"
-serde = {{ version = "1", features = ["derive"] }}
-serde_json = "1"
-tokio = {{ version = "1", features = ["full"] }}
 
 [build-dependencies]
 napi-build = "2"
 "#,
         core_crate_dir = core_crate_dir,
         version = version,
+        license = meta.license,
         crate_name = &config.crate_config.name,
         features = core_dep_features(config, Language::Node),
     );
@@ -321,6 +324,7 @@ fn scaffold_node(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<Ge
 }
 
 fn scaffold_ruby_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+    let meta = scaffold_meta(config);
     let version = &api.version;
     let core_crate_dir = config.core_crate_dir();
 
@@ -329,6 +333,7 @@ fn scaffold_ruby_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<
 name = "{core_crate_dir}-rb"
 version = "{version}"
 edition = "2024"
+license = "{license}"
 
 [lib]
 crate-type = ["cdylib"]
@@ -342,6 +347,7 @@ tokio = {{ version = "1", features = ["full"] }}
 "#,
         core_crate_dir = core_crate_dir,
         version = version,
+        license = meta.license,
         crate_name = &config.crate_config.name,
         features = core_dep_features(config, Language::Ruby),
     );
@@ -474,6 +480,7 @@ RSpec/NestedGroups:
 }
 
 fn scaffold_php_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+    let meta = scaffold_meta(config);
     let version = &api.version;
     let core_crate_dir = config.core_crate_dir();
 
@@ -482,6 +489,7 @@ fn scaffold_php_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<V
 name = "{core_crate_dir}-php"
 version = "{version}"
 edition = "2024"
+license = "{license}"
 
 [lib]
 crate-type = ["cdylib"]
@@ -491,10 +499,10 @@ crate-type = ["cdylib"]
 ext-php-rs = "0.15"
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
-tokio = {{ version = "1", features = ["full"] }}
 "#,
         core_crate_dir = core_crate_dir,
         version = version,
+        license = meta.license,
         crate_name = &config.crate_config.name,
         features = core_dep_features(config, Language::Php),
     );
@@ -547,6 +555,7 @@ fn scaffold_php(_api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<Ge
 }
 
 fn scaffold_elixir_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+    let meta = scaffold_meta(config);
     let name = &config.crate_config.name;
     let version = &api.version;
     let core_crate_dir = config.core_crate_dir();
@@ -556,6 +565,7 @@ fn scaffold_elixir_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Resul
 name = "{name}_rustler"
 version = "{version}"
 edition = "2024"
+license = "{license}"
 
 [lib]
 crate-type = ["cdylib"]
@@ -569,6 +579,7 @@ tokio = {{ version = "1", features = ["full"] }}
 "#,
         name = name,
         version = version,
+        license = meta.license,
         crate_name = name,
         core_crate_dir = core_crate_dir,
         features = core_dep_features(config, Language::Elixir),
@@ -957,6 +968,7 @@ Config/testthat/edition: 3
 }
 
 fn scaffold_r_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+    let meta = scaffold_meta(config);
     let version = &api.version;
     let core_crate_dir = config.core_crate_dir();
 
@@ -965,6 +977,7 @@ fn scaffold_r_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec
 name = "{core_crate_dir}-r"
 version = "{version}"
 edition = "2024"
+license = "{license}"
 
 [lib]
 crate-type = ["cdylib"]
@@ -977,6 +990,7 @@ serde_json = "1"
 "#,
         core_crate_dir = core_crate_dir,
         version = version,
+        license = meta.license,
         crate_name = &config.crate_config.name,
         features = core_dep_features(config, Language::R),
     );
