@@ -107,10 +107,7 @@ name = "{pkg_name}-e2e-tests"
 version = "0.0.0"
 description = "End-to-end tests"
 requires-python = ">=3.10"
-dependencies = ["{pkg_name}"]
-
-[project.optional-dependencies]
-dev = ["pytest>=7.4", "pytest-asyncio>=0.23", "pytest-cov>=4.1", "pytest-timeout>=2.1"]
+dependencies = ["{pkg_name}", "pytest>=7.4", "pytest-asyncio>=0.23", "pytest-timeout>=2.1"]
 
 [tool.uv.sources]
 {pkg_name} = {{ path = "{pkg_path}", editable = true }}

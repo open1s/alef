@@ -430,9 +430,12 @@ impl Backend for PhpBackend {
             }
             content.push_str(&format!("class {}\n{{\n", typ.name));
 
-            // Constructor with typed parameters
-            let params: Vec<String> = typ
-                .fields
+            // Constructor with typed parameters.
+            // PHP requires required parameters to come before optional ones, so sort
+            // the fields: required first, then optional (preserving relative order within each group).
+            let mut sorted_fields: Vec<&alef_core::ir::FieldDef> = typ.fields.iter().collect();
+            sorted_fields.sort_by_key(|f| f.optional);
+            let params: Vec<String> = sorted_fields
                 .iter()
                 .map(|f| {
                     let ptype = php_type(&f.ty);
@@ -598,7 +601,8 @@ fn php_type(ty: &TypeRef) -> String {
             let inner_type = php_type(inner);
             format!("?{}", inner_type)
         }
-        TypeRef::Vec(_) | TypeRef::Map(_, _) => "array".to_string(),
+        TypeRef::Vec(inner) => format!("array<{}>", php_type(inner)),
+        TypeRef::Map(k, v) => format!("array<{}, {}>", php_type(k), php_type(v)),
         TypeRef::Named(name) => name.clone(),
         TypeRef::Unit => "void".to_string(),
         TypeRef::Duration => "float".to_string(),
