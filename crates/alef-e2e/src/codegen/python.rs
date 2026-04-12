@@ -49,6 +49,23 @@ impl super::E2eCodegen for PythonE2eCodegen {
             generated_header: false,
         });
 
+        // pyproject.toml for standalone uv resolution
+        let pkg_name = e2e_config
+            .packages
+            .get("python")
+            .and_then(|p| p.name.as_deref())
+            .unwrap_or("kreuzcrawl");
+        let pkg_path = e2e_config
+            .packages
+            .get("python")
+            .and_then(|p| p.path.as_deref())
+            .unwrap_or("../../packages/python");
+        files.push(GeneratedFile {
+            path: output_base.join("pyproject.toml"),
+            content: render_pyproject(pkg_name, pkg_path),
+            generated_header: true,
+        });
+
         // Per-category test files.
         for group in groups {
             let fixtures: Vec<&Fixture> = group.fixtures.iter().collect();
@@ -73,6 +90,40 @@ impl super::E2eCodegen for PythonE2eCodegen {
     fn language_name(&self) -> &'static str {
         "python"
     }
+}
+
+// ---------------------------------------------------------------------------
+// pyproject.toml
+// ---------------------------------------------------------------------------
+
+fn render_pyproject(pkg_name: &str, pkg_path: &str) -> String {
+    format!(
+        r#"[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools>=68", "wheel"]
+
+[project]
+name = "{pkg_name}-e2e-tests"
+version = "0.0.0"
+description = "End-to-end tests"
+requires-python = ">=3.10"
+dependencies = ["{pkg_name}"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "pytest-asyncio>=0.23", "pytest-cov>=4.1", "pytest-timeout>=2.1"]
+
+[tool.uv.sources]
+{pkg_name} = {{ path = "{pkg_path}", editable = true }}
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+addopts = "-v --strict-markers --tb=short"
+timeout = 300
+"#
+    )
 }
 
 // ---------------------------------------------------------------------------

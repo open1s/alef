@@ -349,7 +349,9 @@ fn build_args_and_setup(
             {
                 setup_lines.push(format!("const {} = {constructor_name}(null);", arg.name));
             } else {
-                let literal = json_to_js(config_value);
+                // NAPI-RS bindings use camelCase for JS field names, so convert snake_case
+                // config keys from the fixture JSON to camelCase before passing to the constructor.
+                let literal = json_to_js_camel(config_value);
                 setup_lines.push(format!("const {name}Config = {literal};", name = arg.name,));
                 setup_lines.push(format!(
                     "const {} = {constructor_name}({name}Config);",
@@ -445,7 +447,13 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
             let _ = writeln!(out, "    expect({field_expr}.length).toBeGreaterThan(0);");
         }
         "is_empty" => {
-            let _ = writeln!(out, "    expect({field_expr}).toHaveLength(0);");
+            // Use null-coalescing for optional string fields to handle null/undefined values.
+            let resolved = assertion.field.as_deref().unwrap_or("");
+            if !resolved.is_empty() && field_resolver.is_optional(field_resolver.resolve(resolved)) {
+                let _ = writeln!(out, "    expect({field_expr} ?? \"\").toHaveLength(0);");
+            } else {
+                let _ = writeln!(out, "    expect({field_expr}).toHaveLength(0);");
+            }
         }
         "contains_any" => {
             if let Some(values) = &assertion.values {
@@ -504,6 +512,59 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
             let _ = writeln!(out, "    // TODO: unsupported assertion type: {other}");
         }
     }
+}
+
+/// Convert a `serde_json::Value` to a JavaScript literal string with camelCase object keys.
+///
+/// NAPI-RS bindings use camelCase for JavaScript field names. This variant converts
+/// snake_case object keys (as written in fixture JSON) to camelCase so that the
+/// generated config objects match the NAPI binding's expected field names.
+fn json_to_js_camel(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let entries: Vec<String> = map
+                .iter()
+                .map(|(k, v)| {
+                    let camel_key = snake_to_camel(k);
+                    // Quote keys that aren't valid JS identifiers.
+                    let key = if camel_key
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+                        && !camel_key.starts_with(|c: char| c.is_ascii_digit())
+                    {
+                        camel_key.clone()
+                    } else {
+                        format!("\"{}\"", escape_js(&camel_key))
+                    };
+                    format!("{key}: {}", json_to_js_camel(v))
+                })
+                .collect();
+            format!("{{ {} }}", entries.join(", "))
+        }
+        serde_json::Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(json_to_js_camel).collect();
+            format!("[{}]", items.join(", "))
+        }
+        // Scalars and null delegate to the standard converter.
+        other => json_to_js(other),
+    }
+}
+
+/// Convert a snake_case string to camelCase.
+fn snake_to_camel(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut capitalize_next = false;
+    for ch in s.chars() {
+        if ch == '_' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.extend(ch.to_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }
 
 /// Convert a `serde_json::Value` to a JavaScript literal string.

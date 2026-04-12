@@ -44,10 +44,17 @@ impl E2eCodegen for ElixirCodegen {
         } else {
             elixir_module_name(&raw_module)
         };
-        let function_name = overrides
+        let base_function_name = overrides
             .and_then(|o| o.function.as_ref())
             .cloned()
             .unwrap_or_else(|| call.function.clone());
+        // Elixir facade exports async variants with `_async` suffix when the call is async.
+        // Append the suffix only if not already present.
+        let function_name = if call.r#async && !base_function_name.ends_with("_async") {
+            format!("{base_function_name}_async")
+        } else {
+            base_function_name
+        };
         let options_type = overrides.and_then(|o| o.options_type.clone());
         let options_default_fn = overrides.and_then(|o| o.options_via.clone());
         let empty_enum_fields = HashMap::new();
@@ -229,9 +236,6 @@ fn render_test_case(
         &fixture.id,
     );
 
-    // Use the bang variant (convert!) to unwrap {:ok, result} tuples.
-    let bang_function = format!("{function_name}!");
-
     let _ = writeln!(out, "  describe \"{test_name}\" do");
     let _ = writeln!(out, "    test \"{description}\" do");
 
@@ -240,15 +244,19 @@ fn render_test_case(
     }
 
     if expects_error {
-        let _ = writeln!(out, "      assert_raise RuntimeError, fn ->");
-        let _ = writeln!(out, "        {module_path}.{bang_function}({args_str})");
-        let _ = writeln!(out, "      end");
+        let _ = writeln!(
+            out,
+            "      assert {{:error, _}} = {module_path}.{function_name}({args_str})"
+        );
         let _ = writeln!(out, "    end");
         let _ = writeln!(out, "  end");
         return;
     }
 
-    let _ = writeln!(out, "      {result_var} = {module_path}.{bang_function}({args_str})");
+    let _ = writeln!(
+        out,
+        "      {{:ok, {result_var}}} = {module_path}.{function_name}({args_str})"
+    );
 
     for assertion in &fixture.assertions {
         render_assertion(out, assertion, result_var, field_resolver);
@@ -288,21 +296,19 @@ fn build_args_and_setup(
         }
 
         if arg.arg_type == "handle" {
-            // Generate a create_engine! (or equivalent) call and pass the variable.
-            let constructor_name = format!("create_{}!", arg.name.to_snake_case());
+            // Generate a create_{name} call using {:ok, name} = ... pattern.
+            let constructor_name = format!("create_{}", arg.name.to_snake_case());
             let config_value = input.get(&arg.field).unwrap_or(&serde_json::Value::Null);
             if config_value.is_null()
                 || config_value.is_object() && config_value.as_object().is_some_and(|o| o.is_empty())
             {
-                setup_lines.push(format!("{} = {module_path}.{constructor_name}(nil)", arg.name,));
+                setup_lines.push(format!("{{:ok, {}}} = {module_path}.{constructor_name}(nil)", arg.name,));
             } else {
                 let literal = json_to_elixir(config_value);
                 let name = &arg.name;
                 setup_lines.push(format!("{name}_config = {literal}"));
                 setup_lines.push(format!(
-                    "{} = {module_path}.{constructor_name}({name}_config)",
-                    arg.name,
-                    name = name,
+                    "{{:ok, {name}}} = {module_path}.{constructor_name}({name}_config)",
                 ));
             }
             parts.push(arg.name.clone());
@@ -368,6 +374,12 @@ fn build_args_and_setup(
     (setup_lines, parts.join(", "))
 }
 
+/// Returns true if the field expression is a numeric/integer expression
+/// (e.g., a `length(...)` call) rather than a string.
+fn is_numeric_expr(field_expr: &str) -> bool {
+    field_expr.starts_with("length(")
+}
+
 fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, field_resolver: &FieldResolver) {
     // Skip assertions on fields that don't exist on the result type.
     if let Some(f) = &assertion.field {
@@ -382,15 +394,26 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
         _ => result_var.to_string(),
     };
 
-    // For string equality, trim trailing whitespace to handle trailing newlines
-    // from the converter.
-    let trimmed_field_expr = format!("String.trim({field_expr})");
+    // Only wrap in String.trim/0 when the expression is actually a string.
+    // Numeric expressions (e.g., length(...)) must not be wrapped.
+    let is_numeric = is_numeric_expr(&field_expr);
+    let trimmed_field_expr = if is_numeric {
+        field_expr.clone()
+    } else {
+        format!("String.trim({field_expr})")
+    };
 
     match assertion.assertion_type.as_str() {
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let elixir_val = json_to_elixir(expected);
-                let _ = writeln!(out, "      assert {trimmed_field_expr} == {elixir_val}");
+                // Apply String.trim only for string comparisons, not numeric ones.
+                let is_string_expected = expected.is_string();
+                if is_string_expected && !is_numeric {
+                    let _ = writeln!(out, "      assert {trimmed_field_expr} == {elixir_val}");
+                } else {
+                    let _ = writeln!(out, "      assert {field_expr} == {elixir_val}");
+                }
             }
         }
         "contains" => {
@@ -417,7 +440,12 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
             let _ = writeln!(out, "      assert {field_expr} != \"\"");
         }
         "is_empty" => {
-            let _ = writeln!(out, "      assert {trimmed_field_expr} == \"\"");
+            if is_numeric {
+                // length(...) == 0
+                let _ = writeln!(out, "      assert {field_expr} == 0");
+            } else {
+                let _ = writeln!(out, "      assert {trimmed_field_expr} == \"\"");
+            }
         }
         "contains_any" => {
             if let Some(values) = &assertion.values {
@@ -487,7 +515,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, result_var: &str, f
             }
         }
         "not_error" => {
-            // Already handled — the call would raise if it failed.
+            // Already handled — the call would fail if it returned {:error, _}.
         }
         "error" => {
             // Handled at the test level.

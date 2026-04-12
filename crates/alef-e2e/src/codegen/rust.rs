@@ -134,9 +134,6 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# Standalone crate — not part of the workspace to avoid circular dependency.
-[workspace]
-
 [dependencies]
 {dep_spec}{serde_line}
 "#
