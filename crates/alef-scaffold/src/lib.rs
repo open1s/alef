@@ -117,6 +117,8 @@ crate-type = ["cdylib"]
 [dependencies]
 {crate_name} = {{ path = "../{core_crate_dir}"{features} }}
 pyo3 = {{ version = "0.28", features = ["extension-module"] }}
+pyo3-async-runtimes = {{ version = "0.28", features = ["tokio-runtime"] }}
+tokio = {{ version = "1", features = ["full"] }}
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 "#,
@@ -741,13 +743,9 @@ fn scaffold_java(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<Ge
                 <version>3.4.0</version>
                 <configuration>
                     <java>
-                        <removeUnusedImports/>
-                        <indent>
-                            <spaces>true</spaces>
-                            <spacesPerTab>4</spacesPerTab>
-                        </indent>
-                        <trimTrailingWhitespace/>
-                        <endWithNewline/>
+                        <googleJavaFormat>
+                            <version>1.35.0</version>
+                        </googleJavaFormat>
                     </java>
                 </configuration>
                 <executions>
