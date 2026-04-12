@@ -117,10 +117,8 @@ crate-type = ["cdylib"]
 [dependencies]
 {crate_name} = {{ path = "../{core_crate_dir}"{features} }}
 pyo3 = {{ version = "0.28", features = ["extension-module"] }}
-pyo3-async-runtimes = {{ version = "0.28", features = ["tokio-runtime"] }}
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
-tokio = {{ version = "1", features = ["full"] }}
 "#,
         core_crate_dir = core_crate_dir,
         version = version,
@@ -558,13 +556,14 @@ fn scaffold_php(_api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<Ge
 
 fn scaffold_elixir_cargo(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<GeneratedFile>> {
     let meta = scaffold_meta(config);
-    let name = &config.crate_config.name;
+    let app_name = config.elixir_app_name();
+    let nif_name = format!("{app_name}_nif");
     let version = &api.version;
     let core_crate_dir = config.core_crate_dir();
 
     let content = format!(
         r#"[package]
-name = "{name}_rustler"
+name = "{nif_name}"
 version = "{version}"
 edition = "2024"
 license = "{license}"
@@ -579,16 +578,16 @@ serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 tokio = {{ version = "1", features = ["full"] }}
 "#,
-        name = name,
+        nif_name = nif_name,
         version = version,
         license = meta.license,
-        crate_name = name,
+        crate_name = &config.crate_config.name,
         core_crate_dir = core_crate_dir,
         features = core_dep_features(config, Language::Elixir),
     );
 
     Ok(vec![GeneratedFile {
-        path: PathBuf::from(format!("packages/elixir/native/{}_rustler/Cargo.toml", name)),
+        path: PathBuf::from(format!("packages/elixir/native/{nif_name}/Cargo.toml")),
         content,
         generated_header: true,
     }])
@@ -838,7 +837,6 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 {crate_name} = {{ path = "../{core_crate_dir}"{features} }}
-serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 
 [build-dependencies]
@@ -880,11 +878,7 @@ crate-type = ["cdylib"]
 [dependencies]
 {crate_name} = {{ path = "../{core_crate_dir}"{features} }}
 wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-serde = {{ version = "1", features = ["derive"] }}
-serde_json = "1"
 serde-wasm-bindgen = "0.6"
-js-sys = "0.3"
 "#,
         core_crate_dir = core_crate_dir,
         version = version,
