@@ -284,8 +284,12 @@ fn gen_enum_stub(enum_def: &EnumDef) -> String {
         // Data enums are frozen structs accepting a dict.
         lines.push("    def __init__(self, value: dict[str, Any]) -> None: ...".to_string());
     } else {
-        for (idx, variant) in enum_def.variants.iter().enumerate() {
-            lines.push(format!("    {}: int = {}", python_safe_name(&variant.name), idx));
+        for variant in &enum_def.variants {
+            lines.push(format!(
+                "    {}: {} = ...",
+                python_safe_name(&variant.name),
+                enum_def.name
+            ));
         }
         lines.push("    def __init__(self, value: int | str) -> None: ...".to_string());
     }

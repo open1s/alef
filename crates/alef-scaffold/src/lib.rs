@@ -229,6 +229,8 @@ crate-type = ["cdylib"]
 {crate_name} = {{ path = "../{core_crate_dir}"{features} }}
 napi = {{ version = "3", features = ["async"] }}
 napi-derive = "3"
+serde = {{ version = "1", features = ["derive"] }}
+serde_json = "1"
 
 [build-dependencies]
 napi-build = "2"
@@ -301,7 +303,7 @@ fn scaffold_node(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<Ge
     ]
   }},
   "devDependencies": {{
-    "@napi-rs/cli": "^2.0.0"
+    "@napi-rs/cli": "^3.0.0"
   }}
 }}
 "#,
