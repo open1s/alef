@@ -162,8 +162,8 @@ impl Backend for NapiBackend {
             }
         }
         for e in &api.enums {
-            let has_data = e.variants.iter().any(|v| !v.fields.is_empty());
-            if has_data {
+            let is_tagged_data_enum = e.serde_tag.is_some() && e.variants.iter().any(|v| !v.fields.is_empty());
+            if is_tagged_data_enum {
                 // Tagged data enums use flattened struct — generate custom conversions
                 builder.add_item(&gen_tagged_enum_binding_to_core(e, &core_import));
                 builder.add_item(&gen_tagged_enum_core_to_binding(e, &core_import));
@@ -631,9 +631,9 @@ fn gen_static_method(
 /// For tagged enums with data fields: generates a flattened `#[napi(object)]` struct
 /// with a discriminant field and all variant fields as optional.
 fn gen_enum(enum_def: &EnumDef) -> String {
-    let has_data = enum_def.variants.iter().any(|v| !v.fields.is_empty());
+    let is_tagged_data_enum = enum_def.serde_tag.is_some() && enum_def.variants.iter().any(|v| !v.fields.is_empty());
 
-    if has_data {
+    if is_tagged_data_enum {
         return gen_tagged_enum_as_object(enum_def);
     }
 

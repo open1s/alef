@@ -284,10 +284,14 @@ impl Backend for RustlerBackend {
             content.push_str(&format!(") :: {return_spec}\n"));
 
             let params: Vec<String> = func.params.iter().map(|p| p.name.to_snake_case()).collect();
-            content.push_str(&format!("  def {nif_fn_name}("));
-            content.push_str(&params.join(", "));
-            content.push_str(") do\n");
-            content.push_str(&format!("    {native_mod}.{nif_fn_name}({})\n", params.join(", ")));
+            if params.is_empty() {
+                content.push_str(&format!("  def {nif_fn_name} do\n"));
+                content.push_str(&format!("    {native_mod}.{nif_fn_name}\n"));
+            } else {
+                content.push_str(&format!("  def {nif_fn_name}({})", params.join(", ")));
+                content.push_str(" do\n");
+                content.push_str(&format!("    {native_mod}.{nif_fn_name}({})\n", params.join(", ")));
+            }
             content.push_str("  end\n\n");
         }
 
@@ -330,10 +334,14 @@ impl Backend for RustlerBackend {
                 content.push_str(&type_specs.join(", "));
                 content.push_str(&format!(") :: {return_spec}\n"));
 
-                content.push_str(&format!("  def {nif_fn_name}("));
-                content.push_str(&param_names.join(", "));
-                content.push_str(") do\n");
-                content.push_str(&format!("    {native_mod}.{nif_fn_name}({})\n", param_names.join(", ")));
+                if param_names.is_empty() {
+                    content.push_str(&format!("  def {nif_fn_name} do\n"));
+                    content.push_str(&format!("    {native_mod}.{nif_fn_name}\n"));
+                } else {
+                    content.push_str(&format!("  def {nif_fn_name}({})", param_names.join(", ")));
+                    content.push_str(" do\n");
+                    content.push_str(&format!("    {native_mod}.{nif_fn_name}({})\n", param_names.join(", ")));
+                }
                 content.push_str("  end\n\n");
             }
         }
