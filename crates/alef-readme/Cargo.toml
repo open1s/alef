@@ -11,3 +11,5 @@ repository.workspace = true
 [dependencies]
 alef-core = { workspace = true }
 anyhow = { workspace = true }
+minijinja = { workspace = true }
+serde_yaml = { workspace = true }

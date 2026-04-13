@@ -3,7 +3,10 @@
 use alef_core::backend::GeneratedFile;
 use alef_core::config::{AlefConfig, Language};
 use alef_core::ir::ApiSurface;
-use std::path::PathBuf;
+use minijinja::{Environment, Value};
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Generate README files for the given languages.
 pub fn generate_readmes(
@@ -19,6 +22,363 @@ pub fn generate_readmes(
 }
 
 fn generate_readme(api: &ApiSurface, config: &AlefConfig, lang: Language) -> anyhow::Result<GeneratedFile> {
+    // Try template-based generation first when readme config is present
+    if let Some(readme_cfg) = &config.readme {
+        if let Some(template_dir) = &readme_cfg.template_dir {
+            let workspace_root = config
+                .crate_config
+                .workspace_root
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("."));
+            let abs_template_dir = workspace_root.join(template_dir);
+            if abs_template_dir.exists() {
+                if let Some(file) =
+                    try_template_readme(api, config, lang, readme_cfg, &workspace_root, &abs_template_dir)?
+                {
+                    return Ok(file);
+                }
+            }
+        }
+    }
+
+    // Fall back to hardcoded generation
+    generate_readme_hardcoded(api, config, lang)
+}
+
+/// Attempt to render a README using a minijinja template. Returns `None` when no
+/// language-specific template entry is found in the YAML config (signals caller to fall back).
+fn try_template_readme(
+    api: &ApiSurface,
+    config: &AlefConfig,
+    lang: Language,
+    readme_cfg: &alef_core::config::ReadmeConfig,
+    workspace_root: &Path,
+    abs_template_dir: &Path,
+) -> anyhow::Result<Option<GeneratedFile>> {
+    let lang_code = lang_code(lang);
+
+    // Load YAML config if present
+    let yaml_config: serde_yaml::Value = if let Some(config_path) = &readme_cfg.config {
+        let abs_config = workspace_root.join(config_path);
+        if abs_config.exists() {
+            let content = fs::read_to_string(&abs_config)
+                .map_err(|e| anyhow::anyhow!("Failed to read readme config {:?}: {}", abs_config, e))?;
+            serde_yaml::from_str(&content).map_err(|e| anyhow::anyhow!("Failed to parse readme config YAML: {}", e))?
+        } else {
+            serde_yaml::Value::Null
+        }
+    } else {
+        serde_yaml::Value::Null
+    };
+
+    // Look up per-language config block
+    let lang_yaml = yaml_config.get("languages").and_then(|l| l.get(lang_code));
+
+    let Some(lang_yaml) = lang_yaml else {
+        // No entry for this language — signal caller to fall back
+        return Ok(None);
+    };
+
+    // Determine template name: prefer lang config, then default
+    let template_name = lang_yaml
+        .get("template")
+        .and_then(|v| v.as_str())
+        .unwrap_or("language_package.md")
+        .to_string();
+
+    let template_file = abs_template_dir.join(&template_name);
+    if !template_file.exists() {
+        // Template file missing — fall back to hardcoded
+        return Ok(None);
+    }
+
+    // Set up minijinja environment
+    let abs_template_dir_owned = abs_template_dir.to_path_buf();
+    let mut env = Environment::new();
+    env.set_loader(move |name: &str| {
+        let path = abs_template_dir_owned.join(name);
+        match fs::read_to_string(&path) {
+            Ok(content) => Ok(Some(content)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(minijinja::Error::new(
+                minijinja::ErrorKind::InvalidOperation,
+                format!("Failed to read template {name}: {e}"),
+            )),
+        }
+    });
+
+    // Register include_snippet filter: {{ path | include_snippet(language) }}
+    let snippets_dir = readme_cfg.snippets_dir.as_ref().map(|s| workspace_root.join(s));
+    let snippets_dir_clone = snippets_dir.clone();
+    env.add_filter("include_snippet", move |path: String, language: String| -> String {
+        match &snippets_dir_clone {
+            Some(dir) => include_snippet(dir, &language, &path),
+            None => format!("<!-- snippet not found: {path} -->"),
+        }
+    });
+
+    // Register render_performance_table filter: {{ perf | render_performance_table(name) }}
+    env.add_filter(
+        "render_performance_table",
+        |benchmarks: Value, _name: String| -> String { render_performance_table(&benchmarks) },
+    );
+
+    // Register has_migration function
+    let workspace_root_clone = workspace_root.to_path_buf();
+    env.add_function("has_migration", move |_lang: String, _version: String| -> bool {
+        // Check for migration guide file: docs/migrations/{lang}/{version}.md
+        let path = workspace_root_clone
+            .join("docs")
+            .join("migrations")
+            .join(&_lang)
+            .join(format!("{_version}.md"));
+        path.exists()
+    });
+
+    // Build template context
+    let name = &config.crate_config.name;
+    let description = config
+        .scaffold
+        .as_ref()
+        .and_then(|s| s.description.clone())
+        .unwrap_or_else(|| format!("Bindings for {name}"));
+    let repository = config
+        .scaffold
+        .as_ref()
+        .and_then(|s| s.repository.clone())
+        .unwrap_or_else(|| format!("https://github.com/kreuzberg-dev/{name}"));
+    let license = config
+        .scaffold
+        .as_ref()
+        .and_then(|s| s.license.clone())
+        .unwrap_or_else(|| "MIT".to_string());
+
+    // Top-level YAML values
+    let discord_url = yaml_config
+        .get("discord_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let banner_url = yaml_config
+        .get("banner_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Convert lang config to minijinja Value
+    let _lang_value = yaml_to_minijinja_value(lang_yaml);
+
+    let mut ctx: HashMap<&str, Value> = HashMap::new();
+    ctx.insert("version", Value::from(api.version.clone()));
+    ctx.insert("name", Value::from(name.clone()));
+    ctx.insert("description", Value::from(description));
+    ctx.insert("license", Value::from(license));
+    ctx.insert("repository", Value::from(repository));
+    ctx.insert("discord_url", Value::from(discord_url));
+    ctx.insert("banner_url", Value::from(banner_url));
+    ctx.insert("language", Value::from(lang_code.to_string()));
+
+    // Flatten per-language YAML fields into top-level context
+    // (templates expect snippets, features, performance, etc. at top level)
+    if let serde_yaml::Value::Mapping(map) = lang_yaml {
+        for (k, v) in map {
+            if let serde_yaml::Value::String(key) = k {
+                ctx.insert(
+                    // SAFETY: we leak the string to get a &'static str for the HashMap key.
+                    // This is fine since readmes are generated once per run.
+                    Box::leak(key.clone().into_boxed_str()),
+                    yaml_to_minijinja_value(v),
+                );
+            }
+        }
+    }
+
+    let tmpl = env
+        .get_template(&template_name)
+        .map_err(|e| anyhow::anyhow!("Failed to load template '{}': {}", template_name, e))?;
+
+    let content = tmpl
+        .render(ctx)
+        .map_err(|e| anyhow::anyhow!("Failed to render template '{}': {}", template_name, e))?;
+
+    // Determine output path
+    let path = readme_output_path(config, lang, readme_cfg, lang_yaml);
+
+    Ok(Some(GeneratedFile {
+        path,
+        content,
+        generated_header: false,
+    }))
+}
+
+/// Determine the output path for a language README.
+fn readme_output_path(
+    config: &AlefConfig,
+    lang: Language,
+    readme_cfg: &alef_core::config::ReadmeConfig,
+    lang_yaml: &serde_yaml::Value,
+) -> PathBuf {
+    // Check for explicit output in per-language YAML config
+    if let Some(output) = lang_yaml.get("output").and_then(|v| v.as_str()) {
+        return PathBuf::from(output);
+    }
+
+    // Check output_pattern in ReadmeConfig (e.g. "packages/{language}/README.md")
+    if let Some(pattern) = &readme_cfg.output_pattern {
+        let dir = lang_dir_name(lang);
+        return PathBuf::from(pattern.replace("{language}", dir));
+    }
+
+    // Default to the same paths as the hardcoded generator
+    default_readme_path(config, lang)
+}
+
+fn default_readme_path(config: &AlefConfig, lang: Language) -> PathBuf {
+    let name = &config.crate_config.name;
+    match lang {
+        Language::Ffi => PathBuf::from(format!("crates/{name}-ffi/README.md")),
+        Language::Wasm => PathBuf::from(format!("crates/{name}-wasm/README.md")),
+        _ => PathBuf::from(format!("packages/{}/README.md", lang_dir_name(lang))),
+    }
+}
+
+/// Return the short directory/key name for a language.
+fn lang_dir_name(lang: Language) -> &'static str {
+    match lang {
+        Language::Python => "python",
+        Language::Node => "typescript",
+        Language::Ruby => "ruby",
+        Language::Php => "php",
+        Language::Elixir => "elixir",
+        Language::Go => "go",
+        Language::Java => "java",
+        Language::Csharp => "csharp",
+        Language::Ffi => "ffi",
+        Language::Wasm => "wasm",
+        Language::R => "r",
+    }
+}
+
+/// Return the YAML config key for a language.
+fn lang_code(lang: Language) -> &'static str {
+    match lang {
+        Language::Python => "python",
+        Language::Node => "typescript",
+        Language::Ruby => "ruby",
+        Language::Php => "php",
+        Language::Elixir => "elixir",
+        Language::Go => "go",
+        Language::Java => "java",
+        Language::Csharp => "csharp",
+        Language::Ffi => "ffi",
+        Language::Wasm => "wasm",
+        Language::R => "r",
+    }
+}
+
+/// Load a snippet file. For `.md` files, extract the first fenced code block.
+/// For other files, wrap the content in a fenced code block.
+fn include_snippet(snippets_dir: &Path, lang_code: &str, path: &str) -> String {
+    let file = snippets_dir.join(lang_code).join(path);
+    if !file.exists() {
+        return format!("<!-- snippet not found: {path} -->");
+    }
+    let content = fs::read_to_string(&file).unwrap_or_default();
+    if path.ends_with(".md") {
+        extract_code_block(&content)
+    } else {
+        let ext = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("");
+        format!("```{ext}\n{}\n```", content.trim())
+    }
+}
+
+/// Extract the first fenced code block from a Markdown string.
+/// Returns the original content (including fence markers) if no block is found.
+fn extract_code_block(md: &str) -> String {
+    let mut in_block = false;
+    let mut block_lines: Vec<&str> = vec![];
+    let mut fence_marker = "";
+
+    for line in md.lines() {
+        if !in_block {
+            if line.starts_with("```") || line.starts_with("~~~") {
+                in_block = true;
+                fence_marker = if line.starts_with("```") { "```" } else { "~~~" };
+                block_lines.push(line);
+            }
+        } else {
+            block_lines.push(line);
+            if line.trim() == fence_marker {
+                break;
+            }
+        }
+    }
+
+    if block_lines.is_empty() {
+        md.to_string()
+    } else {
+        block_lines.join("\n")
+    }
+}
+
+/// Render a Markdown performance table from a minijinja benchmarks Value.
+///
+/// Expects the value to be a sequence of mappings with keys:
+/// `name`, `value`, `unit` (optional), `notes` (optional).
+fn render_performance_table(benchmarks: &Value) -> String {
+    use minijinja::value::ValueKind;
+
+    if benchmarks.kind() != ValueKind::Seq && benchmarks.kind() != ValueKind::Iterable {
+        return String::new();
+    }
+
+    let Ok(iter) = benchmarks.try_iter() else {
+        return String::new();
+    };
+
+    let mut table = String::from("| Benchmark | Result |\n|-----------|--------|\n");
+    for item in iter {
+        let name = item
+            .get_attr("name")
+            .ok()
+            .and_then(|v: Value| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        let value = item
+            .get_attr("value")
+            .ok()
+            .and_then(|v: Value| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        let unit = item
+            .get_attr("unit")
+            .ok()
+            .and_then(|v: Value| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        let notes = item
+            .get_attr("notes")
+            .ok()
+            .and_then(|v: Value| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+
+        let result = if notes.is_empty() {
+            format!("{value} {unit}")
+        } else {
+            format!("{value} {unit} ({notes})")
+        };
+        table.push_str(&format!("| {name} | {result} |\n"));
+    }
+    table
+}
+
+/// Convert a `serde_yaml::Value` into a `minijinja::Value` via serde serialization.
+fn yaml_to_minijinja_value(yaml: &serde_yaml::Value) -> Value {
+    Value::from_serialize(yaml)
+}
+
+// ---------------------------------------------------------------------------
+// Hardcoded fallback generator (original implementation)
+// ---------------------------------------------------------------------------
+
+fn generate_readme_hardcoded(api: &ApiSurface, config: &AlefConfig, lang: Language) -> anyhow::Result<GeneratedFile> {
     let name = &config.crate_config.name;
     let description = config
         .scaffold
@@ -292,5 +652,41 @@ mod tests {
         let api = test_api();
         let files = generate_readmes(&api, &config, &[Language::Python, Language::Node]).unwrap();
         assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn test_extract_code_block() {
+        let md = "Some text\n\n```python\nprint('hello')\n```\n\nMore text";
+        let result = extract_code_block(md);
+        assert!(result.contains("```python"));
+        assert!(result.contains("print('hello')"));
+    }
+
+    #[test]
+    fn test_extract_code_block_no_block() {
+        let md = "Just plain text";
+        let result = extract_code_block(md);
+        assert_eq!(result, "Just plain text");
+    }
+
+    #[test]
+    fn test_render_performance_table_empty() {
+        let v = Value::from(Vec::<Value>::new());
+        let result = render_performance_table(&v);
+        assert!(result.contains("Benchmark"));
+    }
+
+    #[test]
+    fn test_include_snippet_missing() {
+        let result = include_snippet(Path::new("/nonexistent"), "python", "foo.py");
+        assert!(result.contains("snippet not found"));
+    }
+
+    #[test]
+    fn test_yaml_to_minijinja_value_primitives() {
+        let yaml: serde_yaml::Value = serde_yaml::from_str("key: value\nnum: 42\nflag: true").unwrap();
+        let mj = yaml_to_minijinja_value(&yaml);
+        // The value should be an object accessible by attribute
+        assert!(mj.get_attr("key").is_ok());
     }
 }

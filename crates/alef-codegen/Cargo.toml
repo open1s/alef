@@ -12,4 +12,4 @@ readme = "README.md"
 ahash = { workspace = true }
 alef-core = { workspace = true }
 heck = "0.5"
-minijinja = "2"
+minijinja = { workspace = true }
