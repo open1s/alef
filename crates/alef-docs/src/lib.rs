@@ -125,7 +125,7 @@ fn render_function(func: &FunctionDef, lang: Language, _config: &AlefConfig) -> 
     out.push_str(&format!("### {fn_name}()\n\n"));
 
     if !func.doc.is_empty() {
-        out.push_str(&clean_doc(&func.doc));
+        out.push_str(&clean_doc(&func.doc, lang));
         out.push('\n');
         out.push('\n');
     }
@@ -136,6 +136,9 @@ fn render_function(func: &FunctionDef, lang: Language, _config: &AlefConfig) -> 
     let sig = render_function_signature(func, lang);
     out.push_str(&format!("```{lang_code}\n{sig}\n```\n\n"));
 
+    // Extract parameter descriptions from the # Arguments section of doc
+    let param_docs = extract_param_docs(&func.doc);
+
     // Parameters table
     if !func.params.is_empty() {
         out.push_str("**Parameters:**\n\n");
@@ -145,7 +148,10 @@ fn render_function(func: &FunctionDef, lang: Language, _config: &AlefConfig) -> 
             let pname = field_name(&param.name, lang);
             let pty = doc_type(&param.ty, lang);
             let required = if param.optional { "No" } else { "Yes" };
-            let pdoc = String::new(); // ParamDef has no doc field
+            let pdoc = param_docs
+                .get(param.name.as_str())
+                .map(|s| s.replace('|', "\\|"))
+                .unwrap_or_default();
             out.push_str(&format!("| `{pname}` | `{pty}` | {required} | {pdoc} |\n"));
         }
         out.push('\n');
@@ -372,7 +378,7 @@ fn render_type(ty: &TypeDef, lang: Language) -> String {
 
     out.push_str(&format!("### {tname}\n\n"));
 
-    let doc = clean_doc(&ty.doc);
+    let doc = clean_doc(&ty.doc, lang);
     if !doc.is_empty() {
         out.push_str(&doc);
         out.push('\n');
@@ -410,7 +416,7 @@ fn render_method(method: &MethodDef, _type_name_str: &str, lang: Language) -> St
 
     out.push_str(&format!("##### {mname}()\n\n"));
 
-    let doc = clean_doc(&method.doc);
+    let doc = clean_doc(&method.doc, lang);
     if !doc.is_empty() {
         out.push_str(&doc);
         out.push('\n');
@@ -427,19 +433,19 @@ fn render_method(method: &MethodDef, _type_name_str: &str, lang: Language) -> St
 
 fn render_method_signature(method: &MethodDef, lang: Language) -> String {
     let name = func_name(&method.name, lang);
-    let params: Vec<String> = method
-        .params
-        .iter()
-        .map(|p| {
-            let pname = field_name(&p.name, lang);
-            let pty = doc_type(&p.ty, lang);
-            format!("{pname}: {pty}")
-        })
-        .collect();
     let ret = doc_type(&method.return_type, lang);
 
     match lang {
         Language::Python => {
+            let params: Vec<String> = method
+                .params
+                .iter()
+                .map(|p| {
+                    let pname = field_name(&p.name, lang);
+                    let pty = doc_type(&p.ty, lang);
+                    format!("{pname}: {pty}")
+                })
+                .collect();
             if method.is_static {
                 format!("@staticmethod\ndef {}({}) -> {}", name, params.join(", "), ret)
             } else {
@@ -449,6 +455,15 @@ fn render_method_signature(method: &MethodDef, lang: Language) -> String {
             }
         }
         Language::Node | Language::Wasm => {
+            let params: Vec<String> = method
+                .params
+                .iter()
+                .map(|p| {
+                    let pname = field_name(&p.name, lang);
+                    let pty = doc_type(&p.ty, lang);
+                    format!("{pname}: {pty}")
+                })
+                .collect();
             if method.is_static {
                 format!("static {}({}): {}", name, params.join(", "), ret)
             } else {
@@ -456,19 +471,104 @@ fn render_method_signature(method: &MethodDef, lang: Language) -> String {
             }
         }
         Language::Ruby => {
+            let params: Vec<String> = method.params.iter().map(|p| p.name.to_snake_case()).collect();
             if method.is_static {
                 format!("def self.{}({})", name, params.join(", "))
             } else {
                 format!("def {}({})", name, params.join(", "))
             }
         }
-        Language::Go => format!("func ({}) {} {} {}", "o *Object", name, params.join(", "), ret),
-        Language::Java => format!("public {} {}({})", ret, name, params.join(", ")),
-        Language::Csharp => format!("public {} {}({})", ret, name, params.join(", ")),
-        Language::Php => format!("public function {}({}): {}", name, params.join(", "), ret),
-        Language::Elixir => format!("def {}({})", name, params.join(", ")),
-        Language::R => format!("{}({})", name, params.join(", ")),
-        Language::Ffi => format!("{} {}({});", ret, name, params.join(", ")),
+        Language::Go => {
+            // Go methods: func (receiver *TypeName) MethodName(params) ReturnType
+            // We don't have type name here; use a placeholder receiver
+            let params: Vec<String> = method
+                .params
+                .iter()
+                .map(|p| {
+                    let pname = to_camel_case(&p.name);
+                    let pty = doc_type(&p.ty, lang);
+                    format!("{pname} {pty}")
+                })
+                .collect();
+            if method.error_type.is_some() {
+                format!("func (o *Object) {}({}) ({}, error)", name, params.join(", "), ret)
+            } else if ret.is_empty() {
+                format!("func (o *Object) {}({})", name, params.join(", "))
+            } else {
+                format!("func (o *Object) {}({}) {}", name, params.join(", "), ret)
+            }
+        }
+        Language::Java => {
+            // Java: avoid `default` reserved keyword
+            let java_name = if name == "default" {
+                "defaultOptions".to_string()
+            } else {
+                name.clone()
+            };
+            let params: Vec<String> = method
+                .params
+                .iter()
+                .map(|p| {
+                    let pname = to_camel_case(&p.name);
+                    let pty = doc_type(&p.ty, lang);
+                    format!("{pty} {pname}")
+                })
+                .collect();
+            let throws = method
+                .error_type
+                .as_ref()
+                .map(|e| format!(" throws {}", type_name(e, lang)))
+                .unwrap_or_default();
+            if method.is_static {
+                format!("public static {} {}({}){}", ret, java_name, params.join(", "), throws)
+            } else {
+                format!("public {} {}({}){}", ret, java_name, params.join(", "), throws)
+            }
+        }
+        Language::Csharp => {
+            let params: Vec<String> = method
+                .params
+                .iter()
+                .map(|p| {
+                    let pname = to_camel_case(&p.name);
+                    let pty = doc_type(&p.ty, lang);
+                    format!("{pty} {pname}")
+                })
+                .collect();
+            format!("public {} {}({})", ret, name, params.join(", "))
+        }
+        Language::Php => {
+            let params: Vec<String> = method
+                .params
+                .iter()
+                .map(|p| {
+                    let pname = format!("${}", p.name.to_snake_case());
+                    let pty = doc_type(&p.ty, lang);
+                    format!("{pty} {pname}")
+                })
+                .collect();
+            format!("public function {}({}): {}", name, params.join(", "), ret)
+        }
+        Language::Elixir => {
+            let params: Vec<String> = method.params.iter().map(|p| p.name.to_snake_case()).collect();
+            format!("def {}({})", name, params.join(", "))
+        }
+        Language::R => {
+            let params: Vec<String> = method.params.iter().map(|p| p.name.to_snake_case()).collect();
+            format!("{}({})", name, params.join(", "))
+        }
+        Language::Ffi => {
+            let params: Vec<String> = method
+                .params
+                .iter()
+                .map(|p| {
+                    let pname = p.name.to_snake_case();
+                    let pty = doc_type(&p.ty, lang);
+                    format!("{pty} {pname}")
+                })
+                .collect();
+            format!("{} {}({});", ret, name, params.join(", "))
+        }
     }
 }
 
@@ -482,7 +582,7 @@ fn render_enum(en: &EnumDef, lang: Language) -> String {
 
     out.push_str(&format!("### {ename}\n\n"));
 
-    let doc = clean_doc(&en.doc);
+    let doc = clean_doc(&en.doc, lang);
     if !doc.is_empty() {
         out.push_str(&doc);
         out.push('\n');
@@ -511,7 +611,7 @@ fn render_error(err: &ErrorDef, lang: Language) -> String {
 
     out.push_str(&format!("### {ename}\n\n"));
 
-    let doc = clean_doc(&err.doc);
+    let doc = clean_doc(&err.doc, lang);
     if !doc.is_empty() {
         out.push_str(&doc);
         out.push('\n');
@@ -560,7 +660,7 @@ fn generate_configuration_doc(
 
     for ty in config_types {
         out.push_str(&format!("## {}\n\n", ty.name));
-        let doc = clean_doc(&ty.doc);
+        let doc = clean_doc(&ty.doc, Language::Python);
         if !doc.is_empty() {
             out.push_str(&doc);
             out.push('\n');
@@ -603,7 +703,7 @@ fn generate_errors_doc(api: &ApiSurface, output_dir: &str) -> anyhow::Result<Gen
     for err in &api.errors {
         out.push_str(&format!("## {}\n\n", err.name));
 
-        let doc = clean_doc(&err.doc);
+        let doc = clean_doc(&err.doc, Language::Python);
         if !doc.is_empty() {
             out.push_str(&doc);
             out.push('\n');
@@ -936,9 +1036,9 @@ fn func_name(name: &str, lang: Language) -> String {
 /// Convert a Rust field name to the idiomatic name for the target language.
 fn field_name(name: &str, lang: Language) -> String {
     match lang {
-        Language::Python | Language::Ruby | Language::Elixir | Language::Go | Language::R | Language::Ffi => {
-            name.to_snake_case()
-        }
+        Language::Python | Language::Ruby | Language::Elixir | Language::R | Language::Ffi => name.to_snake_case(),
+        // Go exported fields are PascalCase
+        Language::Go => name.to_pascal_case(),
         Language::Node | Language::Wasm | Language::Java | Language::Php | Language::Csharp => to_camel_case(name),
     }
 }
@@ -1064,19 +1164,24 @@ fn format_typed_default(val: &DefaultValue, lang: Language) -> String {
 // Doc string utilities
 // ---------------------------------------------------------------------------
 
+/// Rust doc section headers that should be stripped for all non-Rust output.
+const RUST_ONLY_SECTIONS: &[&str] = &["example", "examples", "arguments", "fields"];
+
 /// Clean up Rust doc strings for Markdown output.
 ///
-/// Converts Rust-style links like `` [`field`](Self::field) `` to plain `` `field` ``.
-/// Strips `# Examples` sections.
-fn clean_doc(doc: &str) -> String {
+/// - Strips `# Example`, `# Arguments`, `# Fields` sections (Rust-specific)
+/// - Strips code blocks containing Rust-specific syntax
+/// - Converts `` [`Foo`](Self::bar) `` → `` `Foo` ``
+/// - Converts bare `` [`Foo`] `` → `` `Foo` ``
+fn clean_doc(doc: &str, _lang: Language) -> String {
     if doc.is_empty() {
         return String::new();
     }
 
-    // Strip `# Examples` and everything after it
-    let doc = strip_examples_section(doc);
+    // Strip Rust-specific sections and their code blocks
+    let doc = strip_rust_sections(doc);
 
-    // Convert Rust-style links: [`text`](path) → `text`
+    // Convert Rust-style links
     let doc = rust_links_to_plain(&doc);
 
     doc.trim().to_string()
@@ -1087,7 +1192,8 @@ fn clean_doc_inline(doc: &str) -> String {
     if doc.is_empty() {
         return String::new();
     }
-    let cleaned = clean_doc(doc);
+    // Use Python as a representative non-Rust language for inline cleaning
+    let cleaned = clean_doc(doc, Language::Python);
     // Collapse to single line for table cells
     cleaned
         .lines()
@@ -1099,30 +1205,168 @@ fn clean_doc_inline(doc: &str) -> String {
         .replace('|', "\\|")
 }
 
-/// Strip `# Examples` heading and everything after it.
-fn strip_examples_section(doc: &str) -> String {
+/// Strip Rust-specific doc sections (`# Example`, `# Arguments`, `# Fields`).
+///
+/// Also strips fenced code blocks that contain Rust-specific syntax
+/// (use statements, unwrap(), assert!, etc.) regardless of which section they appear in.
+fn strip_rust_sections(doc: &str) -> String {
     let mut out = String::new();
-    let mut skip = false;
+    let mut skip_section = false;
+    let mut in_code_block = false;
+    let mut code_block_buf = String::new();
+
     for line in doc.lines() {
-        if line.trim_start_matches('#').trim().eq_ignore_ascii_case("examples") && line.starts_with('#') {
-            skip = true;
+        // Track code block boundaries
+        if line.trim_start().starts_with("```") {
+            if in_code_block {
+                // End of code block — decide whether to emit it
+                in_code_block = false;
+                if !skip_section && !is_rust_code_block(&code_block_buf) {
+                    out.push_str(&code_block_buf);
+                    out.push_str(line);
+                    out.push('\n');
+                }
+                code_block_buf.clear();
+                continue;
+            } else {
+                in_code_block = true;
+                if !skip_section {
+                    code_block_buf.push_str(line);
+                    code_block_buf.push('\n');
+                }
+                continue;
+            }
+        }
+
+        if in_code_block {
+            if !skip_section {
+                code_block_buf.push_str(line);
+                code_block_buf.push('\n');
+            }
             continue;
         }
-        if skip && line.starts_with('#') {
-            // Another section — stop skipping
-            skip = false;
+
+        // Outside code block: check for section headers
+        if line.starts_with('#') {
+            let header_text = line.trim_start_matches('#').trim().to_lowercase();
+            if RUST_ONLY_SECTIONS.contains(&header_text.as_str()) {
+                skip_section = true;
+                continue;
+            } else {
+                // Any other section header ends the skip
+                skip_section = false;
+            }
         }
-        if !skip {
-            out.push_str(line);
-            out.push('\n');
+
+        if skip_section {
+            // Blank lines and list items are part of the section — keep skipping
+            let trimmed = line.trim();
+            let is_section_content = trimmed.is_empty()
+                || trimmed.starts_with('*')
+                || trimmed.starts_with('-')
+                || trimmed.starts_with('+')
+                || trimmed.starts_with("  ") // indented continuation
+                || trimmed.starts_with('\t');
+            if is_section_content {
+                continue;
+            }
+            // Non-list, non-blank line ends the skip
+            skip_section = false;
         }
+
+        // Skip lines that are clearly Rust-specific (unfenced imports/assertions)
+        if is_rust_specific_line(line) {
+            continue;
+        }
+
+        out.push_str(line);
+        out.push('\n');
     }
+
     out
 }
 
-/// Convert `` [`text`](path) `` patterns to `` `text` ``.
+/// Returns true if a code block's content contains Rust-specific patterns.
+fn is_rust_code_block(content: &str) -> bool {
+    // Opening fence line may declare "rust" or "no_run" etc.
+    let first_line = content.lines().next().unwrap_or("");
+    let fence_lang = first_line.trim_start_matches('`').trim().to_lowercase();
+    if matches!(fence_lang.as_str(), "rust" | "rust,no_run" | "rust,ignore" | "") {
+        // Check if content looks like Rust
+        for line in content.lines().skip(1) {
+            if line.starts_with("use ")
+                || line.contains("unwrap()")
+                || line.contains("assert!")
+                || line.contains("assert_eq!")
+                || line.contains("Vec::new()")
+                || line.contains("Default::default()")
+                || line.contains("::new(")
+                || line.contains(".to_string()")
+                || line.contains("html_to_markdown")
+                || line.contains("r#\"")
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Returns true if a plain (non-fenced) line is Rust-specific and should be removed.
+fn is_rust_specific_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("# use ") || trimmed.starts_with("use ") && trimmed.ends_with(';')
+}
+
+/// Extract parameter descriptions from a `# Arguments` section in a doc string.
+///
+/// Parses lines like `* name - description` or `* name: description`.
+/// Returns a map of parameter name → description.
+fn extract_param_docs(doc: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    let mut in_args = false;
+    let mut in_code_block = false;
+
+    for line in doc.lines() {
+        if line.trim_start().starts_with("```") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+        if in_code_block {
+            continue;
+        }
+
+        if line.starts_with('#') {
+            let header = line.trim_start_matches('#').trim().to_lowercase();
+            in_args = matches!(header.as_str(), "arguments" | "args" | "parameters" | "params");
+            continue;
+        }
+
+        if in_args {
+            // Match "* param_name - description" or "* param_name: description"
+            let trimmed = line.trim_start_matches(['*', '-', ' ']);
+            // Try " - " separator first (3 chars), then ": " (2 chars)
+            let parsed = trimmed
+                .find(" - ")
+                .map(|pos| (pos, 3))
+                .or_else(|| trimmed.find(": ").map(|pos| (pos, 2)));
+            if let Some((sep_pos, sep_len)) = parsed {
+                let param_name = trimmed[..sep_pos].trim();
+                let desc = trimmed[sep_pos + sep_len..].trim();
+                if !param_name.is_empty() && !desc.is_empty() {
+                    map.insert(param_name.to_string(), desc.to_string());
+                }
+            }
+        }
+    }
+
+    map
+}
+
+/// Convert `` [`text`](path) `` and bare `` [`text`] `` patterns to `` `text` ``.
 fn rust_links_to_plain(doc: &str) -> String {
-    // Pattern: [`text`](anything) → `text`
+    // Pattern 1: [`text`](anything) → `text`
+    // Pattern 2: [`text`] → `text`  (bare doc links)
     let mut result = String::with_capacity(doc.len());
     let chars: Vec<char> = doc.chars().collect();
     let mut i = 0;
@@ -1135,17 +1379,24 @@ fn rust_links_to_plain(doc: &str) -> String {
             while j < chars.len() && chars[j] != ']' {
                 j += 1;
             }
-            if j < chars.len() && j + 1 < chars.len() && chars[j] == ']' && chars[j + 1] == '(' {
-                // Found `](`; now find closing `)`
+            if j < chars.len() {
                 let text: String = chars[start..j].iter().collect();
-                let mut k = j + 2;
-                while k < chars.len() && chars[k] != ')' {
-                    k += 1;
-                }
-                if k < chars.len() {
-                    // Emit just the inner backtick text
+                // Check if followed by `(` (linked form) or not (bare form)
+                if j + 1 < chars.len() && chars[j + 1] == '(' {
+                    // Linked form: find closing `)`
+                    let mut k = j + 2;
+                    while k < chars.len() && chars[k] != ')' {
+                        k += 1;
+                    }
+                    if k < chars.len() {
+                        result.push_str(&text);
+                        i = k + 1;
+                        continue;
+                    }
+                } else {
+                    // Bare form: [`text`] — emit just the text
                     result.push_str(&text);
-                    i = k + 1;
+                    i = j + 1;
                     continue;
                 }
             }
@@ -1250,17 +1501,51 @@ mod tests {
     #[test]
     fn test_clean_doc_strips_examples() {
         let doc = "Does something.\n\n# Examples\n\n```rust\nfoo();\n```\n";
-        let cleaned = clean_doc(doc);
+        let cleaned = clean_doc(doc, Language::Python);
         assert!(!cleaned.contains("Examples"));
         assert!(!cleaned.contains("foo()"));
         assert!(cleaned.contains("Does something"));
     }
 
     #[test]
+    fn test_clean_doc_strips_arguments() {
+        let doc = "Does something.\n\n# Arguments\n\n* html - The HTML string\n\nMore text.";
+        let cleaned = clean_doc(doc, Language::Python);
+        assert!(!cleaned.contains("Arguments"));
+        assert!(!cleaned.contains("html - The HTML string"));
+        assert!(cleaned.contains("Does something"));
+        assert!(cleaned.contains("More text"));
+    }
+
+    #[test]
     fn test_clean_doc_rust_links() {
         let doc = "See [`field`](Self::field) for details.";
-        let cleaned = clean_doc(doc);
+        let cleaned = clean_doc(doc, Language::Python);
         assert_eq!(cleaned, "See `field` for details.");
+    }
+
+    #[test]
+    fn test_clean_doc_bare_rust_links() {
+        let doc = "See [`ConversionOptions`] for details.";
+        let cleaned = clean_doc(doc, Language::Python);
+        assert_eq!(cleaned, "See `ConversionOptions` for details.");
+    }
+
+    #[test]
+    fn test_extract_param_docs() {
+        let doc = "Convert HTML to Markdown.\n\n# Arguments\n\n* html - The HTML string to convert\n* options - Conversion options\n";
+        let params = extract_param_docs(doc);
+        assert_eq!(
+            params.get("html").map(String::as_str),
+            Some("The HTML string to convert")
+        );
+        assert_eq!(params.get("options").map(String::as_str), Some("Conversion options"));
+    }
+
+    #[test]
+    fn test_field_name_go_pascal_case() {
+        assert_eq!(field_name("heading_style", Language::Go), "HeadingStyle");
+        assert_eq!(field_name("list_indent_type", Language::Go), "ListIndentType");
     }
 
     #[test]
