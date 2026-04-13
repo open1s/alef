@@ -1026,11 +1026,17 @@ fn type_name(name: &str, lang: Language) -> String {
 
 /// Convert a Rust function name to the idiomatic name for the target language.
 fn func_name(name: &str, lang: Language) -> String {
-    match lang {
+    let base = match lang {
         Language::Python | Language::Ruby | Language::Elixir | Language::R => name.to_snake_case(),
-        Language::Node | Language::Wasm | Language::Java | Language::Php | Language::Csharp => to_camel_case(name),
-        Language::Go => name.to_pascal_case(),
+        Language::Node | Language::Wasm | Language::Java | Language::Php => to_camel_case(name),
+        Language::Csharp | Language::Go => name.to_pascal_case(),
         Language::Ffi => format!("htm_{}", name.to_snake_case()),
+    };
+    // Handle reserved keywords
+    match (lang, base.as_str()) {
+        (Language::Java, "default") => "defaultOptions".to_string(),
+        (Language::Csharp, "Default") => "CreateDefault".to_string(),
+        _ => base,
     }
 }
 
@@ -1038,9 +1044,9 @@ fn func_name(name: &str, lang: Language) -> String {
 fn field_name(name: &str, lang: Language) -> String {
     match lang {
         Language::Python | Language::Ruby | Language::Elixir | Language::R | Language::Ffi => name.to_snake_case(),
-        // Go exported fields are PascalCase
-        Language::Go => name.to_pascal_case(),
-        Language::Node | Language::Wasm | Language::Java | Language::Php | Language::Csharp => to_camel_case(name),
+        // Go and C# exported fields/properties are PascalCase
+        Language::Go | Language::Csharp => name.to_pascal_case(),
+        Language::Node | Language::Wasm | Language::Java | Language::Php => to_camel_case(name),
     }
 }
 
@@ -1139,10 +1145,25 @@ fn format_typed_default(val: &DefaultValue, field_ty: &TypeRef, lang: Language, 
                     }
                 }
             }
-            // Non-enum Empty: empty collection or default
+            // Non-enum Empty: depends on field type
+            let is_collection = matches!(field_ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
+            if is_collection {
+                return match lang {
+                    Language::Python => "`[]`".to_string(),
+                    Language::Node | Language::Wasm => "`[]`".to_string(),
+                    Language::Go => "`nil`".to_string(),
+                    Language::Java => "`Collections.emptyList()`".to_string(),
+                    Language::Csharp => "`new List<>()`".to_string(),
+                    Language::Ruby | Language::Elixir => "`[]`".to_string(),
+                    Language::Php => "`[]`".to_string(),
+                    Language::Ffi => "`NULL`".to_string(),
+                    Language::R => "`list()`".to_string(),
+                };
+            }
+            // Non-collection Empty: use language-specific null/default
             match lang {
-                Language::Python => "`[]`".to_string(),
-                Language::Node | Language::Wasm => "`[]`".to_string(),
+                Language::Python => "`None`".to_string(),
+                Language::Node | Language::Wasm => "`null`".to_string(),
                 Language::Go => "`nil`".to_string(),
                 Language::Java => "`[]`".to_string(),
                 Language::Csharp => "`[]`".to_string(),
@@ -1173,7 +1194,7 @@ fn format_enum_variant_ref(enum_type: &str, variant: &str, lang: Language) -> St
     match lang {
         Language::Python => format!("{enum_type}.{variant}"),
         Language::Node | Language::Wasm => format!("{enum_type}.{variant}"),
-        Language::Go => format!("{enum_type}{variant}"),
+        Language::Go => format!("{enum_type}.{variant}"),
         Language::Java => format!("{enum_type}.{variant}"),
         Language::Csharp => format!("{enum_type}.{variant}"),
         Language::Ruby => format!(":{variant}"),
