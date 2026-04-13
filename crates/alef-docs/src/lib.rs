@@ -1152,7 +1152,7 @@ fn format_field_default(field: &FieldDef, lang: Language, api: &ApiSurface) -> S
             Language::Ffi => "`NULL`".to_string(),
         };
     }
-    String::new()
+    "—".to_string()
 }
 
 fn format_typed_default(val: &DefaultValue, field_ty: &TypeRef, lang: Language, api: &ApiSurface) -> String {
@@ -1172,7 +1172,25 @@ fn format_typed_default(val: &DefaultValue, field_ty: &TypeRef, lang: Language, 
                 let variant = enum_variant_name(parts[1], lang);
                 format!("`{}`", format_enum_variant_ref(&enum_type, &variant, lang))
             } else {
-                format!("`{v}`")
+                // Bare variant name — resolve the enum type from the field type
+                let enum_type_name_str = match field_ty {
+                    TypeRef::Named(n) => Some(n.as_str()),
+                    TypeRef::Optional(inner) => {
+                        if let TypeRef::Named(n) = inner.as_ref() {
+                            Some(n.as_str())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(type_str) = enum_type_name_str {
+                    let etype = type_name(type_str, lang);
+                    let variant = enum_variant_name(v, lang);
+                    format!("`{}`", format_enum_variant_ref(&etype, &variant, lang))
+                } else {
+                    format!("`{v}`")
+                }
             }
         }
         DefaultValue::Empty => {
@@ -1192,16 +1210,47 @@ fn format_typed_default(val: &DefaultValue, field_ty: &TypeRef, lang: Language, 
                 }
             }
             // Non-enum Empty: depends on field type
-            let is_collection = matches!(field_ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
-            if is_collection {
+            // Unwrap Optional wrapper to get inner type for collection/map detection
+            let inner_ty = match field_ty {
+                TypeRef::Optional(inner) => inner.as_ref(),
+                other => other,
+            };
+            if matches!(inner_ty, TypeRef::Vec(_)) {
                 return match lang {
                     Language::Python => "`[]`".to_string(),
                     Language::Node | Language::Wasm => "`[]`".to_string(),
                     Language::Go => "`nil`".to_string(),
                     Language::Java => "`Collections.emptyList()`".to_string(),
-                    Language::Csharp => "`new List<>()`".to_string(),
+                    Language::Csharp => {
+                        let elem_ty = if let TypeRef::Vec(elem) = inner_ty {
+                            doc_type(elem, lang)
+                        } else {
+                            String::new()
+                        };
+                        format!("`new List<{elem_ty}>()`")
+                    }
                     Language::Ruby | Language::Elixir => "`[]`".to_string(),
                     Language::Php => "`[]`".to_string(),
+                    Language::Ffi => "`NULL`".to_string(),
+                    Language::R => "`list()`".to_string(),
+                };
+            }
+            if matches!(inner_ty, TypeRef::Map(_, _)) {
+                return match lang {
+                    Language::Python | Language::Ruby | Language::Php => "`{}`".to_string(),
+                    Language::Node | Language::Wasm => "`{}`".to_string(),
+                    Language::Go => "`nil`".to_string(),
+                    Language::Elixir => "`%{}`".to_string(),
+                    Language::Java => "`Collections.emptyMap()`".to_string(),
+                    Language::Csharp => {
+                        if let TypeRef::Map(k, v) = inner_ty {
+                            let kty = doc_type(k, lang);
+                            let vty = doc_type(v, lang);
+                            format!("`new Dictionary<{kty}, {vty}>()`")
+                        } else {
+                            "`new Dictionary<>()`".to_string()
+                        }
+                    }
                     Language::Ffi => "`NULL`".to_string(),
                     Language::R => "`list()`".to_string(),
                 };
@@ -1211,12 +1260,12 @@ fn format_typed_default(val: &DefaultValue, field_ty: &TypeRef, lang: Language, 
                 Language::Python => "`None`".to_string(),
                 Language::Node | Language::Wasm => "`null`".to_string(),
                 Language::Go => "`nil`".to_string(),
-                Language::Java => "`[]`".to_string(),
-                Language::Csharp => "`[]`".to_string(),
-                Language::Ruby => "`[]`".to_string(),
-                Language::Php => "`[]`".to_string(),
-                Language::Elixir => "`[]`".to_string(),
-                Language::R => "`list()`".to_string(),
+                Language::Java => "`null`".to_string(),
+                Language::Csharp => "`null`".to_string(),
+                Language::Ruby => "`nil`".to_string(),
+                Language::Php => "`null`".to_string(),
+                Language::Elixir => "`nil`".to_string(),
+                Language::R => "`NULL`".to_string(),
                 Language::Ffi => "`NULL`".to_string(),
             }
         }
@@ -1378,14 +1427,32 @@ fn convert_doc_headings_to_bold(doc: &str) -> String {
 }
 
 /// Replace Rust-centric terminology with language-neutral equivalents.
-fn replace_rust_terminology(doc: &str, _lang: Language) -> String {
-    doc.replace("this crate", "this library")
+fn replace_rust_terminology(doc: &str, lang: Language) -> String {
+    let doc = doc
+        .replace("this crate", "this library")
         .replace("in this crate", "in this library")
         .replace("for this crate", "for this library")
         .replace(
             "Panic caught during conversion to prevent unwinding across FFI boundaries",
             "Internal error caught during conversion",
-        )
+        );
+
+    // Replace `None` backtick references with the language-idiomatic null
+    let none_replacement = match lang {
+        Language::Go | Language::Ruby | Language::Elixir => "`nil`",
+        Language::Java | Language::Node | Language::Wasm | Language::Csharp | Language::Php => "`null`",
+        Language::Python => "`None`", // keep as-is for Python
+        Language::R | Language::Ffi => "`NULL`",
+    };
+    let doc = doc.replace("`None`", none_replacement);
+
+    // For Python, normalise boolean literals in prose: `true` → `True`, `false` → `False`
+    if lang == Language::Python {
+        let doc = doc.replace("`true`", "`True`").replace("`false`", "`False`");
+        return doc;
+    }
+
+    doc
 }
 
 /// Replace Rust `Foo::bar()` path notation with `Foo.bar()` in prose (outside code blocks).
@@ -1575,7 +1642,8 @@ fn extract_param_docs(doc: &str) -> std::collections::HashMap<String, String> {
         }
 
         if in_args {
-            // Match "* param_name - description" or "* param_name: description"
+            // Match "* `param_name` - description" or "* param_name - description"
+            // or "* param_name: description"
             let trimmed = line.trim_start_matches(['*', '-', ' ']);
             // Try " - " separator first (3 chars), then ": " (2 chars)
             let parsed = trimmed
@@ -1583,7 +1651,9 @@ fn extract_param_docs(doc: &str) -> std::collections::HashMap<String, String> {
                 .map(|pos| (pos, 3))
                 .or_else(|| trimmed.find(": ").map(|pos| (pos, 2)));
             if let Some((sep_pos, sep_len)) = parsed {
-                let param_name = trimmed[..sep_pos].trim();
+                let raw_name = trimmed[..sep_pos].trim();
+                // Strip surrounding backticks if present (e.g. `` `html` `` → `html`)
+                let param_name = raw_name.trim_matches('`');
                 let desc = trimmed[sep_pos + sep_len..].trim();
                 if !param_name.is_empty() && !desc.is_empty() {
                     map.insert(param_name.to_string(), desc.to_string());
