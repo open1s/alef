@@ -163,6 +163,11 @@ fn render_pom_xml(pkg_name: &str, java_group_id: &str, pkg_version: &str) -> Str
             <version>2.18.2</version>
         </dependency>
         <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jdk8</artifactId>
+            <version>2.18.2</version>
+        </dependency>
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <version>${{junit.version}}</version>

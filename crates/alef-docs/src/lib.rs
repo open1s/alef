@@ -8,7 +8,7 @@ use alef_core::config::{AlefConfig, Language};
 use alef_core::ir::{
     ApiSurface, DefaultValue, EnumDef, ErrorDef, FieldDef, FunctionDef, MethodDef, PrimitiveType, TypeDef, TypeRef,
 };
-use heck::{ToPascalCase, ToSnakeCase, ToUpperCamelCase};
+use heck::{ToPascalCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use std::path::PathBuf;
 
 // ---------------------------------------------------------------------------
@@ -66,7 +66,7 @@ fn generate_lang_doc(
     if !public_fns.is_empty() {
         out.push_str("## Functions\n\n");
         for func in &public_fns {
-            out.push_str(&render_function(func, lang, config));
+            out.push_str(&render_function(func, lang, config, api));
             out.push_str("\n---\n\n");
         }
     }
@@ -82,7 +82,7 @@ fn generate_lang_doc(
     if !types_to_doc.is_empty() {
         out.push_str("## Types\n\n");
         for ty in &types_to_doc {
-            out.push_str(&render_type(ty, lang));
+            out.push_str(&render_type(ty, lang, api));
             out.push_str("\n---\n\n");
         }
     }
@@ -118,11 +118,14 @@ fn generate_lang_doc(
 // Function rendering
 // ---------------------------------------------------------------------------
 
-fn render_function(func: &FunctionDef, lang: Language, _config: &AlefConfig) -> String {
+fn render_function(func: &FunctionDef, lang: Language, _config: &AlefConfig, api: &ApiSurface) -> String {
     let mut out = String::new();
     let fn_name = func_name(&func.name, lang);
 
     out.push_str(&format!("### {fn_name}()\n\n"));
+
+    // Extract parameter descriptions from the RAW doc string BEFORE cleaning
+    let param_docs = extract_param_docs(&func.doc);
 
     if !func.doc.is_empty() {
         out.push_str(&clean_doc(&func.doc, lang));
@@ -136,9 +139,6 @@ fn render_function(func: &FunctionDef, lang: Language, _config: &AlefConfig) -> 
     let sig = render_function_signature(func, lang);
     out.push_str(&format!("```{lang_code}\n{sig}\n```\n\n"));
 
-    // Extract parameter descriptions from the # Arguments section of doc
-    let param_docs = extract_param_docs(&func.doc);
-
     // Parameters table
     if !func.params.is_empty() {
         out.push_str("**Parameters:**\n\n");
@@ -146,7 +146,7 @@ fn render_function(func: &FunctionDef, lang: Language, _config: &AlefConfig) -> 
         out.push_str("|------|------|----------|-------------|\n");
         for param in &func.params {
             let pname = field_name(&param.name, lang);
-            let pty = doc_type(&param.ty, lang);
+            let pty = doc_type_with_optional(&param.ty, lang, param.optional);
             let required = if param.optional { "No" } else { "Yes" };
             let pdoc = param_docs
                 .get(param.name.as_str())
@@ -165,10 +165,11 @@ fn render_function(func: &FunctionDef, lang: Language, _config: &AlefConfig) -> 
 
     // Errors
     if let Some(err) = &func.error_type {
-        let err_name = type_name(err, lang);
-        out.push_str(&format!("**Errors:** Throws `{err_name}` on failure.\n\n"));
+        let error_phrase = format_error_phrase(err, lang);
+        out.push_str(&format!("**Errors:** {error_phrase}\n\n"));
     }
 
+    let _ = api; // api is available for future use in function rendering
     out
 }
 
@@ -372,7 +373,7 @@ fn render_csharp_fn_sig(func: &FunctionDef) -> String {
 // Type rendering
 // ---------------------------------------------------------------------------
 
-fn render_type(ty: &TypeDef, lang: Language) -> String {
+fn render_type(ty: &TypeDef, lang: Language, api: &ApiSurface) -> String {
     let mut out = String::new();
     let tname = type_name(&ty.name, lang);
 
@@ -391,8 +392,8 @@ fn render_type(ty: &TypeDef, lang: Language) -> String {
         out.push_str("|-------|------|---------|-------------|\n");
         for field in &ty.fields {
             let fname = field_name(&field.name, lang);
-            let fty = doc_type(&field.ty, lang);
-            let fdefault = format_field_default(field, lang);
+            let fty = doc_type_with_optional(&field.ty, lang, field.optional);
+            let fdefault = format_field_default(field, lang, api);
             let fdoc = clean_doc_inline(&field.doc);
             out.push_str(&format!("| `{fname}` | `{fty}` | {fdefault} | {fdoc} |\n"));
         }
@@ -671,8 +672,8 @@ fn generate_configuration_doc(
             out.push_str("| Field | Type | Default | Description |\n");
             out.push_str("|-------|------|---------|-------------|\n");
             for field in &ty.fields {
-                let fty = doc_type(&field.ty, Language::Python); // Use Python as canonical type display
-                let fdefault = format_field_default(field, Language::Python);
+                let fty = doc_type_with_optional(&field.ty, Language::Python, field.optional);
+                let fdefault = format_field_default(field, Language::Python, api);
                 let fdoc = clean_doc_inline(&field.doc);
                 out.push_str(&format!("| `{}` | `{}` | {} | {} |\n", field.name, fty, fdefault, fdoc));
             }
@@ -1076,9 +1077,9 @@ fn to_camel_case(s: &str) -> String {
 // Default value formatting
 // ---------------------------------------------------------------------------
 
-fn format_field_default(field: &FieldDef, lang: Language) -> String {
+fn format_field_default(field: &FieldDef, lang: Language, api: &ApiSurface) -> String {
     if let Some(typed) = &field.typed_default {
-        return format_typed_default(typed, lang);
+        return format_typed_default(typed, &field.ty, lang, api);
     }
     if let Some(raw) = &field.default {
         if !raw.is_empty() {
@@ -1102,7 +1103,7 @@ fn format_field_default(field: &FieldDef, lang: Language) -> String {
     String::new()
 }
 
-fn format_typed_default(val: &DefaultValue, lang: Language) -> String {
+fn format_typed_default(val: &DefaultValue, field_ty: &TypeRef, lang: Language, api: &ApiSurface) -> String {
     match val {
         DefaultValue::BoolLiteral(b) => match lang {
             Language::Python => format!("`{}`", if *b { "True" } else { "False" }),
@@ -1117,34 +1118,41 @@ fn format_typed_default(val: &DefaultValue, lang: Language) -> String {
             if parts.len() == 2 {
                 let enum_type = type_name(parts[0], lang);
                 let variant = enum_variant_name(parts[1], lang);
-                match lang {
-                    Language::Python => format!("`{enum_type}.{variant}`"),
-                    Language::Node | Language::Wasm => format!("`{enum_type}.{variant}`"),
-                    Language::Go => format!("`{enum_type}{variant}`"),
-                    Language::Java => format!("`{enum_type}.{variant}`"),
-                    Language::Csharp => format!("`{enum_type}.{variant}`"),
-                    Language::Ruby => format!("`:{variant}`"),
-                    Language::Php => format!("`{enum_type}::{variant}`"),
-                    Language::Elixir => format!("`:{variant}`"),
-                    Language::R => format!("`\"{variant}\"`"),
-                    Language::Ffi => format!("`HTM_{}`", variant.to_uppercase()),
-                }
+                format!("`{}`", format_enum_variant_ref(&enum_type, &variant, lang))
             } else {
                 format!("`{v}`")
             }
         }
-        DefaultValue::Empty => match lang {
-            Language::Python => "`[]`".to_string(),
-            Language::Node | Language::Wasm => "`[]`".to_string(),
-            Language::Go => "`nil`".to_string(),
-            Language::Java => "`Collections.emptyList()`".to_string(),
-            Language::Csharp => "`new List<>()`".to_string(),
-            Language::Ruby => "`[]`".to_string(),
-            Language::Php => "`[]`".to_string(),
-            Language::Elixir => "`[]`".to_string(),
-            Language::R => "`list()`".to_string(),
-            Language::Ffi => "`NULL`".to_string(),
-        },
+        DefaultValue::Empty => {
+            // If the field type is a Named enum, resolve to its default (or first) variant
+            if let TypeRef::Named(type_name_str) = field_ty {
+                if let Some(enum_def) = api.enums.iter().find(|e| &e.name == type_name_str) {
+                    let variant = enum_def
+                        .variants
+                        .iter()
+                        .find(|v| v.is_default)
+                        .or_else(|| enum_def.variants.first());
+                    if let Some(v) = variant {
+                        let etype = type_name(type_name_str, lang);
+                        let vname = enum_variant_name(&v.name, lang);
+                        return format!("`{}`", format_enum_variant_ref(&etype, &vname, lang));
+                    }
+                }
+            }
+            // Non-enum Empty: empty collection or default
+            match lang {
+                Language::Python => "`[]`".to_string(),
+                Language::Node | Language::Wasm => "`[]`".to_string(),
+                Language::Go => "`nil`".to_string(),
+                Language::Java => "`[]`".to_string(),
+                Language::Csharp => "`[]`".to_string(),
+                Language::Ruby => "`[]`".to_string(),
+                Language::Php => "`[]`".to_string(),
+                Language::Elixir => "`[]`".to_string(),
+                Language::R => "`list()`".to_string(),
+                Language::Ffi => "`NULL`".to_string(),
+            }
+        }
         DefaultValue::None => match lang {
             Language::Python => "`None`".to_string(),
             Language::Node | Language::Wasm => "`null`".to_string(),
@@ -1160,6 +1168,78 @@ fn format_typed_default(val: &DefaultValue, lang: Language) -> String {
     }
 }
 
+/// Format an enum variant reference: `TypeName.VARIANT` or `:atom` style per language.
+fn format_enum_variant_ref(enum_type: &str, variant: &str, lang: Language) -> String {
+    match lang {
+        Language::Python => format!("{enum_type}.{variant}"),
+        Language::Node | Language::Wasm => format!("{enum_type}.{variant}"),
+        Language::Go => format!("{enum_type}{variant}"),
+        Language::Java => format!("{enum_type}.{variant}"),
+        Language::Csharp => format!("{enum_type}.{variant}"),
+        Language::Ruby => format!(":{variant}"),
+        Language::Php => format!("{enum_type}::{variant}"),
+        Language::Elixir => format!(":{variant}"),
+        Language::R => format!("\"{variant}\""),
+        Language::Ffi => format!("HTM_{}", variant.to_shouty_snake_case()),
+    }
+}
+
+/// Format the error/exception phrase for a function that can fail.
+fn format_error_phrase(error_type: &str, lang: Language) -> String {
+    let short = error_type.rsplit("::").next().unwrap_or(error_type);
+    match lang {
+        Language::Python => {
+            let ename = short.to_pascal_case();
+            format!("Raises `{ename}`.")
+        }
+        Language::Go => "Returns `error`.".to_string(),
+        Language::Java => {
+            let ename = short.to_pascal_case();
+            format!("Throws `{ename}`.")
+        }
+        Language::Node | Language::Wasm => {
+            let ename = short.to_pascal_case();
+            format!("Throws `{ename}`.")
+        }
+        Language::Ruby => {
+            let ename = short.to_pascal_case();
+            format!("Raises `{ename}`.")
+        }
+        Language::Csharp => {
+            let ename = short.to_pascal_case();
+            format!("Throws `{ename}`.")
+        }
+        Language::Elixir => "Returns `{:error, reason}`".to_string(),
+        Language::Php => {
+            let ename = short.to_pascal_case();
+            format!("Throws `{ename}`.")
+        }
+        Language::Ffi => "Returns `NULL` on error.".to_string(),
+        Language::R => "Stops with error message.".to_string(),
+    }
+}
+
+/// Like `doc_type` but wraps in the nullable form when `optional` is true.
+fn doc_type_with_optional(ty: &TypeRef, lang: Language, optional: bool) -> String {
+    // If the type is already Optional<T>, don't double-wrap
+    if optional && !matches!(ty, TypeRef::Optional(_)) {
+        let inner = doc_type(ty, lang);
+        return match lang {
+            Language::Python => format!("{inner} | None"),
+            Language::Node | Language::Wasm => format!("{inner} | null"),
+            Language::Go => format!("*{inner}"),
+            Language::Java => format!("Optional<{inner}>"),
+            Language::Csharp => format!("{inner}?"),
+            Language::Ruby => format!("{inner}?"),
+            Language::Php => format!("?{inner}"),
+            Language::Elixir => format!("{inner} | nil"),
+            Language::R => format!("{inner} or NULL"),
+            Language::Ffi => format!("{inner}*"),
+        };
+    }
+    doc_type(ty, lang)
+}
+
 // ---------------------------------------------------------------------------
 // Doc string utilities
 // ---------------------------------------------------------------------------
@@ -1173,6 +1253,8 @@ const RUST_ONLY_SECTIONS: &[&str] = &["example", "examples", "arguments", "field
 /// - Strips code blocks containing Rust-specific syntax
 /// - Converts `` [`Foo`](Self::bar) `` → `` `Foo` ``
 /// - Converts bare `` [`Foo`] `` → `` `Foo` ``
+/// - Converts `# Errors` / `# Returns` headings to bold inline text
+/// - Converts `Foo::bar()` Rust path syntax to `Foo.bar()` in prose
 fn clean_doc(doc: &str, _lang: Language) -> String {
     if doc.is_empty() {
         return String::new();
@@ -1184,7 +1266,72 @@ fn clean_doc(doc: &str, _lang: Language) -> String {
     // Convert Rust-style links
     let doc = rust_links_to_plain(&doc);
 
+    // Convert `# Errors` / `# Returns` headings to bold inline text
+    // These are Rust doc conventions that render as H1 headings, which is wrong
+    let doc = convert_doc_headings_to_bold(&doc);
+
+    // Convert Rust path syntax `Foo::bar()` → `Foo.bar()` in prose
+    let doc = rust_paths_to_dot_notation(&doc);
+
     doc.trim().to_string()
+}
+
+/// Convert `# Errors` and `# Returns` section headings to bold inline text.
+fn convert_doc_headings_to_bold(doc: &str) -> String {
+    let mut out = String::new();
+    let mut in_code_block = false;
+    for line in doc.lines() {
+        if line.trim_start().starts_with("```") {
+            in_code_block = !in_code_block;
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if !in_code_block && line.starts_with('#') {
+            let heading_text = line.trim_start_matches('#').trim();
+            let lower = heading_text.to_lowercase();
+            if lower == "errors"
+                || lower == "returns"
+                || lower == "panics"
+                || lower == "safety"
+                || lower == "notes"
+                || lower == "note"
+            {
+                out.push_str(&format!("**{heading_text}:**\n"));
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Replace Rust `Foo::bar()` path notation with `Foo.bar()` in prose (outside code blocks).
+fn rust_paths_to_dot_notation(doc: &str) -> String {
+    let mut out = String::new();
+    let mut in_code_block = false;
+    for line in doc.lines() {
+        if line.trim_start().starts_with("```") {
+            in_code_block = !in_code_block;
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if in_code_block {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        // Replace `Foo::bar` patterns in prose
+        // Common Rust-isms: Default::default(), ConversionOptions::default(), ConversionOptions::builder()
+        let line = line
+            .replace("Default::default()", "the default constructor")
+            .replace("::", ".");
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
 }
 
 /// Inline version that also strips newlines for use in table cells.

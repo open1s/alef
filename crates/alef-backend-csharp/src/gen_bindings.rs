@@ -375,19 +375,30 @@ fn gen_native_methods(api: &ApiSurface, namespace: &str, lib_name: &str, prefix:
         }
     }
 
+    // Collect truly opaque types (is_opaque = true in IR) — these have no to_json/from_json FFI.
+    let true_opaque_types: HashSet<String> = api
+        .types
+        .iter()
+        .filter(|t| t.is_opaque)
+        .map(|t| t.name.clone())
+        .collect();
+
     // Emit from_json + free helpers for opaque types used as parameters.
+    // Truly opaque handles (is_opaque = true) have no from_json — only free.
     // E.g. `htm_conversion_options_from_json(const char *json) -> HTMConversionOptions*`
     for type_name in &opaque_param_types {
         let snake = type_name.to_snake_case();
-        let from_json_entry = format!("{prefix}_{snake}_from_json");
-        let from_json_cs = format!("{}FromJson", type_name.to_pascal_case());
-        if emitted.insert(from_json_entry.clone()) {
-            out.push_str(&format!(
-                "    [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = \"{from_json_entry}\")]\n"
-            ));
-            out.push_str(&format!(
-                "    internal static extern IntPtr {from_json_cs}([MarshalAs(UnmanagedType.LPStr)] string json);\n\n"
-            ));
+        if !true_opaque_types.contains(type_name) {
+            let from_json_entry = format!("{prefix}_{snake}_from_json");
+            let from_json_cs = format!("{}FromJson", type_name.to_pascal_case());
+            if emitted.insert(from_json_entry.clone()) {
+                out.push_str(&format!(
+                    "    [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = \"{from_json_entry}\")]\n"
+                ));
+                out.push_str(&format!(
+                    "    internal static extern IntPtr {from_json_cs}([MarshalAs(UnmanagedType.LPStr)] string json);\n\n"
+                ));
+            }
         }
         let free_entry = format!("{prefix}_{snake}_free");
         let free_cs = format!("{}Free", type_name.to_pascal_case());
@@ -400,17 +411,20 @@ fn gen_native_methods(api: &ApiSurface, namespace: &str, lib_name: &str, prefix:
     }
 
     // Emit to_json + free helpers for opaque types returned from functions.
+    // Truly opaque handles (is_opaque = true) have no to_json — only free.
     for type_name in &opaque_return_types {
         let snake = type_name.to_snake_case();
-        let to_json_entry = format!("{prefix}_{snake}_to_json");
-        let to_json_cs = format!("{}ToJson", type_name.to_pascal_case());
-        if emitted.insert(to_json_entry.clone()) {
-            out.push_str(&format!(
-                "    [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = \"{to_json_entry}\")]\n"
-            ));
-            out.push_str(&format!(
-                "    internal static extern IntPtr {to_json_cs}(IntPtr ptr);\n\n"
-            ));
+        if !true_opaque_types.contains(type_name) {
+            let to_json_entry = format!("{prefix}_{snake}_to_json");
+            let to_json_cs = format!("{}ToJson", type_name.to_pascal_case());
+            if emitted.insert(to_json_entry.clone()) {
+                out.push_str(&format!(
+                    "    [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = \"{to_json_entry}\")]\n"
+                ));
+                out.push_str(&format!(
+                    "    internal static extern IntPtr {to_json_cs}(IntPtr ptr);\n\n"
+                ));
+            }
         }
         let free_entry = format!("{prefix}_{snake}_free");
         let free_cs = format!("{}Free", type_name.to_pascal_case());
