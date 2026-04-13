@@ -53,6 +53,15 @@ enum Commands {
         #[arg(long, value_delimiter = ',')]
         lang: Option<Vec<String>>,
     },
+    /// Generate API reference documentation (Markdown for mkdocs).
+    Docs {
+        /// Comma-separated list of languages.
+        #[arg(long, value_delimiter = ',')]
+        lang: Option<Vec<String>>,
+        /// Output directory (default: docs/reference).
+        #[arg(long, default_value = "docs/reference")]
+        output: String,
+    },
     /// Sync version from Cargo.toml to all package manifests.
     SyncVersions {
         /// Bump version before syncing (major, minor, patch).
@@ -243,6 +252,17 @@ fn main() -> Result<()> {
             let base_dir = std::env::current_dir()?;
             let count = pipeline::write_scaffold_files(&files, &base_dir)?;
             println!("Generated {count} README files");
+            Ok(())
+        }
+        Commands::Docs { lang, output } => {
+            let config = load_config(config_path)?;
+            let languages = resolve_languages(&config, lang.as_deref())?;
+            eprintln!("Generating API docs for: {}", format_languages(&languages));
+            let api = pipeline::extract(&config, config_path, false)?;
+            let files = alef_docs::generate_docs(&api, &config, &languages, &output)?;
+            let base_dir = std::env::current_dir()?;
+            let count = pipeline::write_scaffold_files(&files, &base_dir)?;
+            println!("Generated {count} API doc files");
             Ok(())
         }
         Commands::SyncVersions { bump } => {

@@ -177,6 +177,7 @@ dependencies = [
  "alef-backend-rustler",
  "alef-backend-wasm",
  "alef-core",
+ "alef-docs",
  "alef-e2e",
  "alef-extract",
  "alef-readme",
@@ -212,6 +213,15 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "toml",
+]
+
+[[package]]
+name = "alef-docs"
+version = "0.2.0"
+dependencies = [
+ "alef-core",
+ "anyhow",
+ "heck",
 ]
 
 [[package]]

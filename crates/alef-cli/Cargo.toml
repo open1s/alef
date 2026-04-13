@@ -26,6 +26,7 @@ alef-backend-pyo3 = { version = "0.2.0", path = "../alef-backend-pyo3" }
 alef-backend-rustler = { version = "0.2.0", path = "../alef-backend-rustler" }
 alef-backend-wasm = { version = "0.2.0", path = "../alef-backend-wasm" }
 alef-core = { workspace = true }
+alef-docs = { version = "0.2.0", path = "../alef-docs" }
 alef-e2e = { version = "0.2.0", path = "../alef-e2e" }
 alef-extract = { version = "0.2.0", path = "../alef-extract" }
 alef-readme = { version = "0.2.0", path = "../alef-readme" }
