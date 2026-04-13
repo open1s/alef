@@ -400,9 +400,14 @@ fn render_type(ty: &TypeDef, lang: Language, api: &ApiSurface) -> String {
         out.push('\n');
     }
 
-    // Methods
+    // Methods (called "Functions" in Elixir)
     if !ty.methods.is_empty() {
-        out.push_str("#### Methods\n\n");
+        let methods_heading = if lang == Language::Elixir {
+            "Functions"
+        } else {
+            "Methods"
+        };
+        out.push_str(&format!("#### {methods_heading}\n\n"));
         for method in &ty.methods {
             out.push_str(&render_method(method, &ty.name, lang));
         }
@@ -549,7 +554,11 @@ fn render_method_signature(method: &MethodDef, type_name_str: &str, lang: Langua
                     format!("{pty} {pname}")
                 })
                 .collect();
-            format!("public function {}({}): {}", name, params.join(", "), ret)
+            if method.is_static {
+                format!("public static function {}({}): {}", name, params.join(", "), ret)
+            } else {
+                format!("public function {}({}): {}", name, params.join(", "), ret)
+            }
         }
         Language::Elixir => {
             let params: Vec<String> = method.params.iter().map(|p| p.name.to_snake_case()).collect();
@@ -887,8 +896,6 @@ fn doc_primitive(p: &PrimitiveType, lang: Language) -> String {
         },
         Language::Node | Language::Wasm => match p {
             PrimitiveType::Bool => "boolean".to_string(),
-            PrimitiveType::F32 | PrimitiveType::F64 => "number".to_string(),
-            PrimitiveType::U64 | PrimitiveType::I64 => "bigint".to_string(),
             _ => "number".to_string(),
         },
         Language::Go => match p {
@@ -1315,7 +1322,7 @@ const RUST_ONLY_SECTIONS: &[&str] = &["example", "examples", "arguments", "field
 /// - Converts bare `` [`Foo`] `` → `` `Foo` ``
 /// - Converts `# Errors` / `# Returns` headings to bold inline text
 /// - Converts `Foo::bar()` Rust path syntax to `Foo.bar()` in prose
-fn clean_doc(doc: &str, _lang: Language) -> String {
+fn clean_doc(doc: &str, lang: Language) -> String {
     if doc.is_empty() {
         return String::new();
     }
@@ -1330,11 +1337,11 @@ fn clean_doc(doc: &str, _lang: Language) -> String {
     // These are Rust doc conventions that render as H1 headings, which is wrong
     let doc = convert_doc_headings_to_bold(&doc);
 
-    // Convert Rust path syntax `Foo::bar()` → `Foo.bar()` in prose
-    let doc = rust_paths_to_dot_notation(&doc);
+    // Convert Rust path syntax `Foo::bar()` → `Foo.bar()` (or `Foo::bar()` for PHP) in prose
+    let doc = rust_paths_to_dot_notation(&doc, lang);
 
     // Replace Rust-centric terminology
-    let doc = replace_rust_terminology(&doc, _lang);
+    let doc = replace_rust_terminology(&doc, lang);
 
     doc.trim().to_string()
 }
@@ -1382,7 +1389,11 @@ fn replace_rust_terminology(doc: &str, _lang: Language) -> String {
 }
 
 /// Replace Rust `Foo::bar()` path notation with `Foo.bar()` in prose (outside code blocks).
-fn rust_paths_to_dot_notation(doc: &str) -> String {
+///
+/// For PHP, static method calls use `::` so we keep that separator.
+fn rust_paths_to_dot_notation(doc: &str, lang: Language) -> String {
+    // PHP uses `::` for static method calls; other languages use `.`
+    let sep = if lang == Language::Php { "::" } else { "." };
     let mut out = String::new();
     let mut in_code_block = false;
     for line in doc.lines() {
@@ -1401,7 +1412,7 @@ fn rust_paths_to_dot_notation(doc: &str) -> String {
         // Common Rust-isms: Default::default(), ConversionOptions::default(), ConversionOptions::builder()
         let line = line
             .replace("Default::default()", "the default constructor")
-            .replace("::", ".");
+            .replace("::", sep);
         out.push_str(&line);
         out.push('\n');
     }
@@ -1691,7 +1702,7 @@ mod tests {
         );
         assert_eq!(
             doc_type(&TypeRef::Primitive(PrimitiveType::U64), Language::Node),
-            "bigint"
+            "number"
         );
         assert_eq!(
             doc_type(&TypeRef::Primitive(PrimitiveType::F64), Language::Python),
