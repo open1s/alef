@@ -119,9 +119,7 @@ fn gen_type_stub(typ: &TypeDef, api: &ApiSurface) -> String {
         let type_str = python_type(&field.ty);
         // Duration fields on has_default types are Option<u64> in PyO3, so annotate as int | None
         let is_optional_duration = typ.has_default && matches!(field.ty, TypeRef::Duration) && !field.optional;
-        let field_type = if is_optional_duration && !type_str.contains("| None") {
-            format!("{} | None", type_str)
-        } else if field.optional && !type_str.contains("| None") {
+        let field_type = if (is_optional_duration || field.optional) && !type_str.contains("| None") {
             format!("{} | None", type_str)
         } else {
             type_str

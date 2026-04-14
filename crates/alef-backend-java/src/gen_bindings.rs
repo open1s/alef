@@ -1701,12 +1701,7 @@ fn gen_helper_methods(out: &mut String, prefix: &str, class_name: &str) {
     if needs_check_last_error {
         // Reads the last FFI error code and, if non-zero, reads the error message and throws.
         // Called immediately after a null-pointer return from an FFI call.
-        writeln!(
-            out,
-            "    private static void checkLastError() throws {}Exception {{",
-            class_name
-        )
-        .ok();
+        writeln!(out, "    private static void checkLastError() throws Throwable {{").ok();
         writeln!(
             out,
             "        int errCode = (int) NativeLib.{}_LAST_ERROR_CODE.invoke();",
