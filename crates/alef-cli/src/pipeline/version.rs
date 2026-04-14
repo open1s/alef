@@ -157,7 +157,7 @@ pub fn sync_versions(config: &AlefConfig, bump: Option<&str>) -> anyhow::Result<
             if path.extension().is_some_and(|e| e == "gemspec") {
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     if let Some(new_content) =
-                        replace_version_pattern(&content, r#"spec\.version\s*=\s*"[^"]*""#, &version)
+                        replace_version_pattern(&content, r#"spec\.version\s*=\s*['"][^'"]*['"]"#, &version)
                     {
                         std::fs::write(&path, &new_content)?;
                         updated.push(path.to_string_lossy().to_string());
@@ -354,7 +354,7 @@ fn replace_version_pattern(content: &str, pattern: &str, version: &str) -> Optio
     let replacement = match pattern {
         p if p.contains("version =") && !p.contains("spec") => format!(r#"version = "{version}""#),
         p if p.contains("\"version\"") && p.contains("\"") => format!(r#""version": "{version}""#),
-        p if p.contains("spec") => format!(r#"spec.version = "{version}""#),
+        p if p.contains("spec") => format!("spec.version = '{version}'"),
         p if p.contains("<version>") => format!("<version>{version}</version>"),
         p if p.contains("<Version>") => format!("<Version>{version}</Version>"),
         p if p.contains("version:") && p.contains(":") => format!(r#"version: "{version}""#),
