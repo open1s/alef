@@ -358,7 +358,13 @@ fn render_test_function(
                     // (not just a skip comment), to avoid empty branches (SA9003).
                     if field_resolver.is_valid_for_result(f) {
                         let _ = writeln!(out, "\tif {guard} != nil {{");
-                        render_assertion(out, assertion, result_var, field_resolver, &optional_locals);
+                        // Render into a temporary buffer so we can re-indent by one
+                        // tab level to sit inside the nil-guard block.
+                        let mut nil_buf = String::new();
+                        render_assertion(&mut nil_buf, assertion, result_var, field_resolver, &optional_locals);
+                        for line in nil_buf.lines() {
+                            let _ = writeln!(out, "\t{line}");
+                        }
                         let _ = writeln!(out, "\t}}");
                     } else {
                         render_assertion(out, assertion, result_var, field_resolver, &optional_locals);

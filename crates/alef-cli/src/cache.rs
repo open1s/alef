@@ -54,19 +54,29 @@ pub fn compute_lang_hash(ir_json: &str, lang: &str, config_toml: &str) -> String
 }
 
 /// Check if a language's output is cached.
+/// Returns false if the hash doesn't match OR if any previously-generated
+/// output files are missing from disk.
 pub fn is_lang_cached(lang: &str, lang_hash: &str) -> bool {
     let hash_path = Path::new(CACHE_DIR).join("hashes").join(format!("{lang}.hash"));
+    let manifest_path = Path::new(CACHE_DIR).join("hashes").join(format!("{lang}.manifest"));
     match fs::read_to_string(&hash_path) {
-        Ok(cached) => cached.trim() == lang_hash,
+        Ok(cached) => {
+            if cached.trim() != lang_hash {
+                return false;
+            }
+            // Verify all output files from the manifest still exist on disk
+            outputs_exist(&manifest_path)
+        }
         Err(_) => false,
     }
 }
 
-/// Write language hash.
-pub fn write_lang_hash(lang: &str, lang_hash: &str) -> anyhow::Result<()> {
+/// Write language hash and output file manifest.
+pub fn write_lang_hash(lang: &str, lang_hash: &str, output_paths: &[PathBuf]) -> anyhow::Result<()> {
     let hashes_dir = Path::new(CACHE_DIR).join("hashes");
     fs::create_dir_all(&hashes_dir)?;
     fs::write(hashes_dir.join(format!("{lang}.hash")), lang_hash)?;
+    write_manifest(&hashes_dir.join(format!("{lang}.manifest")), output_paths)?;
     Ok(())
 }
 
@@ -84,20 +94,56 @@ pub fn compute_stage_hash(ir_json: &str, stage: &str, config_toml: &str, extra: 
 }
 
 /// Check if a stage's output is cached.
+/// Returns false if the hash doesn't match OR if any previously-generated
+/// output files are missing from disk.
 pub fn is_stage_cached(stage: &str, stage_hash: &str) -> bool {
     let hash_path = Path::new(CACHE_DIR).join("hashes").join(format!("{stage}.hash"));
+    let manifest_path = Path::new(CACHE_DIR).join("hashes").join(format!("{stage}.manifest"));
     match fs::read_to_string(&hash_path) {
-        Ok(cached) => cached.trim() == stage_hash,
+        Ok(cached) => {
+            if cached.trim() != stage_hash {
+                return false;
+            }
+            // Verify all output files from the manifest still exist on disk
+            outputs_exist(&manifest_path)
+        }
         Err(_) => false,
     }
 }
 
-/// Write stage hash.
-pub fn write_stage_hash(stage: &str, stage_hash: &str) -> anyhow::Result<()> {
+/// Write stage hash and output file manifest.
+pub fn write_stage_hash(stage: &str, stage_hash: &str, output_paths: &[PathBuf]) -> anyhow::Result<()> {
     let hashes_dir = Path::new(CACHE_DIR).join("hashes");
     fs::create_dir_all(&hashes_dir)?;
     fs::write(hashes_dir.join(format!("{stage}.hash")), stage_hash)?;
+    write_manifest(&hashes_dir.join(format!("{stage}.manifest")), output_paths)?;
     Ok(())
+}
+
+/// Write a manifest of output file paths (one per line).
+fn write_manifest(manifest_path: &Path, output_paths: &[PathBuf]) -> anyhow::Result<()> {
+    let content: String = output_paths
+        .iter()
+        .map(|p| p.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(manifest_path, content)?;
+    Ok(())
+}
+
+/// Check that all files listed in a manifest exist on disk.
+/// Returns true if the manifest is missing (backwards compat with old caches)
+/// or if all listed files exist. Returns false if any file is missing.
+fn outputs_exist(manifest_path: &Path) -> bool {
+    match fs::read_to_string(manifest_path) {
+        Ok(content) => content
+            .lines()
+            .filter(|line| !line.is_empty())
+            .all(|line| Path::new(line).exists()),
+        // No manifest means old-style cache entry; treat as valid to avoid
+        // breaking existing caches on upgrade. The next write will create one.
+        Err(_) => true,
+    }
 }
 
 /// Hash all files in a directory recursively (for e2e fixture hashing).

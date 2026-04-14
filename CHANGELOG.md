@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `alef-sync-versions` pre-commit hook for automatic version propagation on Cargo.toml changes
 - PEP 440 pre-release conversion for Python (`0.1.0-rc.1` → `0.1.0rc1`)
 
+### Added
+
+- PHP composer.json scaffold: `scripts` section with `phpstan`, `format`, `format:check`, `test`, `lint`, and `lint:fix` commands
+
 ### Fixed
 
 - PHP stubs: generate public property declarations on classes (ext-php-rs exposes fields as properties, PHPStan needs them declared)
@@ -26,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PHP backend: remove hardcoded `createEngineFromJson` helper from facade and stubs (was kreuzcrawl-specific, incorrectly triggered by any opaque type)
 - Python stubs: add `# noqa: A002` to constructor parameters that shadow Python builtins (e.g. `id`)
 - PHP codegen: remove needless borrow in `serde_json::to_value` calls for enum-string fields (fixes clippy `needless_borrows_for_generic_args`)
+- Scaffold Cargo.toml templates: removed unused deps — `pyo3-async-runtimes` (Python), `serde_json` (Node), `tokio` (PHP, FFI), `wasm-bindgen-futures` (WASM), `serde`+`tokio` (Elixir/Rustler) — only include what generated binding code actually uses
 
 ## [0.3.3] - 2026-04-14
 

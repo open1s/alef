@@ -45,7 +45,9 @@ pub fn generate(
         let files = backend
             .generate_bindings(api, config)
             .with_context(|| format!("failed to generate bindings for {lang_str}"))?;
-        cache::write_lang_hash(&lang_str, &lang_hash)
+        let base_dir = std::env::current_dir().unwrap_or_default();
+        let output_paths: Vec<std::path::PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
+        cache::write_lang_hash(&lang_str, &lang_hash, &output_paths)
             .with_context(|| format!("failed to write language hash for {lang_str}"))?;
         results.push((lang, files));
     }

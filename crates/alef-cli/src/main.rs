@@ -239,7 +239,11 @@ fn main() -> Result<()> {
             let files = pipeline::generate_stubs(&api, &config, &languages)?;
             let base_dir = std::env::current_dir()?;
             let count = pipeline::write_files(&files, &base_dir)?;
-            cache::write_stage_hash("stubs", &stage_hash)?;
+            let output_paths: Vec<PathBuf> = files
+                .iter()
+                .flat_map(|(_, fs)| fs.iter().map(|f| base_dir.join(&f.path)))
+                .collect();
+            cache::write_stage_hash("stubs", &stage_hash, &output_paths)?;
             println!("Generated {count} stub files");
             Ok(())
         }
@@ -258,7 +262,8 @@ fn main() -> Result<()> {
             let files = pipeline::scaffold(&api, &config, &languages)?;
             let base_dir = std::env::current_dir()?;
             let count = pipeline::write_scaffold_files(&files, &base_dir)?;
-            cache::write_stage_hash("scaffold", &stage_hash)?;
+            let output_paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
+            cache::write_stage_hash("scaffold", &stage_hash, &output_paths)?;
             println!("Generated {count} scaffold files");
             Ok(())
         }
@@ -277,7 +282,8 @@ fn main() -> Result<()> {
             let files = pipeline::readme(&api, &config, &languages)?;
             let base_dir = std::env::current_dir()?;
             let count = pipeline::write_scaffold_files(&files, &base_dir)?;
-            cache::write_stage_hash("readme", &stage_hash)?;
+            let output_paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
+            cache::write_stage_hash("readme", &stage_hash, &output_paths)?;
             println!("Generated {count} README files");
             Ok(())
         }
@@ -296,7 +302,8 @@ fn main() -> Result<()> {
             let files = alef_docs::generate_docs(&api, &config, &languages, &output)?;
             let base_dir = std::env::current_dir()?;
             let count = pipeline::write_scaffold_files(&files, &base_dir)?;
-            cache::write_stage_hash("docs", &stage_hash)?;
+            let output_paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
+            cache::write_stage_hash("docs", &stage_hash, &output_paths)?;
             println!("Generated {count} API doc files");
             Ok(())
         }
@@ -486,7 +493,8 @@ fn main() -> Result<()> {
                     // Run per-language formatters
                     alef_e2e::format::run_formatters(&files, e2e_config);
 
-                    cache::write_stage_hash("e2e", &stage_hash)?;
+                    let output_paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
+                    cache::write_stage_hash("e2e", &stage_hash, &output_paths)?;
                     println!("Generated {count} e2e files");
                     Ok(())
                 }

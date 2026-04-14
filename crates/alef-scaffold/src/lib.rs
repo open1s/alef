@@ -117,7 +117,6 @@ crate-type = ["cdylib"]
 [dependencies]
 {crate_name} = {{ path = "../{core_crate_dir}"{features} }}
 pyo3 = {{ version = "0.28", features = ["extension-module"] }}
-pyo3-async-runtimes = {{ version = "0.28", features = ["tokio-runtime"] }}
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 "#,
@@ -224,7 +223,6 @@ crate-type = ["cdylib"]
 {crate_name} = {{ path = "../{core_crate_dir}"{features} }}
 napi = {{ version = "3", features = ["async"] }}
 napi-derive = "3"
-serde_json = "1"
 
 [build-dependencies]
 napi-build = "2"
@@ -571,7 +569,6 @@ crate-type = ["cdylib"]
 [dependencies]
 {crate_name} = {{ path = "../{core_crate_dir}"{features} }}
 ext-php-rs = "0.15"
-tokio = {{ version = "1", features = ["full"] }}
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 "#,
@@ -615,6 +612,14 @@ fn scaffold_php(_api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<Ge
     "friendsofphp/php-cs-fixer": "^3.95",
     "phpunit/phpunit": "^11.0"
   }},
+  "scripts": {{
+    "phpstan": "php -d detect_unicode=0 vendor/bin/phpstan --memory-limit=512M",
+    "format": "PHP_CS_FIXER_IGNORE_ENV=1 php vendor/bin/php-cs-fixer fix src tests",
+    "format:check": "PHP_CS_FIXER_IGNORE_ENV=1 php vendor/bin/php-cs-fixer fix --dry-run src tests",
+    "test": "php vendor/bin/phpunit",
+    "lint": "@phpstan",
+    "lint:fix": "PHP_CS_FIXER_IGNORE_ENV=1 php vendor/bin/php-cs-fixer fix src tests && php -d detect_unicode=0 vendor/bin/phpstan --memory-limit=512M"
+  }},
   "extra": {{
     "ext-name": "{ext_name}"
   }}{keywords}
@@ -654,9 +659,7 @@ crate-type = ["cdylib"]
 [dependencies]
 {crate_name} = {{ path = "../../../../crates/{core_crate_dir}"{features} }}
 rustler = "0.37"
-serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
-tokio = {{ version = "1", features = ["full"] }}
 "#,
         nif_name = nif_name,
         version = version,
@@ -924,7 +927,6 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 {crate_name} = {{ path = "../{core_crate_dir}"{features} }}
 serde_json = "1"
-tokio = {{ version = "1", features = ["full"] }}
 
 [build-dependencies]
 cbindgen = "0.28"
@@ -965,7 +967,6 @@ crate-type = ["cdylib"]
 [dependencies]
 {crate_name} = {{ path = "../{core_crate_dir}"{features} }}
 wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
 serde-wasm-bindgen = "0.6"
 "#,
         core_crate_dir = core_crate_dir,

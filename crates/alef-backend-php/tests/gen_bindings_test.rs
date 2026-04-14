@@ -3,6 +3,58 @@ use alef_core::backend::Backend;
 use alef_core::config::{AlefConfig, CrateConfig, PhpConfig};
 use alef_core::ir::*;
 
+/// Helper to create a config with a specific extension name for namespace testing.
+#[allow(dead_code)]
+fn make_config_with_extension(extension_name: &str) -> AlefConfig {
+    AlefConfig {
+        crate_config: CrateConfig {
+            name: "test-lib".to_string(),
+            sources: vec![],
+            version_from: "Cargo.toml".to_string(),
+            core_import: None,
+            workspace_root: None,
+            skip_core_import: false,
+            features: vec![],
+            path_mappings: std::collections::HashMap::new(),
+        },
+        languages: vec![],
+        exclude: Default::default(),
+        include: Default::default(),
+        output: Default::default(),
+        python: None,
+        node: None,
+        ruby: None,
+        php: Some(PhpConfig {
+            extension_name: Some(extension_name.to_string()),
+            feature_gate: None,
+            stubs: None,
+            features: None,
+            serde_rename_all: None,
+        }),
+        elixir: None,
+        wasm: None,
+        ffi: None,
+        go: None,
+        java: None,
+        csharp: None,
+        r: None,
+        scaffold: None,
+        readme: None,
+        lint: None,
+        custom_files: None,
+        adapters: vec![],
+        custom_modules: alef_core::config::CustomModulesConfig::default(),
+        custom_registrations: alef_core::config::CustomRegistrationsConfig::default(),
+        opaque_types: std::collections::HashMap::new(),
+        generate: alef_core::config::GenerateConfig::default(),
+        generate_overrides: std::collections::HashMap::new(),
+        dto: Default::default(),
+        sync: None,
+        test: None,
+        e2e: None,
+    }
+}
+
 fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
         name: name.to_string(),
