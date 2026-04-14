@@ -85,6 +85,32 @@ fn write_version_to_cargo_toml(cargo_toml_path: &str, new_version: &str) -> anyh
     Ok(())
 }
 
+/// Convert a semver pre-release version to PEP 440 format for Python/PyPI.
+/// e.g., "0.1.0-rc.1" → "0.1.0rc1", "0.1.0-alpha.2" → "0.1.0a2", "0.1.0-beta.3" → "0.1.0b3"
+/// Non-pre-release versions are returned unchanged.
+fn to_pep440(version: &str) -> String {
+    if let Some((base, pre)) = version.split_once('-') {
+        let pep = pre
+            .replace("alpha.", "a")
+            .replace("alpha", "a")
+            .replace("beta.", "b")
+            .replace("beta", "b")
+            .replace("rc.", "rc")
+            .replace('.', "");
+        format!("{base}{pep}")
+    } else {
+        version.to_string()
+    }
+}
+
+/// Set an explicit version in the Cargo.toml (supports pre-release versions like 0.1.0-rc.1).
+pub fn set_version(config: &AlefConfig, version: &str) -> anyhow::Result<()> {
+    write_version_to_cargo_toml(&config.crate_config.version_from, version)
+        .with_context(|| format!("failed to set version to {version}"))?;
+    info!("Set version to {version} in {}", config.crate_config.version_from);
+    Ok(())
+}
+
 /// Sync version from Cargo.toml to all package manifest files.
 pub fn sync_versions(config: &AlefConfig, bump: Option<&str>) -> anyhow::Result<()> {
     // If bump is requested, read current version, bump it, and write it back to Cargo.toml.
@@ -104,9 +130,11 @@ pub fn sync_versions(config: &AlefConfig, bump: Option<&str>) -> anyhow::Result<
 
     let mut updated = vec![];
 
-    // Python: pyproject.toml
+    // Python: pyproject.toml — convert semver pre-release to PEP 440 format
+    // e.g., "0.1.0-rc.1" → "0.1.0rc1", "0.1.0-alpha.2" → "0.1.0a2", "0.1.0-beta.3" → "0.1.0b3"
+    let python_version = to_pep440(&version);
     if let Ok(content) = std::fs::read_to_string("packages/python/pyproject.toml") {
-        if let Some(new_content) = replace_version_pattern(&content, r#"version = "[^"]*""#, &version) {
+        if let Some(new_content) = replace_version_pattern(&content, r#"version = "[^"]*""#, &python_version) {
             std::fs::write("packages/python/pyproject.toml", &new_content)
                 .context("failed to write packages/python/pyproject.toml")?;
             updated.push("packages/python/pyproject.toml".to_string());

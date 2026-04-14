@@ -67,6 +67,9 @@ enum Commands {
         /// Bump version before syncing (major, minor, patch).
         #[arg(long)]
         bump: Option<String>,
+        /// Set version explicitly (e.g., "0.1.0-rc.1").
+        #[arg(long)]
+        set: Option<String>,
     },
     /// Run configured lint/format commands on generated output.
     Lint {
@@ -297,8 +300,12 @@ fn main() -> Result<()> {
             println!("Generated {count} API doc files");
             Ok(())
         }
-        Commands::SyncVersions { bump } => {
+        Commands::SyncVersions { bump, set } => {
             let config = load_config(config_path)?;
+            if let Some(version) = &set {
+                eprintln!("Setting version to {version}");
+                pipeline::set_version(&config, version)?;
+            }
             eprintln!("Syncing versions from Cargo.toml");
             pipeline::sync_versions(&config, bump.as_deref())?;
             println!("Version sync complete");
