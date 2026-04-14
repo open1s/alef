@@ -230,33 +230,8 @@ impl Backend for PhpBackend {
             // Escape '\' so the generated Rust string literal is valid (e.g. "Ns\\ClassName").
             let ns_escaped_facade = php_namespace.replace('\\', "\\\\");
             let php_name_attr = format!("php(name = \"{}\\\\{}\")", ns_escaped_facade, php_api_class_name);
-            // Add a create_engine_from_json helper only when the API uses the opaque-handle
-            // pattern (i.e. there are opaque types like EngineHandle that can't be constructed
-            // directly from PHP). The helper deserializes config via core serde, bypassing
-            // the binding serde which maps enums as String and loses nested object structure.
-            // For APIs that only have plain struct params (e.g. html-to-markdown), no helper
-            // is needed and generating one would reference non-existent core types.
-            let json_helper = if !opaque_types.is_empty() {
-                let has_config_param = api.functions.iter().any(|f| {
-                    f.params
-                        .iter()
-                        .any(|p| matches!(&p.ty, TypeRef::Named(n) if !opaque_types.contains(n.as_str())))
-                });
-                if has_config_param {
-                    format!(
-                        "\n\n    pub fn create_engine_from_json(json: Option<String>) -> PhpResult<CrawlEngineHandle> {{\n        \
-                         let config: Option<{core_import}::CrawlConfig> = json.map(|s| serde_json::from_str(&s).map_err(|e| PhpException::default(e.to_string()))).transpose()?;\n        \
-                         let result = {core_import}::create_engine(config).map_err(|e| PhpException::default(e.to_string()))?;\n        \
-                         Ok(CrawlEngineHandle {{ inner: Arc::new(result) }})\n    }}"
-                    )
-                } else {
-                    String::new()
-                }
-            } else {
-                String::new()
-            };
             let facade_struct = format!(
-                "#[php_class]\n#[{php_name_attr}]\npub struct {facade_class_name}Api;\n\n#[php_impl]\nimpl {facade_class_name}Api {{\n{methods_joined}{json_helper}\n}}"
+                "#[php_class]\n#[{php_name_attr}]\npub struct {facade_class_name}Api;\n\n#[php_impl]\nimpl {facade_class_name}Api {{\n{methods_joined}\n}}"
             );
             builder.add_item(&facade_struct);
         }
