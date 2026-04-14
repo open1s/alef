@@ -347,6 +347,7 @@ crate-type = ["cdylib"]
 {crate_name} = {{ path = "../{core_crate_dir}"{features} }}
 napi = {{ version = "3", features = ["async"] }}
 napi-derive = "3"
+serde_json = "1"
 
 [build-dependencies]
 napi-build = "2"
@@ -504,17 +505,18 @@ Gem::Specification.new do |spec|
   spec.name = '{gem_name}'
   spec.version = '{version}'
   spec.authors       = {authors}
-  spec.summary       = "{description}"
-  spec.description   = "{description}"
-  spec.homepage      = "{repository}"
-  spec.license       = "{license}"
-  spec.required_ruby_version = ">= 3.2.0"
-{metadata}
-  spec.files         = Dir.glob(["lib/**/*", "ext/**/*"])
-  spec.require_paths = ["lib"]
-  spec.extensions    = ["ext/{ext_name}/extconf.rb"]
+  spec.summary       = '{description}'
+  spec.description   = '{description}'
+  spec.homepage      = '{repository}'
+  spec.license       = '{license}'
+  spec.required_ruby_version = '>= 3.2.0'
+{metadata}  spec.metadata['rubygems_mfa_required'] = 'true'
 
-  spec.add_dependency "rb_sys", "~> 0.9"
+  spec.files         = Dir.glob(['lib/**/*', 'ext/**/*'])
+  spec.require_paths = ['lib']
+  spec.extensions    = ['ext/{ext_name}/extconf.rb']
+
+  spec.add_dependency 'rb_sys', '~> 0.9'
 end
 "#,
         gem_name = gem_name,
@@ -691,6 +693,7 @@ crate-type = ["cdylib"]
 ext-php-rs = "0.15"
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
+tokio = {{ version = "1", features = ["full"] }}
 "#,
         pkg_header = pkg_header,
         crate_name = &config.crate_config.name,
@@ -786,6 +789,7 @@ crate-type = ["cdylib"]
 {crate_name} = {{ path = "../../../../crates/{core_crate_dir}"{features} }}
 rustler = "0.37"
 serde_json = "1"
+tokio = {{ version = "1", features = ["full"] }}
 "#,
         pkg_header = pkg_header,
         crate_name = &config.crate_config.name,
@@ -856,16 +860,7 @@ fn scaffold_go(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<Gene
     let version = &api.version;
     let _ = version; // go.mod doesn't embed the package version
 
-    let content = format!(
-        r#"module {module}
-
-go 1.21
-
-require (
-)
-"#,
-        module = go_module,
-    );
+    let content = format!("module {module}\n\ngo 1.21\n", module = go_module,);
 
     Ok(vec![GeneratedFile {
         path: PathBuf::from("packages/go/go.mod"),
@@ -912,17 +907,17 @@ fn scaffold_java(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<Ge
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.21.2</version>
+            <version>2.18.2</version>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.datatype</groupId>
             <artifactId>jackson-datatype-jdk8</artifactId>
-            <version>2.21.2</version>
+            <version>2.18.2</version>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <version>6.1.0-M1</version>
+            <version>5.11.4</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -968,6 +963,58 @@ fn scaffold_java(api: &ApiSurface, config: &AlefConfig) -> anyhow::Result<Vec<Ge
             </plugin>
         </plugins>
     </build>
+
+    <distributionManagement>
+        <snapshotRepository>
+            <id>ossrh</id>
+            <url>https://s01.oss.sonatype.org/content/repositories/snapshots</url>
+        </snapshotRepository>
+        <repository>
+            <id>ossrh</id>
+            <url>https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/</url>
+        </repository>
+    </distributionManagement>
+
+    <profiles>
+        <profile>
+            <id>publish</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.7</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                                <configuration>
+                                    <gpgArguments>
+                                        <arg>--pinentry-mode</arg>
+                                        <arg>loopback</arg>
+                                    </gpgArguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.plugins</groupId>
+                        <artifactId>nexus-staging-maven-plugin</artifactId>
+                        <version>1.7.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <serverId>ossrh</serverId>
+                            <nexusUrl>https://s01.oss.sonatype.org/</nexusUrl>
+                            <autoReleaseAfterClose>true</autoReleaseAfterClose>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
 "#,
         package = java_package,
@@ -1050,6 +1097,7 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 {crate_name} = {{ path = "../{core_crate_dir}"{features} }}
 serde_json = "1"
+tokio = {{ version = "1", features = ["full"] }}
 
 [build-dependencies]
 cbindgen = "0.28"
@@ -1383,7 +1431,9 @@ mod tests {
         let content = &files[0].content;
         assert!(content.contains("spec.required_ruby_version"));
         assert!(content.contains("spec.extensions"));
-        assert!(content.contains("spec.metadata[\"keywords\"]"));
+        assert!(content.contains("spec.metadata['keywords']"));
+        assert!(content.contains("frozen_string_literal: true"));
+        assert!(content.contains("spec.metadata['rubygems_mfa_required'] = 'true'"));
         // Check for .rubocop.yml generation
         assert_eq!(files[1].path, PathBuf::from("packages/ruby/.rubocop.yml"));
         // Check for Rakefile generation
