@@ -531,6 +531,23 @@ impl Backend for PhpBackend {
             }
             content.push_str(&format!("class {}\n{{\n", typ.name));
 
+            // Public property declarations (ext-php-rs exposes struct fields as properties)
+            for field in &typ.fields {
+                let is_array = matches!(&field.ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
+                let prop_type = if field.optional {
+                    format!("?{}", php_type(&field.ty))
+                } else {
+                    php_type(&field.ty)
+                };
+                if is_array {
+                    let phpdoc = php_phpdoc_type(&field.ty);
+                    let nullable_prefix = if field.optional { "?" } else { "" };
+                    content.push_str(&format!("    /** @var {}{} */\n", nullable_prefix, phpdoc));
+                }
+                content.push_str(&format!("    public {} ${};\n", prop_type, field.name));
+            }
+            content.push('\n');
+
             // Constructor with typed parameters.
             // PHP requires required parameters to come before optional ones, so sort
             // the fields: required first, then optional (preserving relative order within each group).

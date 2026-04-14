@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- PHP stubs: generate public property declarations on classes (ext-php-rs exposes fields as properties, PHPStan needs them declared)
 - Ruby gemspec version sync: match single-quote `spec.version = '...'` (was only matching double quotes)
 - Python scaffold: removed `[tool.ruff]` section — linter config belongs in root `pyproject.toml`
 - WASM scaffold: added missing `wasm-bindgen-futures` dependency
