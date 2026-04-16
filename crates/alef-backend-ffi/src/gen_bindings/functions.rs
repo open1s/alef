@@ -202,6 +202,17 @@ pub(super) fn gen_method_wrapper(
                     if p.is_ref { format!("{rs}.as_deref()") } else { rs }
                 }
                 TypeRef::Path if p.optional => rs, // Optional<PathBuf> passed owned
+                TypeRef::Vec(_) | TypeRef::Map(_, _) if !p.optional => {
+                    // When is_ref=true, pass &vec as a slice. When is_mut=true, pass &mut vec.
+                    // Otherwise pass the vec owned.
+                    if p.is_mut {
+                        format!("&mut {rs}")
+                    } else if p.is_ref {
+                        format!("&{rs}")
+                    } else {
+                        rs
+                    }
+                }
                 _ => rs,
             }
         })
@@ -430,6 +441,17 @@ pub(super) fn gen_free_function(
                     if p.is_ref { format!("{rs}.as_deref()") } else { rs }
                 }
                 TypeRef::Path if p.optional => rs, // Optional<PathBuf> passed owned
+                TypeRef::Vec(_) | TypeRef::Map(_, _) if !p.optional => {
+                    // When is_ref=true, pass &vec as a slice. When is_mut=true, pass &mut vec.
+                    // Otherwise pass the vec owned.
+                    if p.is_mut {
+                        format!("&mut {rs}")
+                    } else if p.is_ref {
+                        format!("&{rs}")
+                    } else {
+                        rs
+                    }
+                }
                 _ => rs,
             }
         })
@@ -773,7 +795,9 @@ pub(super) fn gen_param_conversion(
                 writeln!(out, "            {fail_ret}").ok();
                 writeln!(out, "        }}").ok();
                 writeln!(out, "    }};").ok();
-                writeln!(out, "    let {rs_name} = match serde_json::from_str({rs_name}_str) {{").ok();
+                // Add 'mut' if the parameter needs to be mutably borrowed
+                let mut_keyword = if param.is_mut { "mut " } else { "" };
+                writeln!(out, "    let {mut_keyword}{rs_name} = match serde_json::from_str({rs_name}_str) {{").ok();
                 writeln!(out, "        Ok(v) => v,").ok();
                 writeln!(out, "        Err(e) => {{").ok();
                 writeln!(out, "            set_last_error(2, &e.to_string());").ok();

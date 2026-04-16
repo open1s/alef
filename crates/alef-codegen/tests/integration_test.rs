@@ -791,6 +791,27 @@ fn test_gen_call_args_non_opaque_param() {
 }
 
 #[test]
+fn test_gen_call_args_optional_non_opaque_ref_param() {
+    // When a core function takes Option<&T> where T is a non-opaque type,
+    // we have Option<T> on the binding side and need to convert to Option<&T>.
+    let opaque_types = AHashSet::new();
+    let params = vec![ParamDef {
+        name: "config".to_string(),
+        ty: TypeRef::Named("Config".to_string()),
+        optional: true,
+        default: None,
+        sanitized: false,
+        typed_default: None,
+        is_ref: true,
+        is_mut: false,
+        newtype_wrapper: None,
+    }];
+
+    let result = binding_helpers::gen_call_args(&params, &opaque_types);
+    assert_eq!(result, "config.as_ref()");
+}
+
+#[test]
 fn test_gen_call_args_path_param() {
     let params = vec![ParamDef {
         name: "file_path".to_string(),
@@ -925,6 +946,27 @@ fn test_gen_named_let_bindings_non_opaque_param() {
 
     let result = binding_helpers::gen_named_let_bindings_pub(&params, &opaque_types);
     assert!(result.contains("let config_core = config.into();"));
+}
+
+#[test]
+fn test_gen_named_let_bindings_optional_ref_param() {
+    // When a core function takes Option<&T> where T is a non-opaque type,
+    // we need to generate `let config_core = config.as_ref();`
+    let opaque_types = AHashSet::new();
+    let params = vec![ParamDef {
+        name: "config".to_string(),
+        ty: TypeRef::Named("Config".to_string()),
+        optional: true,
+        default: None,
+        sanitized: false,
+        typed_default: None,
+        is_ref: true,
+        is_mut: false,
+        newtype_wrapper: None,
+    }];
+
+    let result = binding_helpers::gen_named_let_bindings_pub(&params, &opaque_types);
+    assert!(result.contains("let config_core = config.as_ref();"));
 }
 
 #[test]

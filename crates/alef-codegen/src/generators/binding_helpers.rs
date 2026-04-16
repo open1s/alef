@@ -187,7 +187,12 @@ pub fn gen_call_args(params: &[ParamDef], opaque_types: &AHashSet<String>) -> St
                 }
                 TypeRef::Named(_) => {
                     if p.optional {
-                        format!("{}.map(Into::into)", p.name)
+                        if p.is_ref {
+                            // Option<T> (binding) -> Option<&T> (core expects reference)
+                            format!("{}.as_ref()", p.name)
+                        } else {
+                            format!("{}.map(Into::into)", p.name)
+                        }
                     } else if promoted {
                         format!("{}{}.into()", p.name, unwrap_suffix)
                     } else {
@@ -319,11 +324,12 @@ pub fn gen_call_args_with_let_bindings(params: &[ParamDef], opaque_types: &AHash
                         format!("&{}.inner", p.name)
                     }
                 }
-                TypeRef::Named(_) if p.is_ref => {
-                    format!("&{}_core", p.name)
-                }
                 TypeRef::Named(_) => {
-                    format!("{}_core", p.name)
+                    if p.is_ref {
+                        format!("&{}_core", p.name)
+                    } else {
+                        format!("{}_core", p.name)
+                    }
                 }
                 TypeRef::String | TypeRef::Char => {
                     if p.optional {
@@ -408,7 +414,12 @@ pub(super) fn gen_named_let_bindings(params: &[ParamDef], opaque_types: &AHashSe
             if !opaque_types.contains(name.as_str()) {
                 let promoted = crate::shared::is_promoted_optional(params, idx);
                 if p.optional {
-                    write!(bindings, "let {}_core = {}.map(Into::into);\n    ", p.name, p.name).ok();
+                    if p.is_ref {
+                        // Option<T> (binding) -> Option<&T> (core expects reference)
+                        write!(bindings, "let {}_core = {}.as_ref();\n    ", p.name, p.name).ok();
+                    } else {
+                        write!(bindings, "let {}_core = {}.map(Into::into);\n    ", p.name, p.name).ok();
+                    }
                 } else if promoted {
                     // Promoted-optional: unwrap then convert
                     write!(
