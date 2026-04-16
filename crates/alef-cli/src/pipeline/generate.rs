@@ -143,10 +143,17 @@ pub fn readme(api: &ApiSurface, config: &AlefConfig, languages: &[Language]) -> 
 }
 
 /// Write standalone generated files (not grouped by language) to disk.
+///
+/// Scaffold files are create-only: if the target file already exists on disk
+/// it is left untouched so that user customisations are preserved.
 pub fn write_scaffold_files(files: &[GeneratedFile], base_dir: &Path) -> anyhow::Result<usize> {
     let mut count = 0;
     for file in files {
         let full_path = base_dir.join(&file.path);
+        if full_path.exists() {
+            debug!("  skipped (already exists): {}", full_path.display());
+            continue;
+        }
         if let Some(parent) = full_path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create directory {}", parent.display()))?;
