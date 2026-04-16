@@ -223,6 +223,7 @@ dependencies = [
  "alef-core",
  "anyhow",
  "heck",
+ "regex",
 ]
 
 [[package]]

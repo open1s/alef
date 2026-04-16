@@ -36,6 +36,16 @@ pub fn generate_docs(
     files.push(generate_types_doc(api, output_dir)?);
     files.push(generate_errors_doc(api, output_dir)?);
 
+    // Post-process: ensure trailing newline and wrap bare URLs (MD034)
+    for file in &mut files {
+        // Wrap bare http(s) URLs in angle brackets to satisfy MD034
+        file.content = wrap_bare_urls(&file.content);
+        // Ensure POSIX trailing newline
+        if !file.content.ends_with('\n') {
+            file.content.push('\n');
+        }
+    }
+
     Ok(files)
 }
 
@@ -1797,6 +1807,31 @@ fn doc_type_with_optional(ty: &TypeRef, lang: Language, optional: bool, ffi_pref
 
 /// Rust doc section headers that should be stripped for all non-Rust output.
 const RUST_ONLY_SECTIONS: &[&str] = &["example", "examples", "arguments", "fields"];
+
+/// Wrap bare `http://` and `https://` URLs in angle brackets to satisfy MD034.
+/// Skips URLs already inside markdown links `[...](url)` or angle brackets `<url>`.
+fn wrap_bare_urls(text: &str) -> String {
+    let url_re = regex::Regex::new(r"(https?://[^\s)>\]]+)").unwrap();
+    let mut result = String::with_capacity(text.len());
+    let mut last_end = 0;
+
+    for mat in url_re.find_iter(text) {
+        let start = mat.start();
+        // Check character before the URL
+        let preceding = if start > 0 { text.as_bytes()[start - 1] } else { b' ' };
+        // Skip if already inside parens (markdown link) or angle brackets
+        if preceding == b'(' || preceding == b'<' {
+            continue;
+        }
+        result.push_str(&text[last_end..start]);
+        result.push('<');
+        result.push_str(mat.as_str());
+        result.push('>');
+        last_end = mat.end();
+    }
+    result.push_str(&text[last_end..]);
+    result
+}
 
 /// Clean up Rust doc strings for Markdown output.
 ///
