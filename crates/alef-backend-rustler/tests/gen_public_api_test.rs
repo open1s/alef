@@ -107,8 +107,8 @@ fn make_static_method(name: &str, return_type: TypeRef) -> MethodDef {
         sanitized: false,
         trait_source: None,
         returns_ref: false,
-        return_newtype_wrapper: None,
         returns_cow: false,
+        return_newtype_wrapper: None,
     }
 }
 
@@ -126,8 +126,8 @@ fn make_instance_method(name: &str, params: Vec<ParamDef>, return_type: TypeRef)
         sanitized: false,
         trait_source: None,
         returns_ref: false,
-        return_newtype_wrapper: None,
         returns_cow: false,
+        return_newtype_wrapper: None,
     }
 }
 
@@ -193,6 +193,7 @@ fn test_generate_public_api_creates_all_files() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            returns_cow: false,
             return_newtype_wrapper: None,
         }],
         enums: vec![EnumDef {
@@ -295,6 +296,7 @@ fn test_native_ex_has_all_nif_stubs() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            returns_cow: false,
             return_newtype_wrapper: None,
         }],
         enums: vec![],
@@ -594,6 +596,7 @@ fn test_generate_bindings_nif_init_uses_native_module() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            returns_cow: false,
             return_newtype_wrapper: None,
         }],
         enums: vec![],

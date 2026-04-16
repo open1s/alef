@@ -108,10 +108,19 @@ impl Backend for ExtendrBackend {
             .map(|t| t.name.clone())
             .collect();
 
+        // Build set of types with has_default for validation
+        let default_types: std::collections::HashSet<&str> = api
+            .types
+            .iter()
+            .filter(|t| t.has_default)
+            .map(|t| t.name.as_str())
+            .collect();
+
         // Generate type bindings
         for typ in api.types.iter().filter(|typ| !typ.is_trait) {
             builder.add_item(&generators::gen_struct(typ, self, &cfg));
-            if typ.has_default {
+            // Only generate Default impl if all fields can be safely defaulted
+            if typ.has_default && generators::can_generate_default_impl(typ, &default_types) {
                 builder.add_item(&generators::gen_struct_default_impl(typ, ""));
             }
             let impl_block = generators::gen_impl_block(typ, self, &cfg, &adapter_bodies, &opaque_types);

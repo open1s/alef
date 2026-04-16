@@ -92,6 +92,7 @@ fn test_basic_generation() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            returns_cow: false,
             return_newtype_wrapper: None,
         }],
         enums: vec![EnumDef {

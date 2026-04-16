@@ -131,13 +131,22 @@ impl Backend for MagnusBackend {
             );
         }
 
+        // Build set of types with has_default for validation
+        let default_types: std::collections::HashSet<&str> = api
+            .types
+            .iter()
+            .filter(|t| t.has_default)
+            .map(|t| t.name.as_str())
+            .collect();
+
         for typ in api.types.iter().filter(|typ| !typ.is_trait) {
             if typ.is_opaque {
                 builder.add_item(&gen_opaque_struct(typ, &core_import, &module_name));
                 builder.add_item(&gen_opaque_struct_methods(typ, &mapper, &opaque_types));
             } else {
                 builder.add_item(&gen_struct(typ, &mapper, &module_name));
-                if typ.has_default {
+                // Only generate Default impl if all fields can be safely defaulted
+                if typ.has_default && alef_codegen::generators::can_generate_default_impl(typ, &default_types) {
                     builder.add_item(&alef_codegen::generators::gen_struct_default_impl(typ, ""));
                 }
                 builder.add_item(&gen_struct_methods(typ, &mapper, &opaque_types, &core_import));

@@ -145,6 +145,7 @@ fn print_generated_java_code() {
                 cfg: None,
                 sanitized: false,
                 returns_ref: false,
+                returns_cow: false,
                 return_newtype_wrapper: None,
             },
             FunctionDef {
@@ -179,6 +180,7 @@ fn print_generated_java_code() {
                 cfg: None,
                 sanitized: false,
                 returns_ref: false,
+                returns_cow: false,
                 return_newtype_wrapper: None,
             },
         ],

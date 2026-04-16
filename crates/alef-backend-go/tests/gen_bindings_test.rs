@@ -127,6 +127,7 @@ fn test_basic_generation() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            returns_cow: false,
             return_newtype_wrapper: None,
         }],
         enums: vec![EnumDef {
@@ -394,9 +395,9 @@ fn test_methods_generation() {
                     receiver: Some(alef_core::ir::ReceiverKind::Ref),
                     sanitized: false,
                     returns_ref: false,
+                    returns_cow: false,
                     return_newtype_wrapper: None,
                     trait_source: None,
-                    returns_cow: false,
                 },
                 // Static method that returns a primitive (not skipped)
                 MethodDef {
@@ -410,9 +411,9 @@ fn test_methods_generation() {
                     receiver: None,
                     sanitized: false,
                     returns_ref: false,
+                    returns_cow: false,
                     return_newtype_wrapper: None,
                     trait_source: None,
-                    returns_cow: false,
                 },
                 // Instance method with parameters and error
                 MethodDef {
@@ -435,9 +436,9 @@ fn test_methods_generation() {
                     receiver: Some(alef_core::ir::ReceiverKind::Ref),
                     sanitized: false,
                     returns_ref: false,
+                    returns_cow: false,
                     return_newtype_wrapper: None,
                     trait_source: None,
-                    returns_cow: false,
                 },
             ],
             is_opaque: false,
@@ -574,6 +575,7 @@ fn test_async_function() {
             cfg: None,
             sanitized: false,
             returns_ref: false,
+            returns_cow: false,
             return_newtype_wrapper: None,
         }],
         enums: vec![],

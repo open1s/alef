@@ -177,7 +177,10 @@ pub(super) fn gen_method_wrapper(
         .map(|p| {
             let rs = format!("{}_rs", p.name);
             match &p.ty {
-                TypeRef::Path if !p.optional => rs, // PathBuf is passed owned
+                TypeRef::Path if !p.optional => {
+                    // Pass &Path when is_ref=true, otherwise pass owned PathBuf
+                    if p.is_ref { format!("{rs}.as_path()") } else { rs }
+                }
                 TypeRef::Named(_) if !p.optional => {
                     // Pass by value when method takes owned (Owned receiver or is_ref=false)
                     if is_owned_receiver || !p.is_ref {
@@ -186,7 +189,11 @@ pub(super) fn gen_method_wrapper(
                         format!("&{rs}")
                     }
                 }
-                TypeRef::String | TypeRef::Char | TypeRef::Bytes if !p.optional => {
+                TypeRef::String | TypeRef::Char if !p.optional => {
+                    // Pass &str when is_ref=true, otherwise pass owned String
+                    if p.is_ref { format!("&{rs}") } else { rs }
+                }
+                TypeRef::Bytes if !p.optional => {
                     format!("&{rs}")
                 }
                 TypeRef::String | TypeRef::Char | TypeRef::Bytes if p.optional => {
@@ -238,6 +245,11 @@ pub(super) fn gen_method_wrapper(
         && matches!(&method.return_type, TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Named(_)))
     {
         writeln!(out, "    let result = result.cloned();").ok();
+    }
+    // When returns_cow=true, the core returns Cow<'_, T> but FFI needs owned T.
+    // Convert to owned by calling .into_owned().
+    if method.returns_cow && !has_error {
+        writeln!(out, "    let result = result.into_owned();").ok();
     }
     if has_error {
         writeln!(out, "    match result {{").ok();
@@ -397,8 +409,15 @@ pub(super) fn gen_free_function(
         .map(|p| {
             let rs = format!("{}_rs", p.name);
             match &p.ty {
-                TypeRef::Path if !p.optional => rs, // PathBuf is passed owned
-                TypeRef::String | TypeRef::Char | TypeRef::Bytes if !p.optional => {
+                TypeRef::Path if !p.optional => {
+                    // Pass &Path when is_ref=true, otherwise pass owned PathBuf
+                    if p.is_ref { format!("{rs}.as_path()") } else { rs }
+                }
+                TypeRef::String | TypeRef::Char if !p.optional => {
+                    // Pass &str when is_ref=true, otherwise pass owned String
+                    if p.is_ref { format!("&{rs}") } else { rs }
+                }
+                TypeRef::Bytes if !p.optional => {
                     format!("&{rs}")
                 }
                 TypeRef::Named(_) if !p.optional => {
@@ -441,6 +460,11 @@ pub(super) fn gen_free_function(
         && matches!(&func.return_type, TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Named(_)))
     {
         writeln!(out, "    let result = result.cloned();").ok();
+    }
+    // When returns_cow=true, the core returns Cow<'_, T> but FFI needs owned T.
+    // Convert to owned by calling .into_owned().
+    if func.returns_cow && !has_error {
+        writeln!(out, "    let result = result.into_owned();").ok();
     }
     if has_error {
         writeln!(out, "    match result {{").ok();

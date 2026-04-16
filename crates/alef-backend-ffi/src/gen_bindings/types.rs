@@ -1,6 +1,6 @@
 use crate::type_map::c_return_type;
 use alef_codegen::conversions::core_type_path;
-use alef_core::ir::{EnumDef, FieldDef, TypeDef, TypeRef};
+use alef_core::ir::{CoreWrapper, EnumDef, FieldDef, TypeDef, TypeRef};
 use heck::ToSnakeCase;
 use std::fmt::Write;
 
@@ -263,9 +263,12 @@ fn gen_field_access_body(field: &FieldDef, needs_len_out: bool) -> String {
         writeln!(out, "    data.as_ptr() as *mut u8").ok();
     } else {
         // When is_boxed: obj.field_name is Box<T>, deref to get T before cloning.
+        // When core_wrapper=Arc: obj.field_name is Arc<T>, deref to get &T before cloning.
         // When newtype_wrapper: obj.field_name is NewtypeT; access .0 to get the inner primitive.
         let access_expr = if field.newtype_wrapper.is_some() && matches!(field.ty, TypeRef::Primitive(_)) {
             format!("obj.{field_name}.0") // unwrap newtype inner value
+        } else if field.core_wrapper == CoreWrapper::Arc {
+            format!("(*obj.{field_name})") // deref Arc<T> to get &T
         } else if field.is_boxed {
             format!("(*obj.{field_name})")
         } else {

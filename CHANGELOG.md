@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Config: configurable `type_prefix` for WASM and NAPI backends, default WASM to `Wasm`
+- Scaffold: generate CMake config for FFI, add `build:ts` to Node scaffold
+- Codegen: builder-pattern methods returning `Self` now auto-delegate instead of emitting `compile_error!`
+- Codegen: `can_generate_default_impl()` validation — skip Default derivation for structs with non-Default fields
+- IR: `returns_cow` field on `FunctionDef` for Cow return type handling in free functions
+
+### Fixed
+
+- Extract: skip `#[cfg(...)]`-gated free functions during extraction (prevents feature-gated functions leaking into bindings)
+- Extract: prune non-re-exported items from private modules
+- FFI: handle `returns_cow` — emit `.into_owned()` for `Cow<'_, T>` returns before boxing
+- FFI: unwrap `Arc<T>` fields in accessors via `core_wrapper` check
+- FFI: respect `is_ref` for `Path` parameters (`&Path` vs `PathBuf`)
+- FFI: respect `is_ref` for `String`/`Char` parameters (owned vs borrowed)
+- NAPI: detect and import `serde_json` when serde-based parameter conversion is needed
+- Scaffold: skip existing files, align Java `pom.xml` with kreuzberg
+- Scaffold: remove `compilers` directive for Rustler 0.34+ (auto-compiles via use macro)
+- Docs: add trailing newlines and wrap bare URLs (MD034)
+- Docs: shift heading levels down for frontmatter compatibility
+
 ## [0.3.5] - 2026-04-16
 
 ### Fixed

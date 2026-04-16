@@ -16,12 +16,16 @@ pub(crate) fn extract_function(item: &syn::ItemFn, crate_name: &str, module_path
     if !item.sig.generics.params.is_empty() {
         return None;
     }
+    if has_cfg_attribute(&item.attrs) {
+        return None;
+    }
     let cfg = extract_cfg_condition(&item.attrs);
     let name = item.sig.ident.to_string();
     let doc = extract_doc_comments(&item.attrs);
     let mut is_async = item.sig.asyncness.is_some();
 
     let (mut return_type, error_type, returns_ref) = resolve_return_type(&item.sig.output);
+    let returns_cow = detect_cow_return(&item.sig.output);
 
     // Detect future-returning functions as async
     if !is_async {
@@ -45,6 +49,7 @@ pub(crate) fn extract_function(item: &syn::ItemFn, crate_name: &str, module_path
         cfg,
         sanitized: false,
         returns_ref,
+        returns_cow,
         return_newtype_wrapper: None,
     })
 }

@@ -271,6 +271,57 @@ pub fn gen_method(
             } else {
                 format!("{field_conversions}{core_call}{newtype_suffix}{result_wrap}")
             }
+        } else if is_opaque
+            && !method.sanitized
+            && !is_ref_mut_receiver
+            && (!is_owned_receiver || typ.is_clone)
+            && method.error_type.is_none()
+            && method
+                .params
+                .iter()
+                .all(|p| !p.sanitized && crate::shared::is_opaque_delegatable_type(&p.ty))
+            && matches!(&method.return_type, TypeRef::Named(n) if n == type_name)
+        {
+            // Builder pattern for opaque types: method returns Self without error type.
+            // Delegate to core method and wrap result back in Self { inner: Arc::new(...) }.
+            let core_call = if is_owned_receiver {
+                format!("(*self.inner).clone().{}({call_args})", method.name)
+            } else {
+                format!("self.inner.{}({call_args})", method.name)
+            };
+            let unwrapped = apply_return_newtype_unwrap(&core_call, &method.return_newtype_wrapper);
+            format!("Self {{ inner: Arc::new({unwrapped}) }}")
+        } else if !is_opaque
+            && !method.sanitized
+            && !is_ref_mut_receiver
+            && (!is_owned_receiver || typ.is_clone)
+            && method.error_type.is_none()
+            && method
+                .params
+                .iter()
+                .all(|p| !p.sanitized && is_simple_non_opaque_param(&p.ty))
+            && matches!(&method.return_type, TypeRef::Named(n) if n == type_name)
+        {
+            // Builder pattern for non-opaque types: method returns Self without error type.
+            // Construct core type field-by-field, call method, convert result back via .into().
+            let is_ref_mut = matches!(method.receiver.as_ref(), Some(alef_core::ir::ReceiverKind::RefMut));
+            let field_conversions = if is_ref_mut {
+                gen_lossy_binding_to_core_fields_mut(typ, cfg.core_import)
+            } else {
+                gen_lossy_binding_to_core_fields(typ, cfg.core_import)
+            };
+            let core_call = format!("core_self.{}({call_args})", method.name);
+            let newtype_suffix = if method.return_newtype_wrapper.is_some() {
+                ".0"
+            } else {
+                ""
+            };
+            let result_wrap = if method.returns_cow || method.returns_ref {
+                ".into_owned().into()"
+            } else {
+                ".into()"
+            };
+            format!("{field_conversions}{core_call}{newtype_suffix}{result_wrap}")
         } else {
             gen_unimplemented_body(
                 &method.return_type,

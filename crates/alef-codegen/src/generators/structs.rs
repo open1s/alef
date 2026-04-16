@@ -4,6 +4,47 @@ use crate::type_mapper::TypeMapper;
 use alef_core::ir::{TypeDef, TypeRef};
 use std::fmt::Write;
 
+/// Check if a type's fields can all be safely defaulted.
+/// Primitives, strings, collections, Options, and Duration all have Default impls.
+/// Named types (custom structs) only have Default if explicitly marked with `has_default=true`.
+/// If any field is a Named type without `has_default`, returning true would generate
+/// code that calls `Default::default()` on a type that doesn't implement it.
+pub fn can_generate_default_impl(typ: &TypeDef, known_default_types: &std::collections::HashSet<&str>) -> bool {
+    for field in &typ.fields {
+        if field.cfg.is_some() {
+            continue; // Skip cfg-gated fields
+        }
+        if !field_type_has_default(&field.ty, known_default_types) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Check if a specific TypeRef can be safely defaulted.
+fn field_type_has_default(ty: &TypeRef, known_default_types: &std::collections::HashSet<&str>) -> bool {
+    match ty {
+        TypeRef::Primitive(_)
+        | TypeRef::String
+        | TypeRef::Char
+        | TypeRef::Bytes
+        | TypeRef::Path
+        | TypeRef::Unit
+        | TypeRef::Duration
+        | TypeRef::Json => true,
+        // Optional<T> defaults to None regardless of T
+        TypeRef::Optional(inner) => field_type_has_default(inner, known_default_types),
+        // Vec<T> defaults to empty vec regardless of T
+        TypeRef::Vec(inner) => field_type_has_default(inner, known_default_types),
+        // Map<K, V> defaults to empty map regardless of K/V
+        TypeRef::Map(k, v) => {
+            field_type_has_default(k, known_default_types) && field_type_has_default(v, known_default_types)
+        }
+        // Named types only have Default if marked with has_default=true
+        TypeRef::Named(name) => known_default_types.contains(name.as_str()),
+    }
+}
+
 /// Check if any two field names are similar enough to trigger clippy::similar_names.
 /// This detects patterns like "sub_symbol" and "sup_symbol" (differ by 1-2 chars).
 fn has_similar_names(names: &[&String]) -> bool {
@@ -126,6 +167,10 @@ pub fn gen_struct(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfi
 /// All fields use their type's Default::default().
 /// Optional fields use None instead of Default::default().
 /// This enables the struct to be used with `unwrap_or_default()` in config constructors.
+///
+/// WARNING: This assumes all field types implement Default. If a Named field type
+/// doesn't implement Default, this impl will fail to compile. Callers should verify
+/// that the struct's fields can be safely defaulted before calling this function.
 pub fn gen_struct_default_impl(typ: &TypeDef, name_prefix: &str) -> String {
     let full_name = format!("{}{}", name_prefix, typ.name);
     let mut out = String::with_capacity(256);

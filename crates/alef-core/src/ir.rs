@@ -181,6 +181,10 @@ pub struct FunctionDef {
     /// Used by code generators to insert `.clone()` before type conversion.
     #[serde(default)]
     pub returns_ref: bool,
+    /// True if the core function returns `Cow<'_, T>` where T is a named type (not str/bytes).
+    /// Used by code generators to emit `.into_owned()` before type conversion.
+    #[serde(default)]
+    pub returns_cow: bool,
     /// Full Rust path of the newtype wrapper that was resolved away for the return type.
     /// When set, codegen must unwrap the returned newtype value (e.g. `result.0`).
     #[serde(default)]

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 pub struct NapiBackend;
 
 impl NapiBackend {
-    fn binding_config<'a>(core_import: &'a str, prefix: &'a str) -> RustBindingConfig<'a> {
+    fn binding_config<'a>(core_import: &'a str, prefix: &'a str, has_serde: bool) -> RustBindingConfig<'a> {
         RustBindingConfig {
             struct_attrs: &["napi"],
             field_attrs: &[],
@@ -29,7 +29,7 @@ impl NapiBackend {
             signature_suffix: "",
             core_import,
             async_pattern: AsyncPattern::NapiNativeAsync,
-            has_serde: false,
+            has_serde,
             // NAPI napi(object) structs don't derive Serialize — disable serde bridge
             type_name_prefix: prefix,
             option_duration_on_defaults: true,
@@ -61,12 +61,25 @@ impl Backend for NapiBackend {
         let prefix = config.node_type_prefix();
         let mapper = NapiMapper::new(prefix.clone());
         let core_import = config.core_import();
-        let cfg = Self::binding_config(&core_import, &prefix);
+
+        // Detect serde availability from the output crate's Cargo.toml
+        let output_dir = resolve_output_dir(
+            config.output.node.as_ref(),
+            &config.crate_config.name,
+            "crates/{name}-node/src/",
+        );
+        let has_serde = alef_core::config::detect_serde_available(&output_dir);
+        let cfg = Self::binding_config(&core_import, &prefix, has_serde);
 
         let mut builder = RustFileBuilder::new().with_generated_header();
         builder.add_inner_attribute("allow(dead_code)");
         builder.add_import("napi::*");
         builder.add_import("napi_derive::napi");
+
+        // Import serde_json when available (needed for serde-based param conversion)
+        if has_serde {
+            builder.add_import("serde_json");
+        }
 
         // Import traits needed for trait method dispatch
         for trait_path in generators::collect_trait_imports(api) {

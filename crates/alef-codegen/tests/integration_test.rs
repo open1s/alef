@@ -116,6 +116,7 @@ fn simple_function_def() -> FunctionDef {
         cfg: None,
         sanitized: false,
         returns_ref: false,
+        returns_cow: false,
         return_newtype_wrapper: None,
     }
 }
@@ -287,8 +288,8 @@ fn test_gen_instance_method_with_ref_receiver() {
         sanitized: false,
         trait_source: None,
         returns_ref: false,
-        return_newtype_wrapper: None,
         returns_cow: false,
+        return_newtype_wrapper: None,
     };
     let mapper = RustMapper;
     let cfg = default_cfg();
@@ -326,8 +327,8 @@ fn test_gen_static_method_without_receiver() {
         sanitized: false,
         trait_source: None,
         returns_ref: false,
-        return_newtype_wrapper: None,
         returns_cow: false,
+        return_newtype_wrapper: None,
     };
     let mapper = RustMapper;
     let cfg = default_cfg();
@@ -357,8 +358,8 @@ fn test_gen_async_method_generates_async_signature() {
         sanitized: false,
         trait_source: None,
         returns_ref: false,
-        return_newtype_wrapper: None,
         returns_cow: false,
+        return_newtype_wrapper: None,
     };
     let mapper = RustMapper;
     let cfg = default_cfg();
@@ -425,8 +426,8 @@ fn test_gen_method_with_multiple_params() {
         sanitized: false,
         trait_source: None,
         returns_ref: false,
-        return_newtype_wrapper: None,
         returns_cow: false,
+        return_newtype_wrapper: None,
     };
     let mapper = RustMapper;
     let cfg = default_cfg();
@@ -457,8 +458,8 @@ fn test_gen_method_with_error_type() {
         sanitized: false,
         trait_source: None,
         returns_ref: false,
-        return_newtype_wrapper: None,
         returns_cow: false,
+        return_newtype_wrapper: None,
     };
     let mapper = RustMapper;
     let cfg = default_cfg();
@@ -494,8 +495,8 @@ fn test_gen_impl_block_with_constructor_and_methods() {
             sanitized: false,
             trait_source: None,
             returns_ref: false,
-            return_newtype_wrapper: None,
             returns_cow: false,
+            return_newtype_wrapper: None,
         },
         MethodDef {
             name: "create".to_string(),
@@ -509,8 +510,8 @@ fn test_gen_impl_block_with_constructor_and_methods() {
             sanitized: false,
             trait_source: None,
             returns_ref: false,
-            return_newtype_wrapper: None,
             returns_cow: false,
+            return_newtype_wrapper: None,
         },
     ];
 
@@ -553,8 +554,8 @@ fn test_gen_method_with_optional_param() {
         sanitized: false,
         trait_source: None,
         returns_ref: false,
-        return_newtype_wrapper: None,
         returns_cow: false,
+        return_newtype_wrapper: None,
     };
     let mapper = RustMapper;
     let cfg = default_cfg();
@@ -1159,4 +1160,105 @@ fn test_gen_lossy_binding_to_core_fields_with_duration() {
     let result = binding_helpers::gen_lossy_binding_to_core_fields(&typ, "my_crate");
 
     assert!(result.contains("timeout: std::time::Duration::from_millis(self.timeout),"));
+}
+
+#[test]
+fn test_gen_method_builder_pattern_opaque() {
+    let mut typ = simple_type_def();
+    typ.is_opaque = true;
+    typ.name = "MyConfig".to_string();
+
+    let method = MethodDef {
+        name: "with_name".to_string(),
+        params: vec![ParamDef {
+            name: "name".to_string(),
+            ty: TypeRef::String,
+            optional: false,
+            default: None,
+            sanitized: false,
+            typed_default: None,
+            is_ref: false,
+            newtype_wrapper: None,
+        }],
+        return_type: TypeRef::Named("MyConfig".to_string()),
+        is_async: false,
+        is_static: false,
+        error_type: None,
+        doc: String::new(),
+        receiver: Some(ReceiverKind::Owned),
+        sanitized: false,
+        trait_source: None,
+        returns_ref: false,
+        returns_cow: false,
+        return_newtype_wrapper: None,
+    };
+    let mapper = RustMapper;
+    let cfg = default_cfg();
+    let adapter_bodies = AdapterBodies::default();
+    let opaque_types = {
+        let mut set = AHashSet::new();
+        set.insert("MyConfig".to_string());
+        set
+    };
+
+    let result = gen_method(&method, &mapper, &cfg, &typ, true, &opaque_types, &adapter_bodies);
+
+    assert!(
+        result.contains("pub fn with_name"),
+        "should contain builder method name"
+    );
+    assert!(result.contains("&self"), "should have &self receiver");
+    assert!(result.contains("-> MyConfig"), "should have MyConfig return type");
+    assert!(
+        result.contains("Self { inner: Arc::new"),
+        "should wrap result in Self with Arc"
+    );
+    assert!(!result.contains("compile_error!"), "should not emit compile_error");
+}
+
+#[test]
+fn test_gen_method_builder_pattern_non_opaque() {
+    let mut typ = simple_type_def();
+    typ.is_opaque = false;
+    typ.name = "MyConfig".to_string();
+
+    let method = MethodDef {
+        name: "with_count".to_string(),
+        params: vec![ParamDef {
+            name: "count".to_string(),
+            ty: TypeRef::Primitive(PrimitiveType::U32),
+            optional: false,
+            default: None,
+            sanitized: false,
+            typed_default: None,
+            is_ref: false,
+            newtype_wrapper: None,
+        }],
+        return_type: TypeRef::Named("MyConfig".to_string()),
+        is_async: false,
+        is_static: false,
+        error_type: None,
+        doc: String::new(),
+        receiver: Some(ReceiverKind::Ref),
+        sanitized: false,
+        trait_source: None,
+        returns_ref: false,
+        returns_cow: false,
+        return_newtype_wrapper: None,
+    };
+    let mapper = RustMapper;
+    let cfg = default_cfg();
+    let adapter_bodies = AdapterBodies::default();
+    let opaque_types = AHashSet::new();
+
+    let result = gen_method(&method, &mapper, &cfg, &typ, false, &opaque_types, &adapter_bodies);
+
+    assert!(
+        result.contains("pub fn with_count"),
+        "should contain builder method name"
+    );
+    assert!(result.contains("&self"), "should have &self receiver");
+    assert!(result.contains("-> MyConfig"), "should have MyConfig return type");
+    assert!(result.contains(".into()"), "should convert result back to MyConfig");
+    assert!(!result.contains("compile_error!"), "should not emit compile_error");
 }
