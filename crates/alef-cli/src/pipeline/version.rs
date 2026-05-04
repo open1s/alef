@@ -20,20 +20,76 @@ pub(crate) fn read_version(version_from: &str) -> anyhow::Result<String> {
         std::fs::read_to_string(version_from).with_context(|| format!("failed to read version file {version_from}"))?;
     let value: toml::Value =
         toml::from_str(&content).with_context(|| format!("failed to parse TOML in {version_from}"))?;
-    if let Some(v) = value
-        .get("workspace")
-        .and_then(|w| w.get("package"))
-        .and_then(|p| p.get("version"))
-        .and_then(|v| v.as_str())
-    {
-        return Ok(v.to_string());
+
+    fn resolve_version(table: &toml::Value) -> Option<String> {
+        table.get("version").and_then(|v| {
+            if let Some(ws) = v.get("workspace") {
+                if ws.as_bool() == Some(true) {
+                    return find_workspace_version();
+                }
+            }
+            v.as_str().map(|s| s.to_string())
+        })
     }
-    if let Some(v) = value
-        .get("package")
-        .and_then(|p| p.get("version"))
-        .and_then(|v| v.as_str())
-    {
-        return Ok(v.to_string());
+
+fn find_workspace_version() -> Option<String> {
+    let start_dir = std::env::current_dir().unwrap_or_default();
+    let mut current = Some(start_dir);
+
+    while let Some(dir) = current {
+        let workspace_toml = dir.join("Cargo.toml");
+        if workspace_toml.exists() {
+            if let Ok(content) = std::fs::read_to_string(&workspace_toml) {
+                if let Ok(value) = toml::from_str::<toml::Value>(&content) {
+                    if let Some(pkg) = value.get("workspace").and_then(|w| w.get("package")) {
+                        if let Some(v) = pkg.get("version") {
+                            return v.as_str().map(|s| s.to_string());
+                        }
+                    }
+                    if value.get("workspace").is_some() && value.get("package").is_none() {
+                        if let Some(pkg) = value.get("package") {
+                            if let Some(v) = pkg.get("version") {
+                                return v.as_str().map(|s| s.to_string());
+                            }
+                        }
+                        if let Some(members) = value.get("workspace").and_then(|w| w.get("members")) {
+                            if let Some(member_list) = members.as_array() {
+                                for member in member_list {
+                                    if let Some(member_path) = member.as_str() {
+                                        let member_toml = dir.join(member_path).join("Cargo.toml");
+                                        if let Ok(member_content) = std::fs::read_to_string(&member_toml) {
+                                            if let Ok(member_value) = toml::from_str::<toml::Value>(&member_content) {
+                                                if let Some(pkg) = member_value.get("package") {
+                                                    if let Some(v) = pkg.get("version") {
+                                                        if v.get("workspace").is_none() {
+                                                            return v.as_str().map(|s| s.to_string());
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return None;
+                    }
+                }
+            }
+        }
+        current = dir.parent().map(|p| p.to_path_buf());
+    }
+    None
+}
+
+if let Some(v) = value.get("workspace").and_then(|w| w.get("package")).and_then(|p| resolve_version(p)) {
+        return Ok(v);
+    }
+    if let Some(v) = value.get("package").and_then(|p| resolve_version(p)) {
+        return Ok(v);
+    }
+    if let Some(v) = find_workspace_version() {
+        return Ok(v);
     }
     anyhow::bail!("Could not find version in {version_from}")
 }

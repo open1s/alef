@@ -281,10 +281,77 @@ fn read_crate_metadata() -> anyhow::Result<CrateMetadata> {
     let content = std::fs::read_to_string("Cargo.toml").context("failed to read Cargo.toml")?;
     let value: toml::Value = toml::from_str(&content).context("failed to parse Cargo.toml")?;
 
+    fn find_workspace_package(start_path: &std::path::Path) -> Option<toml::Value> {
+        let mut current = start_path.parent();
+        while let Some(dir) = current {
+            let workspace_toml = dir.join("Cargo.toml");
+            if workspace_toml.exists() {
+                if let Ok(content) = std::fs::read_to_string(&workspace_toml) {
+                    if let Ok(value) = toml::from_str::<toml::Value>(&content) {
+                        if let Some(pkg) = value.get("workspace").and_then(|w| w.get("package")) {
+                            return Some(pkg.clone());
+                        }
+                        if value.get("workspace").is_some() && value.get("package").is_none() {
+                            if let Some(pkg) = value.get("package") {
+                                return Some(pkg.clone());
+                            }
+                            if let Some(members) = value.get("workspace").and_then(|w| w.get("members")) {
+                                if let Some(member_list) = members.as_array() {
+                                    for member in member_list {
+                                        if let Some(member_path) = member.as_str() {
+                                            let member_toml = dir.join(member_path).join("Cargo.toml");
+                                            if let Ok(member_content) = std::fs::read_to_string(&member_toml) {
+                                                if let Ok(member_value) = toml::from_str::<toml::Value>(&member_content) {
+                                                    if let Some(pkg) = member_value.get("package") {
+                                                        if let Some(v) = pkg.get("version") {
+                                                            if v.get("workspace").is_none() {
+                                                                return Some(pkg.clone());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            return None;
+                        }
+                    }
+                }
+            }
+            current = dir.parent();
+        }
+        None
+    }
+
+    let resolve_field =
+        |table: &toml::Value,
+         key: &str,
+         workspace_pkg: Option<&toml::Value>| -> Option<String> {
+            table.get(key).and_then(|v| {
+                if let Some(ws) = v.get("workspace") {
+                    if ws.as_bool() == Some(true) {
+                        if let Some(pkg) = workspace_pkg {
+                            return pkg.get(key).and_then(|vv| vv.as_str()).map(|s| s.to_string());
+                        }
+                        return None;
+                    }
+                }
+                v.as_str().map(|s| s.to_string())
+            })
+        };
+
+    let workspace_pkg = value
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .cloned()
+        .or_else(|| find_workspace_package(&std::path::Path::new("Cargo.toml")));
+
     let extract = |table: &toml::Value| -> Option<CrateMetadata> {
         let name = table.get("name").and_then(|v| v.as_str())?.to_string();
-        let version = table.get("version").and_then(|v| v.as_str())?.to_string();
-        let repository = table.get("repository").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let version = resolve_field(table, "version", workspace_pkg.as_ref())?;
+        let repository = resolve_field(table, "repository", workspace_pkg.as_ref());
         Some(CrateMetadata {
             name,
             version,
@@ -292,11 +359,6 @@ fn read_crate_metadata() -> anyhow::Result<CrateMetadata> {
         })
     };
 
-    if let Some(workspace_pkg) = value.get("workspace").and_then(|w| w.get("package"))
-        && let Some(meta) = extract(workspace_pkg)
-    {
-        return Ok(meta);
-    }
     if let Some(pkg) = value.get("package")
         && let Some(meta) = extract(pkg)
     {
@@ -308,7 +370,17 @@ fn read_crate_metadata() -> anyhow::Result<CrateMetadata> {
 
 fn generate_init_config(metadata: &CrateMetadata, languages: &[String]) -> String {
     let crate_name = metadata.name.as_str();
-    let source_path = format!("crates/{}/src/lib.rs", crate_name);
+
+    // Try common source locations
+    let source_path = if std::path::Path::new("src/lib.rs").exists() {
+        "src/lib.rs".to_string()
+    } else if std::path::Path::new(&format!("crates/{}/src/lib.rs", crate_name)).exists() {
+        format!("crates/{}/src/lib.rs", crate_name)
+    } else if std::path::Path::new("lib.rs").exists() {
+        "lib.rs".to_string()
+    } else {
+        format!("crates/{}/src/lib.rs", crate_name)
+    };
 
     // New multi-crate schema: [workspace] + [[crates]]
     let mut config = String::new();
