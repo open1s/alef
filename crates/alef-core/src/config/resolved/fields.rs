@@ -130,19 +130,79 @@ impl ResolvedCrateConfig {
     pub fn resolved_version(&self) -> Option<String> {
         let content = std::fs::read_to_string(&self.version_from).ok()?;
         let value: toml::Value = toml::from_str(&content).ok()?;
-        if let Some(v) = value
+
+        fn resolve_version_from_table(table: &toml::Value, workspace_pkg: Option<&toml::Value>) -> Option<String> {
+            table.get("version").and_then(|v| {
+                if let Some(ws) = v.get("workspace") {
+                    if ws.as_bool() == Some(true) {
+                        return workspace_pkg
+                            .and_then(|w| w.get("version"))
+                            .and_then(|vv| vv.as_str())
+                            .map(|s| s.to_string());
+                    }
+                }
+                v.as_str().map(|s| s.to_string())
+            })
+        }
+
+        fn find_workspace_package(start_path: &std::path::Path) -> Option<toml::Value> {
+            let mut current = start_path.parent();
+            while let Some(dir) = current {
+                let workspace_toml = dir.join("Cargo.toml");
+                if workspace_toml.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&workspace_toml) {
+                        if let Ok(value) = toml::from_str::<toml::Value>(&content) {
+                            if let Some(pkg) = value.get("workspace").and_then(|w| w.get("package")) {
+                                return Some(pkg.clone());
+                            }
+                            if value.get("workspace").is_some() && value.get("package").is_none() {
+                                if let Some(pkg) = value.get("package") {
+                                    return Some(pkg.clone());
+                                }
+                                if let Some(members) = value.get("workspace").and_then(|w| w.get("members")) {
+                                    if let Some(member_list) = members.as_array() {
+                                        for member in member_list {
+                                            if let Some(member_path) = member.as_str() {
+                                                let member_toml = dir.join(member_path).join("Cargo.toml");
+                                                if let Ok(member_content) = std::fs::read_to_string(&member_toml) {
+                                                    if let Ok(member_value) = toml::from_str::<toml::Value>(&member_content) {
+                                                        if let Some(pkg) = member_value.get("package") {
+                                                            if let Some(v) = pkg.get("version") {
+                                                                if v.get("workspace").is_none() {
+                                                                    return Some(pkg.clone());
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                return None;
+                            }
+                        }
+                    }
+                }
+                current = dir.parent();
+            }
+            None
+        }
+
+        let version_from_path = std::path::Path::new(&self.version_from);
+        let workspace_pkg = value
             .get("workspace")
             .and_then(|w| w.get("package"))
-            .and_then(|p| p.get("version"))
-            .and_then(|v| v.as_str())
-        {
-            return Some(v.to_string());
+            .cloned()
+            .or_else(|| find_workspace_package(version_from_path));
+
+        if let Some(v) = workspace_pkg.as_ref().and_then(|p| resolve_version_from_table(p, workspace_pkg.as_ref())) {
+            return Some(v);
         }
+
         value
             .get("package")
-            .and_then(|p| p.get("version"))
-            .and_then(|v| v.as_str())
-            .map(|v| v.to_string())
+            .and_then(|p| resolve_version_from_table(p, workspace_pkg.as_ref()))
     }
 }
 
