@@ -5,7 +5,7 @@ use alef_codegen::generators;
 use alef_codegen::shared::function_params;
 use alef_codegen::type_mapper::TypeMapper;
 use alef_core::config::{Language, ResolvedCrateConfig};
-use alef_core::ir::{ApiSurface, FieldDef, FunctionDef, TypeRef};
+use alef_core::ir::{ApiSurface, FieldDef, FunctionDef, ReceiverKind, TypeRef};
 
 use crate::type_map::MagnusMapper;
 
@@ -186,7 +186,12 @@ pub(super) fn gen_function(
     //     can pass `&{name}_core` to the core function.
     let mut deser_lines = Vec::new();
     if serde_recoverable {
-        deser_lines.extend(magnus_serde_let_bindings(&func.params, opaque_types, core_import));
+        deser_lines.extend(magnus_serde_let_bindings(
+            &func.params,
+            opaque_types,
+            core_import,
+            mapper,
+        ));
     } else {
         for (idx, p) in func.params.iter().enumerate() {
             let promoted = alef_codegen::shared::is_promoted_optional(&func.params, idx);
@@ -356,6 +361,7 @@ fn magnus_serde_let_bindings(
     params: &[alef_core::ir::ParamDef],
     opaque_types: &AHashSet<String>,
     core_import: &str,
+    _mapper: &MagnusMapper,
 ) -> Vec<String> {
     let err = "magnus::Error::new(unsafe { Ruby::get_unchecked() }.exception_runtime_error(), e.to_string())";
     let mut out = Vec::new();
@@ -381,6 +387,22 @@ fn magnus_serde_let_bindings(
                 }
             }
             TypeRef::Vec(inner)
+                if matches!(inner.as_ref(), TypeRef::String | TypeRef::Char) && p.is_ref && !p.sanitized =>
+            {
+                // Non-sanitized Vec<String> passed by ref: core expects &[&str], so create refs vec.
+                if p.optional {
+                    out.push(format!(
+                        "let {n}_refs: Vec<&str> = {n}.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect()).unwrap_or_default();",
+                        n = p.name,
+                    ));
+                } else {
+                    out.push(format!(
+                        "let {n}_refs: Vec<&str> = {n}.iter().map(|s| s.as_str()).collect();",
+                        n = p.name,
+                    ));
+                }
+            }
+            TypeRef::Vec(inner)
                 if matches!(inner.as_ref(), TypeRef::String) && p.sanitized && p.original_type.is_some() =>
             {
                 if p.optional {
@@ -393,6 +415,25 @@ fn magnus_serde_let_bindings(
                         "let {n}_core: Vec<_> = {n}.into_iter().map(|s| serde_json::from_str::<_>(&s).map_err(|e| {err})).collect::<Result<Vec<_>, _>>()?;",
                         n = p.name,
                     ));
+                }
+            }
+            TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::Named(_)) => {
+                // Generic Vec<T> where T is a struct type (e.g., Vec<BatchFileItem>):
+                // Convert from magnus::Value via JSON serde to the core Vec type.
+                if let TypeRef::Named(name) = inner.as_ref() {
+                    let core_inner_ty = format!("{core_import}::{name}");
+                    let vec_ty = format!("Vec<{core_inner_ty}>");
+                    if p.optional {
+                        out.push(format!(
+                            "let {n}_core: Option<{vec_ty}> = {n}.map(|v| {{ let s: String = v.funcall(\"to_json\", ())?; serde_json::from_str(&s).map_err(|e| {err}) }}).transpose()?;",
+                            n = p.name,
+                        ));
+                    } else {
+                        out.push(format!(
+                            "let {n}_core: {vec_ty} = {{ let s: String = {n}.funcall(\"to_json\", ())?; serde_json::from_str(&s).map_err(|e| {err})? }};",
+                            n = p.name,
+                        ));
+                    }
                 }
             }
             _ => {}
@@ -432,7 +473,12 @@ pub(super) fn gen_async_function(
 
     let mut deser_lines = Vec::new();
     if serde_recoverable {
-        deser_lines.extend(magnus_serde_let_bindings(&func.params, opaque_types, core_import));
+        deser_lines.extend(magnus_serde_let_bindings(
+            &func.params,
+            opaque_types,
+            core_import,
+            mapper,
+        ));
     } else {
         for (idx, p) in func.params.iter().enumerate() {
             let promoted = alef_codegen::shared::is_promoted_optional(&func.params, idx);
@@ -629,6 +675,13 @@ pub(super) fn gen_module_init(
                     continue;
                 }
 
+                // Skip &mut self methods: Magnus's method! macro doesn't support mutable receivers.
+                // These methods mutate the wrapper in place, which isn't compatible with Ruby's
+                // object model. Callers should use builder patterns or from_* constructors instead.
+                if matches!(method.receiver, Some(ReceiverKind::RefMut)) {
+                    continue;
+                }
+
                 let method_name = if method.is_async {
                     format!("{}_async", method.name)
                 } else {
@@ -652,16 +705,24 @@ pub(super) fn gen_module_init(
         if super::is_reserved_fn(&func.name) || exclude_functions.contains(func.name.as_str()) {
             continue;
         }
-        // Functions with a trait_bridge param go through gen_bridge_function, which emits a
-        // fixed-arity signature (not args: &[Value]). For those we must register fixed arity
-        // even when params include optionals — otherwise Magnus's function! macro fails to
-        // satisfy trait bounds (the fn doesn't take &[Value]). For all other functions we use
-        // variadic arity (-1) so Ruby callers can omit trailing optional arguments; the
-        // generated body uses scan_args to unpack.
+        // Functions with a trait_bridge param use fixed-arity signatures, while
+        // options_field bindings use variadic arity. For bridge_param, register fixed arity
+        // since those functions don't use scan_args. For options_field, register variadic
+        // (-1) since the generated body uses scan_args to unpack arguments.
         let has_bridge_param = crate::trait_bridge::find_bridge_param(func, &config.trait_bridges).is_some();
-        let param_count: i32 = if !has_bridge_param && needs_variadic_arity(&func.params) {
+        let has_options_field_binding =
+            crate::trait_bridge::find_options_field_binding(func, &config.trait_bridges).is_some();
+        let param_count: i32 = if has_options_field_binding {
+            // options_field binding functions use variadic arity with scan_args
+            -1
+        } else if has_bridge_param {
+            // bridge_param functions use fixed arity
+            func.params.len() as i32
+        } else if needs_variadic_arity(&func.params) {
+            // Other functions with optional params use variadic arity
             -1
         } else {
+            // Functions with only required params use fixed arity
             func.params.len() as i32
         };
         if func.is_async {

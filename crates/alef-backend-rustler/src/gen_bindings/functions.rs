@@ -50,11 +50,9 @@ pub(super) fn gen_rustler_method_call_args(params: &[ParamDef], opaque_types: &A
             TypeRef::Duration => format!("std::time::Duration::from_millis({})", p.name),
             TypeRef::Vec(_) => {
                 if p.is_ref {
-                    // `&Vec<T>` derefs to `&[T]`, which is the common case in kreuzberg
-                    // core (e.g., `&[String]`). Functions that want `&[&str]` can be
-                    // handled by an opt-in conversion in a future change — emitting the
-                    // unconditional `iter().map(String::as_str).collect::<Vec<&str>>()`
-                    // converted in the wrong direction for any `&[String]` signature.
+                    // `&Vec<T>` derefs to `&[T]`, which matches kreuzberg core for `&[String]`.
+                    // For `&[&str]` signatures (Vec<String> inner), a refs intermediate is
+                    // emitted in the caller body (gen_nif_function deser_lines) instead.
                     format!("&{}", p.name)
                 } else {
                     p.name.to_string()
@@ -193,6 +191,21 @@ pub(super) fn gen_nif_function(
                         if p.is_ref { format!("&{}", p.name) } else { p.name.clone() }
                     }
                     TypeRef::Duration => format!("std::time::Duration::from_millis({})", p.name),
+                    TypeRef::Vec(inner) if p.is_ref && matches!(inner.as_ref(), TypeRef::String | TypeRef::Char) => {
+                        // Core expects &[&str]; Vec<String> does not coerce, so build an intermediate refs vec.
+                        if p.optional {
+                            deser_lines.push(format!(
+                                "let {0}_refs: Vec<&str> = {0}.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect()).unwrap_or_default();",
+                                p.name
+                            ));
+                        } else {
+                            deser_lines.push(format!(
+                                "let {0}_refs: Vec<&str> = {0}.iter().map(|s| s.as_str()).collect();",
+                                p.name
+                            ));
+                        }
+                        format!("&{}_refs", p.name)
+                    }
                     TypeRef::Vec(_) => {
                         if p.is_ref {
                             // &Vec<T> derefs to &[T] which matches kreuzberg core in all known sites.
@@ -296,15 +309,25 @@ pub(super) fn gen_nif_function(
                         if p.is_ref { format!("&{}", p.name) } else { p.name.clone() }
                     }
                     TypeRef::Duration => format!("std::time::Duration::from_millis({})", p.name),
+                    TypeRef::Vec(inner) if p.is_ref && matches!(inner.as_ref(), TypeRef::String | TypeRef::Char) => {
+                        // Core expects &[&str]; Vec<String> does not coerce, so build an intermediate refs vec.
+                        if p.optional {
+                            deser_lines.push(format!(
+                                "let {0}_refs: Vec<&str> = {0}.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect()).unwrap_or_default();",
+                                p.name
+                            ));
+                        } else {
+                            deser_lines.push(format!(
+                                "let {0}_refs: Vec<&str> = {0}.iter().map(|s| s.as_str()).collect();",
+                                p.name
+                            ));
+                        }
+                        format!("&{}_refs", p.name)
+                    }
                     TypeRef::Vec(_) => {
                         if p.is_ref {
                             // `&Vec<T>` derefs to `&[T]`, which is what kreuzberg core
-                            // takes for every Vec param we've encountered so far. Rustler
-                            // previously force-converted `Vec<String>` to `Vec<&str>` —
-                            // that broke the `&[String]` callers (batch_reduce_tokens,
-                            // chunk_texts_batch). If a future core fn wants `&[&str]`,
-                            // handle it via an explicit conversion override at the call
-                            // site rather than re-introducing the lossy default.
+                            // takes for `&[String]` callers.
                             format!("&{}", p.name)
                         } else {
                             p.name.to_string()
@@ -361,6 +384,14 @@ pub(super) fn gen_nif_async_function(
     default_types: &AHashSet<String>,
     core_import: &str,
 ) -> String {
+    // If the Rust function name already ends with `_async` (e.g. `embed_texts_async`),
+    // do not append another `_async` suffix — the NIF name is already the async variant.
+    let nif_fn_name = if func.name.ends_with("_async") {
+        func.name.clone()
+    } else {
+        format!("{}_async", func.name)
+    };
+
     let params_str = func
         .params
         .iter()
@@ -530,13 +561,13 @@ pub(super) fn gen_nif_async_function(
             )
         }
     } else {
-        super::helpers::gen_rustler_unimplemented_body(&func.return_type, &format!("{}_async", func.name), true)
+        super::helpers::gen_rustler_unimplemented_body(&func.return_type, &nif_fn_name, true)
     };
     let mut out = String::new();
     doc_emission::emit_rustdoc(&mut out, &func.doc, "");
     out.push_str("#[rustler::nif(schedule = \"DirtyCpu\")]\npub fn ");
-    out.push_str(&func.name);
-    out.push_str("_async(");
+    out.push_str(&nif_fn_name);
+    out.push('(');
     out.push_str(&params_str);
     out.push_str(") -> ");
     out.push_str(&return_annotation);
@@ -574,9 +605,19 @@ pub(super) fn gen_nif_method(
                 params.push(format!("{}: rustler::ResourceArc<{}>", p.name, n));
                 continue;
             }
+            // Optional Named non-opaque params must be Option<T> so callers can
+            // pass nil (Elixir) and the NIF receives None rather than a decode error.
+            if p.optional {
+                params.push(format!("{}: Option<{}>", p.name, n));
+                continue;
+            }
         }
         let param_type = mapper.map_type(&p.ty);
-        params.push(format!("{}: {}", p.name, param_type));
+        if p.optional {
+            params.push(format!("{}: Option<{}>", p.name, param_type));
+        } else {
+            params.push(format!("{}: {}", p.name, param_type));
+        }
     }
 
     let return_type = super::helpers::map_return_type(&method.return_type, mapper, opaque_types);
@@ -720,9 +761,19 @@ pub(super) fn gen_nif_async_method(
                 params.push(format!("{}: rustler::ResourceArc<{}>", p.name, n));
                 continue;
             }
+            // Optional Named non-opaque params must be Option<T> so callers can
+            // pass nil (Elixir) and the NIF receives None rather than a decode error.
+            if p.optional {
+                params.push(format!("{}: Option<{}>", p.name, n));
+                continue;
+            }
         }
         let param_type = mapper.map_type(&p.ty);
-        params.push(format!("{}: {}", p.name, param_type));
+        if p.optional {
+            params.push(format!("{}: Option<{}>", p.name, param_type));
+        } else {
+            params.push(format!("{}: {}", p.name, param_type));
+        }
     }
 
     let return_type = super::helpers::map_return_type(&method.return_type, mapper, opaque_types);

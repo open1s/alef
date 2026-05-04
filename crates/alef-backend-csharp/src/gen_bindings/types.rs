@@ -1,17 +1,55 @@
 //! C# opaque handle and record type code generation.
 
-use super::{csharp_file_header, is_tuple_field};
+use super::errors::{
+    emit_return_marshalling, emit_return_marshalling_indented, emit_return_statement, emit_return_statement_indented,
+};
+use super::{
+    csharp_file_header, emit_named_param_setup, emit_named_param_teardown, emit_named_param_teardown_indented,
+    is_tuple_field, returns_ptr,
+};
 use crate::type_map::csharp_type;
 use alef_codegen::naming::to_csharp_name;
-use alef_core::ir::{DefaultValue, PrimitiveType, TypeDef, TypeRef};
-use heck::ToPascalCase;
+use alef_core::ir::{DefaultValue, MethodDef, PrimitiveType, TypeDef, TypeRef};
+use heck::{ToLowerCamelCase, ToPascalCase};
 use std::collections::HashSet;
 
-pub(super) fn gen_opaque_handle(typ: &TypeDef, namespace: &str) -> String {
+pub(super) fn gen_opaque_handle(
+    typ: &TypeDef,
+    namespace: &str,
+    exception_name: &str,
+    enum_names: &HashSet<String>,
+    streaming_methods: &HashSet<String>,
+    all_opaque_type_names: &HashSet<String>,
+) -> String {
     let mut out = csharp_file_header();
     out.push_str("using System;\n");
     out.push_str("using Microsoft.Win32.SafeHandles;\n");
-    out.push_str("using System.Runtime.InteropServices;\n\n");
+    out.push_str("using System.Runtime.InteropServices;\n");
+
+    // Emit additional using directives when this opaque type has methods that need JSON/async.
+    let has_methods = typ.methods.iter().any(|m| !streaming_methods.contains(&m.name));
+    let uses_list = |tr: &TypeRef| -> bool {
+        matches!(tr, TypeRef::Vec(_))
+            || matches!(tr, TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Vec(_)))
+    };
+    if has_methods {
+        out.push_str("using System.Text.Json;\n");
+        out.push_str("using System.Text.Json.Serialization;\n");
+        let needs_list = typ.methods.iter().any(|m| {
+            uses_list(&m.return_type) || m.params.iter().any(|p| uses_list(&p.ty))
+        });
+        if needs_list {
+            out.push_str("using System.Collections.Generic;\n");
+        }
+        if typ
+            .methods
+            .iter()
+            .any(|m| m.is_async && !streaming_methods.contains(&m.name))
+        {
+            out.push_str("using System.Threading.Tasks;\n");
+        }
+    }
+    out.push('\n');
 
     out.push_str(&format!("namespace {};\n\n", namespace));
 
@@ -46,6 +84,15 @@ pub(super) fn gen_opaque_handle(typ: &TypeDef, namespace: &str) -> String {
     }
     out.push_str(&format!("public sealed class {class_name} : IDisposable\n"));
     out.push_str("{\n");
+
+    if has_methods {
+        out.push_str("    private static readonly JsonSerializerOptions JsonOptions = new()\n");
+        out.push_str("    {\n");
+        out.push_str("        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) },\n");
+        out.push_str("        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault\n");
+        out.push_str("    };\n\n");
+    }
+
     out.push_str(&format!("    private readonly {class_name}SafeHandle _safeHandle;\n\n"));
     out.push_str(&format!("    internal {class_name}(IntPtr handle)\n"));
     out.push_str("    {\n");
@@ -53,8 +100,194 @@ pub(super) fn gen_opaque_handle(typ: &TypeDef, namespace: &str) -> String {
     out.push_str("    }\n\n");
     out.push_str("    internal IntPtr Handle => _safeHandle.DangerousGetHandle();\n\n");
     out.push_str("    public void Dispose() => _safeHandle.Dispose();\n");
+
+    // Generate public methods for each non-streaming method on this opaque type.
+    // These delegate to NativeMethods using this.Handle as the receiver.
+    // Use the full set of opaque type names so that methods returning other opaque
+    // types (e.g., LanguageRegistry::get_language → Language) are wrapped directly
+    // as `new Language(ptr)` rather than being incorrectly JSON-serialized.
+    let true_opaque_types = all_opaque_type_names;
+    for method in typ.methods.iter().filter(|m| !streaming_methods.contains(&m.name)) {
+        out.push('\n');
+        out.push_str(&gen_opaque_method(
+            method,
+            &class_name,
+            exception_name,
+            enum_names,
+            &true_opaque_types,
+        ));
+    }
+
     out.push_str("}\n");
 
+    out
+}
+
+/// Generate a single public method on an opaque handle class.
+///
+/// The method delegates to `NativeMethods.{TypeName}{MethodName}(this.Handle, ...)`.
+fn gen_opaque_method(
+    method: &MethodDef,
+    class_name: &str,
+    exception_name: &str,
+    enum_names: &HashSet<String>,
+    true_opaque_types: &HashSet<String>,
+) -> String {
+    let mut out = String::new();
+
+    // Collect visible params (skip any that are themselves opaque handles acting as bridges).
+    let visible_params: Vec<alef_core::ir::ParamDef> = method.params.clone();
+
+    // XML doc comment.
+    if !method.doc.is_empty() {
+        out.push_str("    /// <summary>\n");
+        for line in method.doc.lines() {
+            out.push_str(&format!("    /// {}\n", line));
+        }
+        out.push_str("    /// </summary>\n");
+    }
+
+    // Return type.
+    let return_type_str = if method.is_async {
+        if method.return_type == TypeRef::Unit {
+            "async Task".to_string()
+        } else {
+            format!("async Task<{}>", csharp_type(&method.return_type))
+        }
+    } else if method.return_type == TypeRef::Unit {
+        "void".to_string()
+    } else {
+        csharp_type(&method.return_type).to_string()
+    };
+
+    let method_cs_name = to_csharp_name(&method.name);
+    let is_static = method.is_static || method.receiver.is_none();
+    let static_kw = if is_static { "static " } else { "" };
+    out.push_str(&format!("    public {static_kw}{return_type_str} {method_cs_name}("));
+
+    // Parameters.
+    for (i, param) in visible_params.iter().enumerate() {
+        let param_name = param.name.to_lower_camel_case();
+        let mapped = csharp_type(&param.ty);
+        if param.optional && !mapped.ends_with('?') {
+            out.push_str(&format!("{mapped}? {param_name}"));
+        } else {
+            out.push_str(&format!("{mapped} {param_name}"));
+        }
+        if i < visible_params.len() - 1 {
+            out.push_str(", ");
+        }
+    }
+    out.push_str(")\n    {\n");
+
+    // Serialize Named params to JSON handles.
+    emit_named_param_setup(&mut out, &visible_params, "        ", true_opaque_types);
+
+    // The native method name is {TypeName}{MethodName} (same as gen_wrapper_method).
+    let cs_native_name = format!("{class_name}{method_cs_name}");
+
+    if method.is_async {
+        if method.return_type == TypeRef::Unit {
+            out.push_str("        await Task.Run(() =>\n        {\n");
+        } else {
+            out.push_str("        return await Task.Run(() =>\n        {\n");
+        }
+
+        if method.return_type != TypeRef::Unit {
+            out.push_str("            var nativeResult = ");
+        } else {
+            out.push_str("            ");
+        }
+
+        out.push_str(&format!("NativeMethods.{cs_native_name}(\n"));
+        if !is_static {
+            out.push_str("                Handle");
+            for param in &visible_params {
+                let param_name = param.name.to_lower_camel_case();
+                let arg = super::native_call_arg(&param.ty, &param_name, param.optional, true_opaque_types);
+                out.push_str(&format!(",\n                {arg}"));
+            }
+        } else {
+            for (i, param) in visible_params.iter().enumerate() {
+                let param_name = param.name.to_lower_camel_case();
+                let arg = super::native_call_arg(&param.ty, &param_name, param.optional, true_opaque_types);
+                if i == 0 {
+                    out.push_str(&format!("                {arg}"));
+                } else {
+                    out.push_str(&format!(",\n                {arg}"));
+                }
+            }
+        }
+        out.push_str("\n            );\n");
+
+        if method.return_type != TypeRef::Unit && returns_ptr(&method.return_type) {
+            if matches!(method.return_type, TypeRef::Optional(_)) {
+                out.push_str(
+                    "            if (nativeResult == IntPtr.Zero)\n            {\n                return null;\n            }\n",
+                );
+            } else {
+                out.push_str(&format!(
+                    "            if (nativeResult == IntPtr.Zero)\n            {{\n                throw new {exception_name}(0, \"{cs_native_name} failed\");\n            }}\n"
+                ));
+            }
+        }
+
+        emit_return_marshalling_indented(
+            &mut out,
+            &method.return_type,
+            "            ",
+            enum_names,
+            true_opaque_types,
+        );
+        emit_named_param_teardown_indented(&mut out, &visible_params, "            ", true_opaque_types);
+        emit_return_statement_indented(&mut out, &method.return_type, "            ");
+        out.push_str("        });\n");
+    } else {
+        if method.return_type != TypeRef::Unit {
+            out.push_str("        var nativeResult = ");
+        } else {
+            out.push_str("        ");
+        }
+
+        out.push_str(&format!("NativeMethods.{cs_native_name}(\n"));
+        if !is_static {
+            out.push_str("            Handle");
+            for param in &visible_params {
+                let param_name = param.name.to_lower_camel_case();
+                let arg = super::native_call_arg(&param.ty, &param_name, param.optional, true_opaque_types);
+                out.push_str(&format!(",\n            {arg}"));
+            }
+        } else {
+            for (i, param) in visible_params.iter().enumerate() {
+                let param_name = param.name.to_lower_camel_case();
+                let arg = super::native_call_arg(&param.ty, &param_name, param.optional, true_opaque_types);
+                if i == 0 {
+                    out.push_str(&format!("            {arg}"));
+                } else {
+                    out.push_str(&format!(",\n            {arg}"));
+                }
+            }
+        }
+        out.push_str("\n        );\n");
+
+        if method.return_type != TypeRef::Unit && returns_ptr(&method.return_type) {
+            if matches!(method.return_type, TypeRef::Optional(_)) {
+                out.push_str(
+                    "        if (nativeResult == IntPtr.Zero)\n        {\n            return null;\n        }\n",
+                );
+            } else {
+                out.push_str(&format!(
+                    "        if (nativeResult == IntPtr.Zero)\n        {{\n            throw new {exception_name}(0, \"{cs_native_name} failed\");\n        }}\n"
+                ));
+            }
+        }
+
+        emit_return_marshalling(&mut out, &method.return_type, enum_names, true_opaque_types);
+        emit_named_param_teardown(&mut out, &visible_params, true_opaque_types);
+        emit_return_statement(&mut out, &method.return_type);
+    }
+
+    out.push_str("    }\n");
     out
 }
 
@@ -198,6 +431,10 @@ pub(super) fn gen_record_type(
                     // rather than `string.VariantName` which would resolve to a missing static.
                     if base_type == "string" || base_type == "string?" {
                         format!("\"{}\"", v.to_pascal_case())
+                    } else if base_type == "JsonElement" || base_type == "JsonElement?" {
+                        // Complex enums mapped to JsonElement have no static variant members —
+                        // default to null so the field is left unset (deserialized from JSON).
+                        "null".to_string()
                     } else {
                         format!("{}.{}", base_type, v.to_pascal_case())
                     }

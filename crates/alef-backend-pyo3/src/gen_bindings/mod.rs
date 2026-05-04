@@ -208,6 +208,11 @@ impl Backend for Pyo3Backend {
             .iter()
             .filter_map(|b| b.type_alias.clone())
             .collect();
+        // Build a separate set for From impl generation: only true opaque types and bridge type
+        // aliases. Data enums (like StructureKind) have their own From impls via gen_pyo3_data_enum
+        // and their fields can be converted with val.field.into() — do not Default::default() them.
+        let conversion_opaque_set: AHashSet<String> =
+            opaque_types.iter().chain(bridge_type_aliases.iter()).cloned().collect();
         let mut opaque_names_vec: Vec<String> = opaque_types.iter().cloned().collect();
         opaque_names_vec.extend(data_enum_names);
         opaque_names_vec.extend(bridge_type_aliases);
@@ -490,7 +495,7 @@ impl<'py> pyo3::conversion::IntoPyObject<'py> for PyVisitorRef {
                 } else {
                     Some(&py_field_renames)
                 };
-                let impl_block = generators::gen_impl_block_with_renames(
+                let mut impl_block = generators::gen_impl_block_with_renames(
                     typ,
                     &mapper,
                     type_cfg,
@@ -498,6 +503,35 @@ impl<'py> pyo3::conversion::IntoPyObject<'py> for PyVisitorRef {
                     &opaque_types,
                     renames_ref,
                 );
+                // Inject from_json staticmethod into the existing #[pymethods] block when serde
+                // is available and a core→binding conversion exists. Injecting into the same block
+                // avoids requiring the `multiple-pymethods` pyo3 feature.
+                if has_serde
+                    && alef_codegen::conversions::core_to_binding_convertible_types(api)
+                        .contains(&typ.name)
+                {
+                    let core_path = alef_codegen::conversions::core_type_path(typ, &core_import);
+                    let from_json_method = format!(
+                        "    #[staticmethod]\n    \
+                         fn from_json(json_str: String) -> pyo3::PyResult<Self> {{\n        \
+                         serde_json::from_str::<{core_path}>(&json_str)\n            \
+                         .map(Into::into)\n            \
+                         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))\n    \
+                         }}"
+                    );
+                    if impl_block.is_empty() {
+                        // No existing impl block — create one just for from_json.
+                        let type_name = &typ.name;
+                        impl_block = format!(
+                            "#[pymethods]\nimpl {type_name} {{\n{from_json_method}\n}}"
+                        );
+                    } else {
+                        // Inject before the closing `}` of the existing impl block.
+                        if let Some(close_pos) = impl_block.rfind('}') {
+                            impl_block.insert_str(close_pos, &format!("\n{from_json_method}\n"));
+                        }
+                    }
+                }
                 if !impl_block.is_empty() {
                     builder.add_item(&impl_block);
                 }
@@ -635,7 +669,7 @@ impl<'py> pyo3::conversion::IntoPyObject<'py> for PyVisitorRef {
             } else {
                 Some(&py_field_renames)
             },
-            opaque_types: Some(&opaque_names_set),
+            opaque_types: Some(&conversion_opaque_set),
             ..Default::default()
         };
         // From/Into conversions — separate sets for each direction
@@ -655,7 +689,7 @@ impl<'py> pyo3::conversion::IntoPyObject<'py> for PyVisitorRef {
                 builder.add_item(&alef_codegen::conversions::gen_from_core_to_binding_cfg(
                     typ,
                     &core_import,
-                    &opaque_names_set,
+                    &conversion_opaque_set,
                     &pyo3_conversion_cfg,
                 ));
             }

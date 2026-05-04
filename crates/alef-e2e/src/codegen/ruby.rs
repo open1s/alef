@@ -3,6 +3,7 @@
 //! Generates `e2e/ruby/Gemfile` and `spec/{category}_spec.rb` files from
 //! JSON fixtures, driven entirely by `E2eConfig` and `CallConfig`.
 
+use crate::codegen::resolve_field;
 use crate::config::E2eConfig;
 use crate::escape::{ruby_string_literal, sanitize_filename, sanitize_ident};
 use crate::field_access::FieldResolver;
@@ -336,6 +337,28 @@ fn render_spec_file(
 
     let _ = writeln!(out, "RSpec.describe '{}' do", category);
 
+    // Emit a shared helper for array field contains assertions — extracts text
+    // representations from each item so `.include?` works on struct arrays.
+    let has_array_contains = fixtures.iter().any(|fixture| {
+        fixture.assertions.iter().any(|a| {
+            matches!(a.assertion_type.as_str(), "contains" | "contains_all" | "not_contains")
+                && a.field
+                    .as_deref()
+                    .is_some_and(|f| !f.is_empty() && field_resolver.is_array(field_resolver.resolve(f)))
+        })
+    });
+    if has_array_contains {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "  def alef_e2e_item_texts(item)");
+        let _ = writeln!(
+            out,
+            "    [:kind, :name, :signature, :path, :alias, :text, :source].filter_map do |attr|"
+        );
+        let _ = writeln!(out, "      item.respond_to?(attr) ? item.send(attr).to_s : nil");
+        let _ = writeln!(out, "    end");
+        let _ = writeln!(out, "  end");
+    }
+
     // Emit a shared client helper when there are HTTP tests.
     if has_http {
         let _ = writeln!(
@@ -379,6 +402,10 @@ fn render_spec_file(
                 let fixture_client_factory = fixture_call_overrides
                     .and_then(|o| o.client_factory.as_deref())
                     .or(client_factory);
+                // Per-fixture options_type: prefer fixture-level override, then global default.
+                let fixture_options_type = fixture_call_overrides
+                    .and_then(|o| o.options_type.as_deref())
+                    .or(options_type);
                 render_example(
                     &mut out,
                     fixture,
@@ -387,7 +414,7 @@ fn render_spec_file(
                     fixture_result_var,
                     fixture_args,
                     field_resolver,
-                    options_type,
+                    fixture_options_type,
                     enum_fields,
                     result_is_simple,
                     e2e_config,
@@ -782,8 +809,7 @@ fn build_args_and_setup(
             skipped_optional_count = 0;
             // Generate a create_engine (or equivalent) call and pass the variable.
             let constructor_name = format!("create_{}", arg.name.to_snake_case());
-            let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
-            let config_value = input.get(field).unwrap_or(&serde_json::Value::Null);
+            let config_value = resolve_field(input, &arg.field);
             if config_value.is_null()
                 || config_value.is_object() && config_value.as_object().is_some_and(|o| o.is_empty())
             {
@@ -802,8 +828,8 @@ fn build_args_and_setup(
             continue;
         }
 
-        let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
-        let val = input.get(field);
+        let resolved = resolve_field(input, &arg.field);
+        let val = if resolved.is_null() { None } else { Some(resolved) };
         match val {
             None | Some(serde_json::Value::Null) if arg.optional => {
                 // Optional arg with no fixture value: defer; emit nil only if a later arg is present.
@@ -1050,10 +1076,18 @@ fn render_assertion(
     // For string equality, strip trailing whitespace to handle trailing newlines
     // from the converter.
     let stripped_field_expr = if result_is_simple {
-        format!("{field_expr}.strip")
+        format!("{field_expr}.to_s.strip")
     } else {
         field_expr.clone()
     };
+
+    // Detect whether the assertion field resolves to an array type so that
+    // contains assertions can iterate items instead of calling .to_s on the array.
+    let field_is_array = assertion
+        .field
+        .as_deref()
+        .filter(|f| !f.is_empty())
+        .is_some_and(|f| field_resolver.is_array(field_resolver.resolve(f)));
 
     match assertion.assertion_type.as_str() {
         "equals" => {
@@ -1070,26 +1104,52 @@ fn render_assertion(
         "contains" => {
             if let Some(expected) = &assertion.value {
                 let rb_val = json_to_ruby(expected);
-                // Use .to_s to handle both String and Symbol (enum) fields
-                let _ = writeln!(out, "    expect({field_expr}.to_s).to include({rb_val})");
+                if field_is_array && expected.is_string() {
+                    // Array of structs: check if any item's text representation contains the value.
+                    let _ = writeln!(
+                        out,
+                        "    expect({field_expr}.any? {{ |item| alef_e2e_item_texts(item).any? {{ |t| t.include?({rb_val}) }} }}).to be(true)"
+                    );
+                } else {
+                    // Use .to_s to handle both String and Symbol (enum) fields
+                    let _ = writeln!(out, "    expect({field_expr}.to_s).to include({rb_val})");
+                }
             }
         }
         "contains_all" => {
             if let Some(values) = &assertion.values {
                 for val in values {
                     let rb_val = json_to_ruby(val);
-                    let _ = writeln!(out, "    expect({field_expr}.to_s).to include({rb_val})");
+                    if field_is_array && val.is_string() {
+                        let _ = writeln!(
+                            out,
+                            "    expect({field_expr}.any? {{ |item| alef_e2e_item_texts(item).any? {{ |t| t.include?({rb_val}) }} }}).to be(true)"
+                        );
+                    } else {
+                        let _ = writeln!(out, "    expect({field_expr}.to_s).to include({rb_val})");
+                    }
                 }
             }
         }
         "not_contains" => {
             if let Some(expected) = &assertion.value {
                 let rb_val = json_to_ruby(expected);
-                let _ = writeln!(out, "    expect({field_expr}.to_s).not_to include({rb_val})");
+                if field_is_array && expected.is_string() {
+                    let _ = writeln!(
+                        out,
+                        "    expect({field_expr}.any? {{ |item| alef_e2e_item_texts(item).any? {{ |t| t.include?({rb_val}) }} }}).to be(false)"
+                    );
+                } else {
+                    let _ = writeln!(out, "    expect({field_expr}.to_s).not_to include({rb_val})");
+                }
             }
         }
         "not_empty" => {
-            let _ = writeln!(out, "    expect({field_expr}).not_to be_empty");
+            if result_is_simple {
+                let _ = writeln!(out, "    expect({field_expr}.to_s).not_to be_empty");
+            } else {
+                let _ = writeln!(out, "    expect({field_expr}).not_to be_empty");
+            }
         }
         "is_empty" => {
             // Handle nil (None) as empty for optional fields

@@ -47,7 +47,31 @@ impl E2eCodegen for CCodegen {
         let header = overrides
             .and_then(|o| o.header.as_ref())
             .cloned()
-            .unwrap_or_else(|| format!("{}.h", call.module));
+            .unwrap_or_else(|| {
+                // Special case: tree-sitter-language-pack uses ts_pack.h
+                if config.name == "tree-sitter-language-pack" {
+                    "ts_pack.h".to_string()
+                } else {
+                    config
+                        .ffi
+                        .as_ref()
+                        .and_then(|ffi| ffi.header_name.as_ref().cloned())
+                        .unwrap_or_else(|| {
+                            // If header_name not set, derive from prefix
+                            let ffi_prefix = config
+                                .ffi
+                                .as_ref()
+                                .and_then(|ffi| ffi.prefix.as_ref())
+                                .map(|p| p.to_string())
+                                .unwrap_or_default();
+                            if ffi_prefix.is_empty() {
+                                format!("{}.h", call.module)
+                            } else {
+                                format!("{}.h", ffi_prefix)
+                            }
+                        })
+                }
+            });
 
         // Resolve package config.
         let c_pkg = e2e_config.resolve_package("c");
@@ -55,6 +79,14 @@ impl E2eCodegen for CCodegen {
             .as_ref()
             .and_then(|p| p.name.as_ref())
             .cloned()
+            .or_else(|| {
+                // Special case: tree-sitter-language-pack uses ts_pack_core_ffi
+                if config.name == "tree-sitter-language-pack" {
+                    Some("ts_pack_core_ffi".to_string())
+                } else {
+                    config.ffi.as_ref().and_then(|ffi| ffi.lib_name.as_ref()).cloned()
+                }
+            })
             .unwrap_or_else(|| call.module.clone());
 
         // Filter active groups (with non-skipped fixtures).
@@ -75,11 +107,20 @@ impl E2eCodegen for CCodegen {
         // Default to `../../crates/{name}-ffi` derived from the crate name so that
         // projects like `liter-llm` resolve to `../../crates/liter-llm-ffi/include/`
         // rather than the generic (incorrect) `../../crates/ffi`.
+        // For projects with a core library name different from the package name,
+        // use the configured lib_name to infer the crate path.
         let ffi_crate_path = c_pkg
             .as_ref()
             .and_then(|p| p.path.as_ref())
             .cloned()
-            .unwrap_or_else(|| format!("../../crates/{}-ffi", config.name));
+            .unwrap_or_else(|| {
+                // Special case: tree-sitter-language-pack uses ts-pack-core-ffi
+                if config.name == "tree-sitter-language-pack" {
+                    "../../crates/ts-pack-core-ffi".to_string()
+                } else {
+                    format!("../../crates/{}-ffi", config.name)
+                }
+            });
 
         // Generate Makefile.
         let category_names: Vec<String> = active_groups

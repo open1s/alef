@@ -786,8 +786,8 @@ fn gen_visitor_method_async(
 
     // Convert method name from visit_* to handle_* for Elixir convention.
     // E.g., "visit_audio" -> "handle_audio"
-    let handle_name = if name.starts_with("visit_") {
-        format!("handle_{}", &name[6..])
+    let handle_name = if let Some(suffix) = name.strip_prefix("visit_") {
+        format!("handle_{suffix}")
     } else {
         name.clone()
     };
@@ -1203,7 +1203,7 @@ pub fn gen_bridge_function(
         writeln!(out, "    {with_deser}").ok();
 
         // Save visitor term + build owned env before spawning (must happen on BEAM thread)
-        writeln!(out, "    let visitor_owned_env = rustler::OwnedEnv::new();").ok();
+        writeln!(out, "    let mut visitor_owned_env = rustler::OwnedEnv::new();").ok();
         writeln!(out, "    let visitor_saved = visitor_owned_env.save({param_name});").ok();
         writeln!(out, "    {clone_stmts}").ok();
 
@@ -1456,16 +1456,16 @@ pub fn gen_bridge_field_function(
     )
     .ok();
     writeln!(out, "    let pid = env.pid();").ok();
-    writeln!(out, "    let visitor_owned_env = rustler::OwnedEnv::new();").ok();
+    writeln!(out, "    let mut visitor_owned_env = rustler::OwnedEnv::new();").ok();
     writeln!(out, "    let visitor_saved = visitor_owned_env.save(visitor);").ok();
     writeln!(out, "    {clone_stmts}").ok();
     writeln!(out, "    std::thread::spawn(move || {{").ok();
-    writeln!(out, "        visitor_owned_env.run(|env| {{").ok();
+    writeln!(out, "        let _ = visitor_owned_env.send_and_clear(&pid, |env| {{").ok();
     writeln!(out, "            let visitor_term = visitor_saved.load(env);").ok();
     writeln!(out, "            {deser_stmts}").ok();
     writeln!(
         out,
-        "            // Run conversion, capture result, and send back to BEAM"
+        "            // Run conversion and return result term to send back to BEAM"
     )
     .ok();
     writeln!(
@@ -1483,36 +1483,33 @@ pub fn gen_bridge_field_function(
     writeln!(out, "                }},").ok();
     writeln!(out, "                Err(e) => Err(e.to_string()),").ok();
     writeln!(out, "            }};").ok();
-    writeln!(out, "            let mut result_env = rustler::OwnedEnv::new();").ok();
-    writeln!(out, "            let _ = result_env.send_and_clear(&pid, |env| {{").ok();
-    writeln!(out, "                match conversion_result {{").ok();
-    writeln!(out, "                    Ok(result) => {{").ok();
+    writeln!(out, "            match conversion_result {{").ok();
+    writeln!(out, "                Ok(result) => {{").ok();
     writeln!(
         out,
-        "                        let ok_atom = rustler::types::atom::Atom::from_str(env, \"ok\").unwrap().to_term(env);"
+        "                    let ok_atom = rustler::types::atom::Atom::from_str(env, \"ok\").unwrap().to_term(env);"
     )
     .ok();
     writeln!(
         out,
-        "                        rustler::types::tuple::make_tuple(env, &[ok_atom, result.encode(env)])"
+        "                    rustler::types::tuple::make_tuple(env, &[ok_atom, result.encode(env)])"
     )
     .ok();
-    writeln!(out, "                    }},").ok();
-    writeln!(out, "                    Err(reason) => {{").ok();
+    writeln!(out, "                }},").ok();
+    writeln!(out, "                Err(reason) => {{").ok();
     writeln!(
         out,
-        "                        let err_atom = rustler::types::atom::Atom::from_str(env, \"error\").unwrap().to_term(env);"
+        "                    let err_atom = rustler::types::atom::Atom::from_str(env, \"error\").unwrap().to_term(env);"
     )
     .ok();
-    writeln!(out, "                        let reason_term = reason.encode(env);").ok();
+    writeln!(out, "                    let reason_term = reason.encode(env);").ok();
     writeln!(
         out,
-        "                        rustler::types::tuple::make_tuple(env, &[err_atom, reason_term])"
+        "                    rustler::types::tuple::make_tuple(env, &[err_atom, reason_term])"
     )
     .ok();
-    writeln!(out, "                    }},").ok();
-    writeln!(out, "                }}").ok();
-    writeln!(out, "            }});").ok();
+    writeln!(out, "                }},").ok();
+    writeln!(out, "            }}").ok();
     writeln!(out, "        }});").ok();
     writeln!(out, "    }});").ok();
     writeln!(out, "    Ok(())").ok();

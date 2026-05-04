@@ -114,13 +114,21 @@ impl FieldResolver {
         self.array_fields.contains(field)
     }
 
-    /// Check if a resolved field path ends with a map access (e.g., `foo[key]`).
+    /// Check if a resolved field path contains a non-numeric map access (e.g., `foo["key"]`).
     /// This is needed because Go map access returns a value type (not a pointer),
     /// so nil checks and pointer dereferences don't apply.
+    /// Numeric keys (e.g., `choices[0]`) are array/slice indices, not map keys,
+    /// and do NOT qualify as map access.
     pub fn has_map_access(&self, fixture_field: &str) -> bool {
         let resolved = self.resolve(fixture_field);
         let segments = parse_path(resolved);
-        segments.iter().any(|s| matches!(s, PathSegment::MapAccess { .. }))
+        segments.iter().any(|s| {
+            if let PathSegment::MapAccess { key, .. } = s {
+                !key.chars().all(|c| c.is_ascii_digit())
+            } else {
+                false
+            }
+        })
     }
 
     /// Generate a language-specific accessor expression.
@@ -359,13 +367,24 @@ fn render_dot_access(segments: &[PathSegment], result_var: &str, language: &str)
                 }
             }
             PathSegment::MapAccess { field, key } => {
-                out.push('.');
-                out.push_str(field);
-                // Elixir maps use bracket access (map["key"]), not method calls.
-                if language == "elixir" {
-                    out.push_str(&format!("[\"{key}\"]"));
+                let is_numeric = key.chars().all(|c| c.is_ascii_digit());
+                if is_numeric && language == "elixir" {
+                    // Elixir: Enum.at(prefix.field, index)
+                    let current = std::mem::take(&mut out);
+                    out = format!("Enum.at({current}.{field}, {key})");
                 } else {
-                    out.push_str(&format!(".get(\"{key}\")"));
+                    out.push('.');
+                    out.push_str(field);
+                    if is_numeric {
+                        // Python, Ruby: list[index]
+                        let idx: usize = key.parse().unwrap_or(0);
+                        out.push_str(&format!("[{idx}]"));
+                    } else if language == "elixir" {
+                        // Elixir maps use bracket access (map["key"]), not method calls.
+                        out.push_str(&format!("[\"{key}\"]"));
+                    } else {
+                        out.push_str(&format!(".get(\"{key}\")"));
+                    }
                 }
             }
             PathSegment::Length => match language {
@@ -463,7 +482,13 @@ fn render_go(segments: &[PathSegment], result_var: &str) -> String {
             PathSegment::MapAccess { field, key } => {
                 out.push('.');
                 out.push_str(&to_go_name(field));
-                out.push_str(&format!("[\"{key}\"]"));
+                // Numeric keys index a slice ([]T) — emit as integer index.
+                // String keys index a map (map[string]T) — emit as quoted string.
+                if key.chars().all(|c| c.is_ascii_digit()) {
+                    out.push_str(&format!("[{key}]"));
+                } else {
+                    out.push_str(&format!("[\"{key}\"]"));
+                }
             }
             PathSegment::Length => {
                 let current = std::mem::take(&mut out);
@@ -635,7 +660,12 @@ fn render_pascal_dot(segments: &[PathSegment], result_var: &str) -> String {
             PathSegment::MapAccess { field, key } => {
                 out.push('.');
                 out.push_str(&field.to_pascal_case());
-                out.push_str(&format!("[\"{key}\"]"));
+                // Numeric keys are List<T> indices in C# — emit as integer, not string.
+                if key.chars().all(|c| c.is_ascii_digit()) {
+                    out.push_str(&format!("[{key}]"));
+                } else {
+                    out.push_str(&format!("[\"{key}\"]"));
+                }
             }
             PathSegment::Length => {
                 out.push_str(".Count");
@@ -687,7 +717,12 @@ fn render_csharp_with_optionals(
                 path_so_far.push_str(field);
                 out.push('.');
                 out.push_str(&field.to_pascal_case());
-                out.push_str(&format!("[\"{key}\"]"));
+                // Numeric keys are List<T> indices in C# — emit as integer, not string.
+                if key.chars().all(|c| c.is_ascii_digit()) {
+                    out.push_str(&format!("[{key}]"));
+                } else {
+                    out.push_str(&format!("[\"{key}\"]"));
+                }
             }
             PathSegment::Length => {
                 out.push_str(".Count");
@@ -990,7 +1025,9 @@ mod tests {
         let r = make_resolver();
         let (binding, var) = r.rust_unwrap_binding("title", "result").unwrap();
         assert_eq!(var, "metadata_document_title");
-        assert!(binding.contains("as_deref().unwrap_or(\"\")"));
+        // Non-map, non-array optional fields use as_ref().map(|v| v.to_string()).unwrap_or_default()
+        // to handle enum types that implement Display and avoid temporary lifetime issues.
+        assert!(binding.contains("as_ref().map(|v| v.to_string()).unwrap_or_default()"));
     }
 
     #[test]

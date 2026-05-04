@@ -98,6 +98,54 @@ impl E2eCodegen for GoCodegen {
             generated_header: false,
         });
 
+        // Determine if any fixture needs jsonString helper across all groups.
+        let emits_executable_test =
+            |fixture: &Fixture| fixture.is_http_test() || fixture_has_go_callable(fixture, e2e_config);
+        let needs_json_stringify = groups.iter().flat_map(|g| g.fixtures.iter()).any(|f| {
+            emits_executable_test(f)
+                && f.assertions.iter().any(|a| {
+                    matches!(
+                        a.assertion_type.as_str(),
+                        "contains" | "contains_all" | "contains_any" | "not_contains"
+                    ) && {
+                        if a.field.as_ref().is_none_or(|f| f.is_empty()) {
+                            e2e_config.resolve_call(f.call.as_deref()).result_is_array
+                        } else {
+                            let resolved_name = field_resolver.resolve(a.field.as_deref().unwrap_or(""));
+                            field_resolver.is_array(resolved_name)
+                        }
+                    }
+                })
+        });
+
+        // Generate helpers_test.go with jsonString if needed, emitted exactly once.
+        if needs_json_stringify {
+            files.push(GeneratedFile {
+                path: output_base.join("helpers_test.go"),
+                content: render_helpers_test_go(),
+                generated_header: true,
+            });
+        }
+
+        // Generate main_test.go with TestMain when any fixture needs the mock server.
+        // This covers both `mock_response` fixtures (needs_mock_server) and client_factory
+        // fixtures that read MOCK_SERVER_URL.
+        let needs_main_test = groups.iter().flat_map(|g| g.fixtures.iter()).any(|f| {
+            if f.needs_mock_server() {
+                return true;
+            }
+            let cc = e2e_config.resolve_call(f.call.as_deref());
+            let go_override = cc.overrides.get("go").or_else(|| e2e_config.call.overrides.get("go"));
+            go_override.and_then(|o| o.client_factory.as_deref()).is_some()
+        });
+        if needs_main_test {
+            files.push(GeneratedFile {
+                path: output_base.join("main_test.go"),
+                content: render_main_test_go(),
+                generated_header: true,
+            });
+        }
+
         // Generate test files per category.
         for group in groups {
             let active: Vec<&Fixture> = group
@@ -181,6 +229,84 @@ fn render_go_mod(go_module_path: &str, replace_path: Option<&str>, version: &str
     out
 }
 
+/// Generate `main_test.go` that starts the mock HTTP server before all tests run.
+///
+/// The binary is expected at `../rust/target/release/mock-server` relative to the Go e2e
+/// directory.  The server prints `MOCK_SERVER_URL=http://...` on stdout; we read that line
+/// and export the variable so all test files can call `os.Getenv("MOCK_SERVER_URL")`.
+fn render_main_test_go() -> String {
+    // NOTE: the generated-file header is injected by the caller (generated_header: true).
+    let mut out = String::new();
+    let _ = writeln!(out, "package e2e_test");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "import (");
+    let _ = writeln!(out, "\t\"bufio\"");
+    let _ = writeln!(out, "\t\"io\"");
+    let _ = writeln!(out, "\t\"os\"");
+    let _ = writeln!(out, "\t\"os/exec\"");
+    let _ = writeln!(out, "\t\"path/filepath\"");
+    let _ = writeln!(out, "\t\"runtime\"");
+    let _ = writeln!(out, "\t\"strings\"");
+    let _ = writeln!(out, "\t\"testing\"");
+    let _ = writeln!(out, ")");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "func TestMain(m *testing.M) {{");
+    let _ = writeln!(out, "\t_, filename, _, _ := runtime.Caller(0)");
+    let _ = writeln!(out, "\tdir := filepath.Dir(filename)");
+    let _ = writeln!(
+        out,
+        "\tmockServerBin := filepath.Join(dir, \"..\", \"rust\", \"target\", \"release\", \"mock-server\")"
+    );
+    let _ = writeln!(out, "\tfixturesDir := filepath.Join(dir, \"..\", \"..\", \"fixtures\")");
+    let _ = writeln!(out, "\tcmd := exec.Command(mockServerBin, fixturesDir)");
+    let _ = writeln!(out, "\tcmd.Stderr = os.Stderr");
+    let _ = writeln!(out, "\tstdout, err := cmd.StdoutPipe()");
+    let _ = writeln!(out, "\tif err != nil {{");
+    let _ = writeln!(out, "\t\tpanic(err)");
+    let _ = writeln!(out, "\t}}");
+    let _ = writeln!(out, "\tif err := cmd.Start(); err != nil {{");
+    let _ = writeln!(out, "\t\tpanic(err)");
+    let _ = writeln!(out, "\t}}");
+    let _ = writeln!(out, "\tscanner := bufio.NewScanner(stdout)");
+    let _ = writeln!(out, "\tfor scanner.Scan() {{");
+    let _ = writeln!(out, "\t\tline := scanner.Text()");
+    let _ = writeln!(out, "\t\tif strings.HasPrefix(line, \"MOCK_SERVER_URL=\") {{");
+    let _ = writeln!(
+        out,
+        "\t\t\t_ = os.Setenv(\"MOCK_SERVER_URL\", strings.TrimPrefix(line, \"MOCK_SERVER_URL=\"))"
+    );
+    let _ = writeln!(out, "\t\t\tbreak");
+    let _ = writeln!(out, "\t\t}}");
+    let _ = writeln!(out, "\t}}");
+    let _ = writeln!(out, "\tgo func() {{ _, _ = io.Copy(io.Discard, stdout) }}()");
+    let _ = writeln!(out, "\tcode := m.Run()");
+    let _ = writeln!(out, "\t_ = cmd.Process.Signal(os.Interrupt)");
+    let _ = writeln!(out, "\t_ = cmd.Wait()");
+    let _ = writeln!(out, "\tos.Exit(code)");
+    let _ = writeln!(out, "}}");
+    out
+}
+
+/// Generate `helpers_test.go` with the jsonString helper function.
+/// This is emitted once per package to avoid duplicate function definitions.
+fn render_helpers_test_go() -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "package e2e_test");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "import \"encoding/json\"");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "// jsonString converts a value to its JSON string representation.");
+    let _ = writeln!(out, "// Array fields use jsonString instead of fmt.Sprint to preserve structure.");
+    let _ = writeln!(out, "func jsonString(value any) string {{");
+    let _ = writeln!(out, "\tencoded, err := json.Marshal(value)");
+    let _ = writeln!(out, "\tif err != nil {{");
+    let _ = writeln!(out, "\t\treturn \"\"");
+    let _ = writeln!(out, "\t}}");
+    let _ = writeln!(out, "\treturn string(encoded)");
+    let _ = writeln!(out, "}}");
+    out
+}
+
 fn render_test_file(
     category: &str,
     fixtures: &[&Fixture],
@@ -207,7 +333,7 @@ fn render_test_file(
     // reference the package when a Go override function is configured.
     let needs_pkg = fixtures
         .iter()
-        .any(|f| f.mock_response.is_some() || f.visitor.is_some() || fixture_has_go_callable(f, e2e_config));
+        .any(|f| fixture_has_go_callable(f, e2e_config) || f.is_http_test() || f.visitor.is_some());
 
     // Determine if we need the "os" import (mock_url args, HTTP fixtures, or
     // client_factory fixtures that read MOCK_SERVER_URL via os.Getenv).
@@ -230,25 +356,31 @@ fn render_test_file(
         call_args.iter().any(|a| a.arg_type == "mock_url")
     });
 
-    let needs_json_stringify = fixtures.iter().any(|f| {
+    let _needs_json_stringify = fixtures.iter().any(|f| {
         emits_executable_test(f)
             && f.assertions.iter().any(|a| {
                 matches!(
                     a.assertion_type.as_str(),
                     "contains" | "contains_all" | "contains_any" | "not_contains"
-                ) && a
-                    .field
-                    .as_ref()
-                    .map(|f| field_resolver.is_array(field_resolver.resolve(f)))
-                    .unwrap_or(false)
+                ) && {
+                    // Check if this assertion operates on an array field.
+                    // If no field is specified, check if the result itself is an array.
+                    if a.field.as_ref().is_none_or(|f| f.is_empty()) {
+                        // No field specified: check if result is an array
+                        e2e_config.resolve_call(f.call.as_deref()).result_is_array
+                    } else {
+                        // Field specified: check if that field is an array
+                        let resolved_name = field_resolver.resolve(a.field.as_deref().unwrap_or(""));
+                        field_resolver.is_array(resolved_name)
+                    }
+                }
             })
     });
 
     // Determine if we need "encoding/json" (handle args with non-null config,
     // json_object args that will be unmarshalled into a typed struct, or HTTP
     // body/partial/validation-error assertions that use json.Unmarshal).
-    let needs_json = needs_json_stringify
-        || fixtures.iter().any(|f| {
+    let needs_json = fixtures.iter().any(|f| {
             // HTTP body assertions use json.Unmarshal for Object/Array bodies;
             // partial body and validation-error assertions always use json.Unmarshal.
             if let Some(http) = &f.http {
@@ -294,8 +426,12 @@ fn render_test_file(
                 if a.arg_type != "json_object" {
                     return false;
                 }
-                let field = a.field.strip_prefix("input.").unwrap_or(&a.field);
-                let v = f.input.get(field).unwrap_or(&serde_json::Value::Null);
+                let v = if a.field == "input" {
+                    &f.input
+                } else {
+                    let field = a.field.strip_prefix("input.").unwrap_or(&a.field);
+                    f.input.get(field).unwrap_or(&serde_json::Value::Null)
+                };
                 if v.is_array() {
                     return true;
                 } // array → []string unmarshal
@@ -320,29 +456,43 @@ fn render_test_file(
     });
 
     // Determine if we need the "fmt" import (CustomTemplate visitor actions
-    // with placeholders, or string assertions rendered through fmt.Sprint so
-    // structured slices can be searched without assuming []string).
+    // with placeholders or string assertions rendered through fmt.Sprint).
+    // Note: jsonString is now in helpers_test.go (uses encoding/json, not fmt),
+    // so individual test files do NOT need fmt just for calling jsonString.
     let needs_fmt = fixtures.iter().any(|f| {
-        f.visitor.as_ref().is_some_and(|v| {
-            v.callbacks.values().any(|action| {
-                if let CallbackAction::CustomTemplate { template } = action {
-                    template.contains('{')
-                } else {
-                    false
-                }
-            })
-        }) || (emits_executable_test(f)
-            && f.assertions.iter().any(|a| {
-                matches!(
-                    a.assertion_type.as_str(),
-                    "contains" | "contains_all" | "contains_any" | "not_contains"
-                ) && a
-                    .field
-                    .as_ref()
-                    .map(|f| f.is_empty() || field_resolver.is_valid_for_result(f))
-                    .unwrap_or(true)
-            }))
-    });
+            f.visitor.as_ref().is_some_and(|v| {
+                v.callbacks.values().any(|action| {
+                    if let CallbackAction::CustomTemplate { template } = action {
+                        template.contains('{')
+                    } else {
+                        false
+                    }
+                })
+            }) || (emits_executable_test(f)
+                && f.assertions.iter().any(|a| {
+                    matches!(
+                        a.assertion_type.as_str(),
+                        "contains" | "contains_all" | "contains_any" | "not_contains"
+                    ) && {
+                        // Check if this assertion uses fmt.Sprint (non-array fields).
+                        // Array fields use jsonString instead, which also needs fmt.
+                        // Also verify the field is valid for the result type — assertions
+                        // on invalid fields are skipped without emitting any fmt.Sprint call.
+                        if a.field.as_ref().is_none_or(|f| f.is_empty()) {
+                            // No field: fmt.Sprint only if result is not an array
+                            !e2e_config.resolve_call(f.call.as_deref()).result_is_array
+                        } else {
+                            // Field specified: fmt.Sprint only if that field is not an array
+                            // and the field is actually valid for the result type (otherwise
+                            // the assertion is skipped and fmt.Sprint is never emitted).
+                            let field = a.field.as_deref().unwrap_or("");
+                            let resolved_name = field_resolver.resolve(field);
+                            !field_resolver.is_array(resolved_name)
+                                && field_resolver.is_valid_for_result(field)
+                        }
+                    }
+                }))
+        });
 
     // Determine if we need the "strings" import.
     // Only count assertions whose fields are actually valid for the result type.
@@ -470,17 +620,6 @@ fn render_test_file(
     let _ = writeln!(out, ")");
     let _ = writeln!(out);
 
-    if needs_json_stringify {
-        let _ = writeln!(out, "func jsonString(value any) string {{");
-        let _ = writeln!(out, "\tencoded, err := json.Marshal(value)");
-        let _ = writeln!(out, "\tif err != nil {{");
-        let _ = writeln!(out, "\t\treturn fmt.Sprint(value)");
-        let _ = writeln!(out, "\t}}");
-        let _ = writeln!(out, "\treturn string(encoded)");
-        let _ = writeln!(out, "}}");
-        let _ = writeln!(out);
-    }
-
     // Emit package-level visitor structs (must be outside any function in Go).
     for fixture in fixtures.iter() {
         if let Some(visitor_spec) = &fixture.visitor {
@@ -521,6 +660,11 @@ fn fixture_has_go_callable(fixture: &Fixture, e2e_config: &crate::config::E2eCon
         return false;
     }
     let call_config = e2e_config.resolve_call(fixture.call.as_deref());
+    // Honor per-call `skip_languages`: when the resolved call's `skip_languages`
+    // contains `"go"`, the Go binding doesn't expose this function.
+    if call_config.skip_languages.iter().any(|l| l == "go") {
+        return false;
+    }
     let go_override = call_config
         .overrides
         .get("go")
@@ -556,12 +700,11 @@ fn render_test_function(
         return;
     }
 
-    // Non-HTTP, non-mock fixtures can be tested directly if the call config
-    // provides a callable Go function (via [e2e.call.overrides.go] `function`
-    // or the base call `function`). Only emit a t.Skip stub when there is no
-    // usable callable — this keeps the package compilable while being honest
-    // about what can and cannot be exercised.
-    if fixture.mock_response.is_none() && !fixture_has_go_callable(fixture, e2e_config) {
+    // Non-HTTP fixtures are tested directly when the call config provides a
+    // callable Go function.  Emit a t.Skip() stub when:
+    //   - No mock response and no callable (non-HTTP, non-mock, unreachable), or
+    //   - The call's skip_languages includes "go" (e.g. streaming not supported).
+    if !fixture_has_go_callable(fixture, e2e_config) {
         let _ = writeln!(out, "func Test_{fn_name}(t *testing.T) {{");
         let _ = writeln!(out, "\t// {description}");
         let _ = writeln!(
@@ -628,8 +771,10 @@ fn render_test_function(
     });
 
     // result_is_array: the simple result is a slice/array type (e.g., []string).
-    // Only relevant when result_is_simple is true.
-    let result_is_array = overrides.map(|o| o.result_is_array).unwrap_or(false);
+    // Priority: Go override > call-level (canonical source).
+    let result_is_array = overrides
+        .map(|o| o.result_is_array)
+        .unwrap_or(call_config.result_is_array);
 
     // Per-call Go options_type, falling back to the default call's Go override.
     let call_options_type = overrides.and_then(|o| o.options_type.as_deref()).or_else(|| {
@@ -679,10 +824,17 @@ fn render_test_function(
         visitor_arg = "visitor".to_string();
     }
 
-    let final_args = if visitor_arg.is_empty() {
-        args_str
-    } else {
-        format!("{args_str}, {visitor_arg}")
+    let go_extra_args = overrides.map(|o| o.extra_args.as_slice()).unwrap_or(&[]).to_vec();
+    let final_args = {
+        let mut parts: Vec<String> = Vec::new();
+        if !args_str.is_empty() {
+            parts.push(args_str);
+        }
+        parts.extend(go_extra_args);
+        if !visitor_arg.is_empty() {
+            parts.push(visitor_arg);
+        }
+        parts.join(", ")
     };
 
     let _ = writeln!(out, "func Test_{fn_name}(t *testing.T) {{");
@@ -784,11 +936,24 @@ fn render_test_function(
             "\t{result_binding} {assign_op} {call_prefix}.{function_name}({final_args})"
         );
         if has_usable_assertion && result_binding != "_" {
-            // Emit nil check and dereference for simple pointer results.
-            let _ = writeln!(out, "\tif {result_var} == nil {{");
-            let _ = writeln!(out, "\t\tt.Fatalf(\"expected non-nil result\")");
-            let _ = writeln!(out, "\t}}");
-            let _ = writeln!(out, "\tvalue := *{result_var}");
+            if result_is_array {
+                // Array results are slices (not pointers); assign directly without dereference.
+                let _ = writeln!(out, "\tvalue := {result_var}");
+            } else {
+                // Check if ALL simple-result assertions are is_empty/is_null with no field.
+                // If so, skip dereference — we'll use the pointer directly.
+                let only_nil_assertions = fixture.assertions.iter()
+                    .filter(|a| a.field.as_ref().map_or(true, |f| f.is_empty()))
+                    .all(|a| matches!(a.assertion_type.as_str(), "is_empty" | "is_null"));
+
+                if !only_nil_assertions {
+                    // Emit nil check and dereference for simple pointer results.
+                    let _ = writeln!(out, "\tif {result_var} == nil {{");
+                    let _ = writeln!(out, "\t\tt.Fatalf(\"expected non-nil result\")");
+                    let _ = writeln!(out, "\t}}");
+                    let _ = writeln!(out, "\tvalue := *{result_var}");
+                }
+            }
         }
     } else if !effective_returns_result || returns_void {
         // Function returns only error (either returns_result=false, or returns_result=true
@@ -815,16 +980,39 @@ fn render_test_function(
         let _ = writeln!(out, "\t\tt.Fatalf(\"call failed: %v\", err)");
         let _ = writeln!(out, "\t}}");
         if result_is_simple && has_usable_assertion && result_binding != "_" {
-            // Emit nil check and dereference for simple pointer results.
-            let _ = writeln!(out, "\tif {result_var} == nil {{");
-            let _ = writeln!(out, "\t\tt.Fatalf(\"expected non-nil result\")");
-            let _ = writeln!(out, "\t}}");
-            let _ = writeln!(out, "\tvalue := *{result_var}");
+            if result_is_array {
+                // Array results are slices (not pointers); assign directly without dereference.
+                let _ = writeln!(out, "\tvalue := {}", result_var);
+            } else {
+                // Check if ALL simple-result assertions are is_empty/is_null with no field.
+                // If so, skip dereference — we'll use the pointer directly.
+                let only_nil_assertions = fixture.assertions.iter()
+                    .filter(|a| a.field.as_ref().map_or(true, |f| f.is_empty()))
+                    .all(|a| matches!(a.assertion_type.as_str(), "is_empty" | "is_null"));
+
+                if !only_nil_assertions {
+                    // Emit nil check and dereference for simple pointer results.
+                    let _ = writeln!(out, "\tif {} == nil {{", result_var);
+                    let _ = writeln!(out, "\t\tt.Fatalf(\"expected non-nil result\")");
+                    let _ = writeln!(out, "\t}}");
+                    let _ = writeln!(out, "\tvalue := *{}", result_var);
+                }
+            }
         }
     }
 
-    // For result_is_simple functions, assertions reference `value` (the dereferenced result).
-    let effective_result_var = if result_is_simple && has_usable_assertion {
+    // For result_is_simple functions, determine if we created a dereferenced `value` variable.
+    // We skip dereferencing if all simple-result assertions are is_empty/is_null with no field.
+    let has_deref_value = if result_is_simple && has_usable_assertion && !result_is_array {
+        let only_nil_assertions = fixture.assertions.iter()
+            .filter(|a| a.field.as_ref().map_or(true, |f| f.is_empty()))
+            .all(|a| matches!(a.assertion_type.as_str(), "is_empty" | "is_null"));
+        !only_nil_assertions
+    } else {
+        result_is_simple && has_usable_assertion
+    };
+
+    let effective_result_var = if has_deref_value {
         "value".to_string()
     } else {
         result_var.to_string()
@@ -860,7 +1048,10 @@ fn render_test_function(
                     } else {
                         let _ = writeln!(out, "\tvar {local_var} string");
                         let _ = writeln!(out, "\tif {field_expr} != nil {{");
-                        let _ = writeln!(out, "\t\t{local_var} = *{field_expr}");
+                        // Use string() cast to handle named string types (e.g. *FinishReason) in
+                        // addition to plain *string fields — string(*ptr) is a no-op for *string
+                        // and a safe coercion for any named type whose underlying type is string.
+                        let _ = writeln!(out, "\t\t{local_var} = string(*{field_expr})");
                         let _ = writeln!(out, "\t}}");
                     }
                     optional_locals.insert(f.clone(), local_var);
@@ -1286,8 +1477,12 @@ fn build_args_and_setup(
             continue;
         }
 
-        let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
-        let val = input.get(field);
+        let val: Option<&serde_json::Value> = if arg.field == "input" {
+            Some(input)
+        } else {
+            let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
+            input.get(field)
+        };
 
         // Handle bytes type: fixture stores base64-encoded bytes.
         // Emit a Go base64.StdEncoding.DecodeString call to decode at runtime.
@@ -1386,10 +1581,16 @@ fn build_args_and_setup(
                                 if go_t.starts_with('[') {
                                     go_t.to_string()
                                 } else {
-                                    format!("[]{go_t}")
+                                    // Qualify unqualified types (e.g., "BatchBytesItem" → "kreuzberg.BatchBytesItem")
+                                    let qualified = if go_t.contains('.') {
+                                        go_t.to_string()
+                                    } else {
+                                        format!("{import_alias}.{go_t}")
+                                    };
+                                    format!("[]{qualified}")
                                 }
                             } else {
-                                element_type_to_go_slice(arg.element_type.as_deref())
+                                element_type_to_go_slice(arg.element_type.as_deref(), import_alias)
                             };
                             let json_str = serde_json::to_string(v).unwrap_or_default();
                             let go_literal = go_string_literal(&json_str);
@@ -1662,12 +1863,27 @@ fn render_assertion(
 
     // When field_expr is `len(X)` and X is an optional (pointer) field, rewrite to `len(*X)`
     // and we'll wrap with a nil guard in the assertion handlers.
-    let field_expr = if is_optional && field_expr.starts_with("len(") && field_expr.ends_with(')') {
-        let inner = &field_expr[4..field_expr.len() - 1];
-        format!("len(*{inner})")
-    } else {
-        field_expr
-    };
+    // However, slices are already nil-able and should not be dereferenced.
+    let field_is_array_for_len = assertion
+        .field
+        .as_ref()
+        .map(|f| {
+            let resolved = field_resolver.resolve(f);
+            let check_path = resolved
+                .strip_suffix(".length")
+                .or_else(|| resolved.strip_suffix(".count"))
+                .or_else(|| resolved.strip_suffix(".size"))
+                .unwrap_or(resolved);
+            field_resolver.is_array(check_path)
+        })
+        .unwrap_or(false);
+    let field_expr =
+        if is_optional && field_expr.starts_with("len(") && field_expr.ends_with(')') && !field_is_array_for_len {
+            let inner = &field_expr[4..field_expr.len() - 1];
+            format!("len(*{inner})")
+        } else {
+            field_expr
+        };
     // Build the nil-guard expression for the inner pointer (without len wrapper).
     let nil_guard_expr = if is_optional && field_expr.starts_with("len(*") {
         Some(field_expr[5..field_expr.len() - 1].to_string())
@@ -1715,10 +1931,11 @@ fn render_assertion(
                 // For string equality, trim whitespace to handle trailing newlines from the converter.
                 if expected.is_string() {
                     // Wrap field expression with strings.TrimSpace() for string comparisons.
+                    // Use string() cast to handle named string types (e.g. BatchStatus, FinishReason).
                     let trimmed_field = if is_optional && !field_expr.starts_with("len(") {
-                        format!("strings.TrimSpace(*{field_expr})")
+                        format!("strings.TrimSpace(string(*{field_expr}))")
                     } else {
-                        format!("strings.TrimSpace({field_expr})")
+                        format!("strings.TrimSpace(string({field_expr}))")
                     };
                     if is_optional && !field_expr.starts_with("len(") {
                         let _ = writeln!(out_ref, "\tif {field_expr} != nil && {trimmed_field} != {go_val} {{");
@@ -1738,17 +1955,18 @@ fn render_assertion(
             if let Some(expected) = &assertion.value {
                 let go_val = json_to_go(expected);
                 // Determine the "string view" of the field expression.
-                // - *[]string → strings.Join(*field_expr, " ") for a nil-guarded check
+                // - []string (optional) → jsonString(field_expr) — Go slices are nil-able, no `*` needed
                 // - *string → string(*field_expr)
                 // - string → string(field_expr) (or just field_expr for plain strings)
-                // - result_is_array (result_is_simple + array result) → strings.Join(field_expr, " ")
+                // - result_is_array (result_is_simple + array result) → jsonString(field_expr)
                 let resolved_field = assertion.field.as_deref().unwrap_or("");
                 let resolved_name = field_resolver.resolve(resolved_field);
                 let field_is_array = result_is_array || field_resolver.is_array(resolved_name);
                 let is_opt =
                     is_optional && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()));
                 let field_for_contains = if is_opt && field_is_array {
-                    format!("jsonString(*{field_expr})")
+                    // Go slices are nil-able directly — no pointer dereference needed.
+                    format!("jsonString({field_expr})")
                 } else if is_opt {
                     format!("fmt.Sprint(*{field_expr})")
                 } else if field_is_array {
@@ -1785,7 +2003,8 @@ fn render_assertion(
                 for val in values {
                     let go_val = json_to_go(val);
                     let field_for_contains = if is_opt && field_is_array {
-                        format!("jsonString(*{field_expr})")
+                        // Go slices are nil-able directly — no pointer dereference needed.
+                        format!("jsonString({field_expr})")
                     } else if is_opt {
                         format!("fmt.Sprint(*{field_expr})")
                     } else if field_is_array {
@@ -1816,7 +2035,8 @@ fn render_assertion(
                 let is_opt =
                     is_optional && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()));
                 let field_for_contains = if is_opt && field_is_array {
-                    format!("jsonString(*{field_expr})")
+                    // Go slices are nil-able directly — no pointer dereference needed.
+                    format!("jsonString({field_expr})")
                 } else if is_opt {
                     format!("fmt.Sprint(*{field_expr})")
                 } else if field_is_array {
@@ -1843,8 +2063,15 @@ fn render_assertion(
             if is_optional && !field_is_array {
                 // Struct pointer: non-empty means not nil.
                 let _ = writeln!(out_ref, "\tif {field_expr} == nil {{");
+            } else if is_optional && field_is_slice {
+                // Slice optional: Go slices are already nil-able — no dereference needed.
+                let _ = writeln!(out_ref, "\tif {field_expr} == nil || len({field_expr}) == 0 {{");
             } else if is_optional {
+                // Pointer-to-slice (*[]T): dereference then len.
                 let _ = writeln!(out_ref, "\tif {field_expr} == nil || len(*{field_expr}) == 0 {{");
+            } else if result_is_simple && result_is_array {
+                // Simple array result ([]T) — direct slice, not a pointer; check length only.
+                let _ = writeln!(out_ref, "\tif len({field_expr}) == 0 {{");
             } else {
                 let _ = writeln!(out_ref, "\tif len({field_expr}) == 0 {{");
             }
@@ -1857,10 +2084,19 @@ fn render_assertion(
                 let rn = field_resolver.resolve(rf);
                 field_resolver.is_array(rn)
             };
-            if is_optional && !field_is_array {
+            // Special case: result_is_simple && !result_is_array && no field means the result is a pointer.
+            // Empty means nil.
+            if result_is_simple && !result_is_array && assertion.field.as_ref().map_or(true, |f| f.is_empty()) {
+                // Pointer result (not dereferenced): empty means nil.
+                let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
+            } else if is_optional && !field_is_array {
                 // Struct pointer: empty means nil.
                 let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
+            } else if is_optional && field_is_slice {
+                // Slice optional: Go slices are already nil-able — no dereference needed.
+                let _ = writeln!(out_ref, "\tif {field_expr} != nil && len({field_expr}) != 0 {{");
             } else if is_optional {
+                // Pointer-to-slice (*[]T): dereference then len.
                 let _ = writeln!(out_ref, "\tif {field_expr} != nil && len(*{field_expr}) != 0 {{");
             } else {
                 let _ = writeln!(out_ref, "\tif len({field_expr}) != 0 {{");
@@ -1876,7 +2112,8 @@ fn render_assertion(
                 let is_opt =
                     is_optional && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()));
                 let field_for_contains = if is_opt && field_is_array {
-                    format!("jsonString(*{field_expr})")
+                    // Go slices are nil-able directly — no pointer dereference needed.
+                    format!("jsonString({field_expr})")
                 } else if is_opt {
                     format!("fmt.Sprint(*{field_expr})")
                 } else if field_is_array {
@@ -2002,9 +2239,15 @@ fn render_assertion(
                 if let Some(n) = val.as_u64() {
                     if is_optional {
                         let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
+                        // Slices are value types in Go — use len(slice) not len(*slice).
+                        let len_expr = if field_is_slice {
+                            format!("len({field_expr})")
+                        } else {
+                            format!("len(*{field_expr})")
+                        };
                         let _ = writeln!(
                             out_ref,
-                            "\t\tassert.GreaterOrEqual(t, len(*{field_expr}), {n}, \"expected at least {n} elements\")"
+                            "\t\tassert.GreaterOrEqual(t, {len_expr}, {n}, \"expected at least {n} elements\")"
                         );
                         let _ = writeln!(out_ref, "\t}}");
                     } else {
@@ -2021,9 +2264,15 @@ fn render_assertion(
                 if let Some(n) = val.as_u64() {
                     if is_optional {
                         let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
+                        // Slices are value types in Go — use len(slice) not len(*slice).
+                        let len_expr = if field_is_slice {
+                            format!("len({field_expr})")
+                        } else {
+                            format!("len(*{field_expr})")
+                        };
                         let _ = writeln!(
                             out_ref,
-                            "\t\tassert.Equal(t, len(*{field_expr}), {n}, \"expected exactly {n} elements\")"
+                            "\t\tassert.Equal(t, {len_expr}, {n}, \"expected exactly {n} elements\")"
                         );
                         let _ = writeln!(out_ref, "\t}}");
                     } else {
@@ -2427,18 +2676,18 @@ fn pascal_to_snake_case(s: &str) -> String {
 /// Map an `ArgMapping.element_type` to a Go slice type. Used for `json_object` args
 /// whose fixture value is a JSON array. The element type is wrapped in `[]…` so an
 /// element of `String` becomes `[]string` and `Vec<String>` becomes `[][]string`.
-fn element_type_to_go_slice(element_type: Option<&str>) -> String {
+fn element_type_to_go_slice(element_type: Option<&str>, import_alias: &str) -> String {
     let elem = element_type.unwrap_or("String").trim();
-    let go_elem = rust_type_to_go(elem);
+    let go_elem = rust_type_to_go(elem, import_alias);
     format!("[]{go_elem}")
 }
 
 /// Map a small subset of Rust scalar / `Vec<T>` types to their Go equivalents.
-/// Defaults to `string` for unknown types, matching the historical codegen behavior.
-fn rust_type_to_go(rust: &str) -> String {
+/// For unknown types, qualify with the import alias (e.g., "kreuzberg.BatchBytesItem").
+fn rust_type_to_go(rust: &str, import_alias: &str) -> String {
     let trimmed = rust.trim();
     if let Some(inner) = trimmed.strip_prefix("Vec<").and_then(|s| s.strip_suffix('>')) {
-        return format!("[]{}", rust_type_to_go(inner));
+        return format!("[]{}", rust_type_to_go(inner, import_alias));
     }
     match trimmed {
         "String" | "&str" | "str" => "string".to_string(),
@@ -2453,7 +2702,7 @@ fn rust_type_to_go(rust: &str) -> String {
         "u16" => "uint16".to_string(),
         "u32" => "uint32".to_string(),
         "u64" | "usize" => "uint64".to_string(),
-        _ => "string".to_string(),
+        _ => format!("{import_alias}.{trimmed}"),
     }
 }
 

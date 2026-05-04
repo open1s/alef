@@ -30,6 +30,26 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config
     let function_name = resolve_function_name(e2e_config);
     let options_type = resolve_options_type(e2e_config);
     let options_via = resolve_options_via(e2e_config);
+
+    // Prefer the global override; fall back to the first fixture's per-call override.
+    let effective_options_type: Option<String> = options_type.clone().or_else(|| {
+        fixtures.iter().find_map(|f| {
+            let cc = e2e_config.resolve_call(f.call.as_deref());
+            cc.overrides.get("python").and_then(|o| o.options_type.clone())
+        })
+    });
+    let effective_options_via: &str = if options_via != "kwargs" {
+        options_via
+    } else {
+        fixtures
+            .iter()
+            .find_map(|f| {
+                let cc = e2e_config.resolve_call(f.call.as_deref());
+                cc.overrides.get("python").and_then(|o| o.options_via.as_deref())
+            })
+            .unwrap_or(options_via)
+    };
+
     let enum_fields = resolve_enum_fields(e2e_config);
     let handle_nested_types = resolve_handle_nested_types(e2e_config);
     let handle_dict_types = resolve_handle_dict_types(e2e_config);
@@ -46,13 +66,20 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config
     let has_skipped = fixtures.iter().any(|f| is_skipped(f, "python"));
     let has_http_tests = fixtures.iter().any(|f| f.is_http_test());
 
-    let is_async = fixtures.iter().any(|f| {
-        let cc = e2e_config.resolve_call(f.call.as_deref());
-        cc.r#async
-    }) || e2e_config.call.r#async;
+    // File-level is_async: true if ANY fixture in this file will emit an async test function.
+    // The Python CallOverride `async` field takes precedence per-fixture over the call-level
+    // `async` flag. For the file-level import decision we need the union across all fixtures.
+    let global_python_async_override = e2e_config.call.overrides.get("python").and_then(|o| o.r#async);
+    let is_async = global_python_async_override.unwrap_or_else(|| {
+        fixtures.iter().any(|f| {
+            let cc = e2e_config.resolve_call(f.call.as_deref());
+            let per_fixture_override = cc.overrides.get("python").and_then(|o| o.r#async);
+            per_fixture_override.unwrap_or(cc.r#async)
+        }) || e2e_config.call.r#async
+    });
     let needs_pytest = has_error_test || has_skipped || is_async;
 
-    let needs_json_import = options_via == "json"
+    let needs_json_import = effective_options_via == "json"
         && fixtures.iter().any(|f| {
             e2e_config
                 .call
@@ -63,6 +90,20 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config
 
     let client_factory = resolve_client_factory(e2e_config);
     let needs_os_import = client_factory.is_some() || e2e_config.call.args.iter().any(|arg| arg.arg_type == "mock_url");
+
+    // When options_via == "from_json", the options_type is imported from a separate native
+    // module (e.g., the PyO3 _internal_bindings) rather than the main public module.
+    let from_json_module: Option<String> = e2e_config
+        .call
+        .overrides
+        .get("python")
+        .and_then(|o| o.from_json_module.clone())
+        .or_else(|| {
+            fixtures.iter().find_map(|f| {
+                let cc = e2e_config.resolve_call(f.call.as_deref());
+                cc.overrides.get("python").and_then(|o| o.from_json_module.clone())
+            })
+        });
 
     let needs_path_import = fixtures.iter().any(|f| {
         let cc = e2e_config.resolve_call(f.call.as_deref());
@@ -89,8 +130,8 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config
 
     let _ = has_http_tests;
 
-    let needs_options_type = options_via == "kwargs"
-        && options_type.is_some()
+    let needs_options_type = (effective_options_via == "kwargs" || effective_options_via == "from_json")
+        && effective_options_type.is_some()
         && fixtures.iter().any(|f| {
             e2e_config
                 .call
@@ -147,8 +188,9 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config
             &module,
             &function_name,
             client_factory.as_deref(),
-            &options_type,
-            options_via,
+            &effective_options_type,
+            effective_options_via,
+            from_json_module.as_deref(),
             needs_options_type,
             enum_fields,
             handle_nested_types,
@@ -182,13 +224,20 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], e2e_config
             render_http_test_function(&mut out, fixture);
         } else if !is_skipped(fixture, "python") && fixture.assertions.is_empty() {
             emit_skipped_placeholder(&mut out, fixture);
+        } else if client_factory.is_some()
+            && fixture.mock_response.is_none()
+            && fixture.http.is_none()
+            && !is_skipped(fixture, "python")
+        {
+            // No mock response configured — calling the real server would fail in e2e tests.
+            emit_skipped_placeholder_no_mock(&mut out, fixture);
         } else {
             render_test_function(
                 &mut out,
                 fixture,
                 e2e_config,
-                options_type.as_deref(),
-                options_via,
+                effective_options_type.as_deref(),
+                effective_options_via,
                 enum_fields,
                 handle_nested_types,
                 handle_dict_types,
@@ -243,6 +292,23 @@ fn emit_skipped_placeholder(out: &mut String, fixture: &Fixture) {
     let _ = writeln!(out, "    \"\"\"{desc_with_period}\"\"\"");
 }
 
+fn emit_skipped_placeholder_no_mock(out: &mut String, fixture: &Fixture) {
+    use crate::escape::sanitize_ident;
+    let fn_name = sanitize_ident(&fixture.id);
+    let description = &fixture.description;
+    let desc_with_period = if description.ends_with('.') {
+        description.to_string()
+    } else {
+        format!("{description}.")
+    };
+    let _ = writeln!(
+        out,
+        "@pytest.mark.skip(reason=\"no mock response configured for this fixture\")"
+    );
+    let _ = writeln!(out, "def test_{fn_name}() -> None:");
+    let _ = writeln!(out, "    \"\"\"{desc_with_period}\"\"\"");
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_thirdparty_imports(
     fixtures: &[&Fixture],
@@ -252,6 +318,7 @@ fn build_thirdparty_imports(
     client_factory: Option<&str>,
     options_type: &Option<String>,
     options_via: &str,
+    from_json_module: Option<&str>,
     needs_options_type: bool,
     enum_fields: &std::collections::HashMap<String, String>,
     handle_nested_types: &std::collections::HashMap<String, String>,
@@ -343,9 +410,17 @@ fn build_thirdparty_imports(
         }
     }
 
-    if let (true, Some(opts_type)) = (needs_options_type && options_via == "kwargs", options_type) {
-        import_names.push(opts_type.clone());
-        thirdparty_from.push(format!("from {module} import {}", import_names.join(", ")));
+    if let (true, Some(opts_type)) = (needs_options_type && (options_via == "kwargs" || options_via == "from_json"), options_type) {
+        if options_via == "from_json" {
+            // Import opts_type from the native bindings module (e.g., PyO3 _internal_bindings),
+            // not the public module — it needs the native from_json() staticmethod.
+            thirdparty_from.push(format!("from {module} import {}", import_names.join(", ")));
+            let native_mod = from_json_module.unwrap_or(module);
+            thirdparty_from.push(format!("from {native_mod} import {opts_type}"));
+        } else {
+            import_names.push(opts_type.clone());
+            thirdparty_from.push(format!("from {module} import {}", import_names.join(", ")));
+        }
         if !used_enum_types.is_empty() {
             let enum_mod = e2e_config
                 .call
@@ -362,6 +437,27 @@ fn build_thirdparty_imports(
     } else {
         thirdparty_from.push(format!("from {module} import {}", import_names.join(", ")));
     }
+
+    // Also collect per-fixture options_type from per-call overrides that use from_json.
+    // This handles test files where different calls use different request types.
+    let mut extra_from_json_types: BTreeSet<String> = BTreeSet::new();
+    for fixture in fixtures.iter() {
+        let cc = e2e_config.resolve_call(fixture.call.as_deref());
+        if let Some(py_override) = cc.overrides.get("python") {
+            if py_override.options_via.as_deref() == Some("from_json") {
+                if let Some(ot) = &py_override.options_type {
+                    let native_mod = py_override.from_json_module.as_deref().unwrap_or(module);
+                    extra_from_json_types.insert(format!("from {native_mod} import {ot}"));
+                }
+            }
+        }
+    }
+    for imp in extra_from_json_types {
+        if !thirdparty_from.contains(&imp) {
+            thirdparty_from.push(imp);
+        }
+    }
+
     let _ = enum_fields;
 }
 

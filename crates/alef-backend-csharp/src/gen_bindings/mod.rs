@@ -80,6 +80,9 @@ impl Backend for CsharpBackend {
 
         let mut files = Vec::new();
 
+        // Fallback generic exception class name (used by GetLastError and as base for typed errors)
+        let exception_class_name = format!("{}Exception", api.crate_name.to_pascal_case());
+
         // 1. Generate NativeMethods.cs
         files.push(GeneratedFile {
             path: base_path.join("NativeMethods.cs"),
@@ -101,7 +104,7 @@ impl Backend for CsharpBackend {
         // 2. Generate error types from thiserror enums (if any), otherwise generic exception
         if !api.errors.is_empty() {
             for error in &api.errors {
-                let error_files = alef_codegen::error_gen::gen_csharp_error_types(error, &namespace);
+                let error_files = alef_codegen::error_gen::gen_csharp_error_types(error, &namespace, Some(&exception_class_name));
                 for (class_name, content) in error_files {
                     files.push(GeneratedFile {
                         path: base_path.join(format!("{}.cs", class_name)),
@@ -113,7 +116,6 @@ impl Backend for CsharpBackend {
         }
 
         // Fallback generic exception class (always generated for GetLastError)
-        let exception_class_name = format!("{}Exception", api.crate_name.to_pascal_case());
         if api.errors.is_empty()
             || !api
                 .errors
@@ -195,20 +197,36 @@ impl Backend for CsharpBackend {
             }
         }
 
+        // Collect enum names so record generation can distinguish enum fields from class fields.
+        let enum_names: HashSet<String> = api.enums.iter().map(|e| e.name.to_pascal_case()).collect();
+
+        // Collect all opaque type names (pascal-cased) so methods on one opaque type that
+        // return another opaque type are wrapped correctly rather than JSON-serialized.
+        let all_opaque_type_names: HashSet<String> = api
+            .types
+            .iter()
+            .filter(|t| t.is_opaque)
+            .map(|t| t.name.to_pascal_case())
+            .collect();
+
         // 4. Generate opaque handle classes
         for typ in api.types.iter().filter(|typ| !typ.is_trait) {
             if typ.is_opaque {
                 let type_filename = typ.name.to_pascal_case();
                 files.push(GeneratedFile {
                     path: base_path.join(format!("{}.cs", type_filename)),
-                    content: strip_trailing_whitespace(&types::gen_opaque_handle(typ, &namespace)),
+                    content: strip_trailing_whitespace(&types::gen_opaque_handle(
+                        typ,
+                        &namespace,
+                        &exception_class_name,
+                        &enum_names,
+                        &streaming_methods,
+                        &all_opaque_type_names,
+                    )),
                     generated_header: true,
                 });
             }
         }
-
-        // Collect enum names so record generation can distinguish enum fields from class fields.
-        let enum_names: HashSet<String> = api.enums.iter().map(|e| e.name.to_pascal_case()).collect();
 
         // Collect complex enums (enums with data variants and no serde tag) — these can't be
         // simple C# enums and should be represented as JsonElement for flexible deserialization.

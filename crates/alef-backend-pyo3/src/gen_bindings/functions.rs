@@ -237,11 +237,12 @@ pub(super) fn gen_api_py(
     let mut native_imports: Vec<&str> = Vec::new();
     for name in &all_type_imports {
         let is_options = options_type_names.contains(name) || options_enum_names.contains(name);
-        let is_native = opaque_names.contains(name)
-            || error_names.contains(name)
-            || (all_ir_type_names.contains(name) && !is_options)
-            // Enums not in options_enum_names live in the native module.
-            || (all_enum_names.contains(name) && !options_enum_names.contains(name));
+        let is_native = !is_options
+            && (opaque_names.contains(name)
+                || error_names.contains(name)
+                || all_ir_type_names.contains(name)
+                // Enums not in options_enum_names live in the native module.
+                || (all_enum_names.contains(name) && !options_enum_names.contains(name)));
         if is_native {
             native_imports.push(name.as_str());
         } else {
@@ -322,10 +323,46 @@ pub(super) fn gen_api_py(
             "    \"\"\"Convert Python {type_name} to Rust binding type.\"\"\"\n"
         ));
         // Allow dict input as a convenience (callers may pass a literal `{...}` instead
-        // of constructing the dataclass). Coerce to the dataclass before reading attrs.
-        out.push_str(&format!(
-            "    if isinstance(value, dict):\n        value = {type_name}(**value)\n"
-        ));
+        // of constructing the dataclass). Coerce enum fields in the dict before constructing.
+        out.push_str("    if isinstance(value, dict):\n");
+        let has_enum_field = typ.fields.iter().any(|f| {
+            let inner_name = match &f.ty {
+                TypeRef::Named(n) => Some(n.as_str()),
+                TypeRef::Optional(inner) => {
+                    if let TypeRef::Named(n) = inner.as_ref() {
+                        Some(n.as_str())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            inner_name.is_some_and(|n| enum_names.contains(n) && !data_enum_names.contains(n))
+        });
+        if has_enum_field {
+            for field in &typ.fields {
+                let inner_name = match &field.ty {
+                    TypeRef::Named(n) => Some(n.as_str()),
+                    TypeRef::Optional(inner) => {
+                        if let TypeRef::Named(n) = inner.as_ref() {
+                            Some(n.as_str())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(enum_name) = inner_name {
+                    if enum_names.contains(enum_name) && !data_enum_names.contains(enum_name) {
+                        out.push_str(&format!(
+                            "        if \"{field_name}\" in value and value[\"{field_name}\"] is not None:\n            value[\"{field_name}\"] = _coerce_enum(_rust.{enum_name}, value[\"{field_name}\"])\n",
+                            field_name = field.name,
+                        ));
+                    }
+                }
+            }
+        }
+        out.push_str(&format!("        value = {type_name}(**value)\n"));
         out.push_str("    if value is None:\n");
         if let Some((kwarg_name, _field_name, _)) = bridge_visitor_field {
             // When value is None but visitor override is provided, construct a default instance.

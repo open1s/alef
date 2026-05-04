@@ -50,7 +50,9 @@ pub mod cargo {
     pub const MAGNUS: &str = "0.8";
 
     // renovate: datasource=crate depName=ext-php-rs
-    pub const EXT_PHP_RS: &str = "0.15.12";
+    // Pinned to 0.15.4: 0.15.12+ introduces ext-php-rs-clang-sys which
+    // conflicts with clang-sys when kreuzberg-php is in a shared workspace.
+    pub const EXT_PHP_RS: &str = "0.15.4";
 
     // renovate: datasource=crate depName=js-sys
     pub const JS_SYS: &str = "0.3";
@@ -379,5 +381,5 @@ pub mod precommit {
     pub const KREUZBERG_PRECOMMIT_HOOKS_REV: &str = "v0.1.0";
 
     // alef rev: managed by sync-versions hook, no renovate marker
-    pub const ALEF_REV: &str = "v0.14.11";
+    pub const ALEF_REV: &str = "v0.14.19";
 }

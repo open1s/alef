@@ -218,6 +218,7 @@ fn render_test_file(
     let _ = writeln!(out, "using System.Threading.Tasks;");
     let _ = writeln!(out, "using Xunit;");
     let _ = writeln!(out, "using {namespace};");
+    let _ = writeln!(out, "using static {namespace}.{class_name};");
     let _ = writeln!(out);
     let _ = writeln!(out, "namespace Kreuzberg.E2e;");
     let _ = writeln!(out);
@@ -716,7 +717,7 @@ fn render_test_method(
         );
         let _ = writeln!(
             out,
-            "        var client = {class_name}.{factory_name}(\"test-key\", baseUrl);"
+            "        var client = {class_name}.{factory_name}(\"test-key\", baseUrl, null, null, null);"
         );
     }
 
@@ -724,12 +725,12 @@ fn render_test_method(
         if is_async {
             let _ = writeln!(
                 out,
-                "        await Assert.ThrowsAsync<{exception_class}>(() => {call_target}.{effective_function_name}({final_args}));"
+                "        await Assert.ThrowsAnyAsync<{exception_class}>(() => {call_target}.{effective_function_name}({final_args}));"
             );
         } else {
             let _ = writeln!(
                 out,
-                "        Assert.Throws<{exception_class}>(() => {call_target}.{effective_function_name}({final_args}));"
+                "        Assert.ThrowsAny<{exception_class}>(() => {call_target}.{effective_function_name}({final_args}));"
             );
         }
         let _ = writeln!(out, "    }}");
@@ -737,6 +738,7 @@ fn render_test_method(
     }
 
     let result_is_vec = call_config.result_is_vec || cs_overrides.is_some_and(|o| o.result_is_vec);
+    let result_is_array = call_config.result_is_array;
 
     if returns_void {
         let _ = writeln!(
@@ -758,6 +760,7 @@ fn render_test_method(
                 field_resolver,
                 effective_result_is_simple,
                 result_is_vec,
+                result_is_array,
             );
         }
     }
@@ -773,7 +776,7 @@ fn build_args_and_setup(
     args: &[crate::config::ArgMapping],
     class_name: &str,
     options_type: Option<&str>,
-    _enum_fields: &HashMap<String, String>,
+    enum_fields: &HashMap<String, String>,
     fixture_id: &str,
 ) -> (Vec<String>, String) {
     if args.is_empty() {
@@ -843,8 +846,14 @@ fn build_args_and_setup(
             continue;
         }
 
-        let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
-        let val = input.get(field);
+        // When field is exactly "input", treat the entire input object as the value.
+        // This matches the convention used by other language generators (e.g. Go).
+        let val: Option<&serde_json::Value> = if arg.field == "input" {
+            Some(input)
+        } else {
+            let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
+            input.get(field)
+        };
         match val {
             None | Some(serde_json::Value::Null) if arg.optional => {
                 // Optional arg with no fixture value: pass null explicitly since
@@ -854,11 +863,20 @@ fn build_args_and_setup(
             }
             None | Some(serde_json::Value::Null) => {
                 // Required arg with no fixture value: pass a language-appropriate default.
+                // For json_object args with a known options_type, use `new OptionsType()`
+                // so the generated code compiles when the method parameter is non-nullable.
                 let default_val = match arg.arg_type.as_str() {
                     "string" => "\"\"".to_string(),
                     "int" | "integer" => "0".to_string(),
                     "float" | "number" => "0.0d".to_string(),
                     "bool" | "boolean" => "false".to_string(),
+                    "json_object" => {
+                        if let Some(opts_type) = options_type {
+                            format!("new {opts_type}()")
+                        } else {
+                            "null".to_string()
+                        }
+                    }
                     _ => "null".to_string(),
                 };
                 parts.push(default_val);
@@ -872,9 +890,11 @@ fn build_args_and_setup(
                     }
                     // Object value with known type: deserialize via JsonSerializer so the
                     // library's own [JsonPropertyName] annotations handle field name mapping.
+                    // Normalize enum field values to lowercase to match [JsonPropertyName("lowercase")] attrs.
                     if let Some(opts_type) = options_type {
                         if v.is_object() {
-                            let json_str = serde_json::to_string(v).unwrap_or_default();
+                            let normalized = normalize_csharp_enum_values(v, enum_fields);
+                            let json_str = serde_json::to_string(&normalized).unwrap_or_default();
                             parts.push(format!(
                                 "JsonSerializer.Deserialize<{opts_type}>(\"{}\", ConfigOptions)!",
                                 escape_csharp(&json_str),
@@ -915,6 +935,18 @@ fn json_array_to_csharp_list(arr: &[serde_json::Value], element_type: Option<&st
                 .collect();
             format!("new List<List<string>>() {{ {} }}", items.join(", "))
         }
+        Some(et) if et != "f32" && et != "(String, String)" && et != "string" => {
+            // Class/record types: deserialize each element from JSON
+            let items: Vec<String> = arr
+                .iter()
+                .map(|v| {
+                    let json_str = serde_json::to_string(v).unwrap_or_default();
+                    let escaped = escape_csharp(&json_str);
+                    format!("JsonSerializer.Deserialize<{et}>(\"{escaped}\", ConfigOptions)!")
+                })
+                .collect();
+            format!("new List<{et}>() {{ {} }}", items.join(", "))
+        }
         _ => {
             let items: Vec<String> = arr.iter().map(json_to_csharp).collect();
             format!("new List<string>() {{ {} }}", items.join(", "))
@@ -932,6 +964,7 @@ fn render_assertion(
     field_resolver: &FieldResolver,
     result_is_simple: bool,
     result_is_vec: bool,
+    result_is_array: bool,
 ) {
     // Handle synthetic / derived fields before the is_valid_for_result check
     // so they are never treated as struct property accesses on the result.
@@ -1101,13 +1134,34 @@ fn render_assertion(
         }
     };
 
+    // Determine if field_expr is a list or complex object that requires JSON serialization
+    // for string-based assertions (contains, not_contains, etc.). List<T>.ToString() in C#
+    // returns the type name, not the contents.
+    let field_needs_json_serialize = if result_is_simple {
+        // Simple results are scalars, but when they're also arrays (e.g., List<string>),
+        // JSON-serialize so substring checks see actual content, not the type name.
+        result_is_array
+    } else {
+        match &assertion.field {
+            Some(f) if !f.is_empty() => field_resolver.is_array(f),
+            // No field specified — the whole result object; needs serialization when complex.
+            _ => !result_is_simple,
+        }
+    };
+    // Build the string representation of field_expr for substring-based assertions.
+    let field_as_str = if field_needs_json_serialize {
+        format!("JsonSerializer.Serialize({field_expr})")
+    } else {
+        format!("{field_expr}.ToString()")
+    };
+
     match assertion.assertion_type.as_str() {
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let cs_val = json_to_csharp(expected);
                 if expected.is_string() {
                     // Only call .Trim() on string fields.
-                    let _ = writeln!(out, "        Assert.Equal({cs_val}, {field_expr}.Trim());");
+                    let _ = writeln!(out, "        Assert.Equal({cs_val}, {field_expr}!.Trim());");
                 } else if expected.as_bool() == Some(true) {
                     // Boolean true: use Assert.True to avoid xUnit2004 warning.
                     let _ = writeln!(out, "        Assert.True({field_expr});");
@@ -1129,6 +1183,8 @@ fn render_assertion(
                 // returns the PascalCase C# member name like "Anchor") correctly match
                 // fixture snake_case values like "anchor".  String fields are unaffected
                 // because lowercasing both sides preserves substring matches.
+                // List/complex fields use JsonSerializer.Serialize() since List<T>.ToString()
+                // returns the type name, not the contents.
                 let lower_expected = expected.as_str().map(|s| s.to_lowercase());
                 let cs_val = lower_expected
                     .as_deref()
@@ -1136,7 +1192,7 @@ fn render_assertion(
                     .unwrap_or_else(|| json_to_csharp(expected));
                 let _ = writeln!(
                     out,
-                    "        Assert.Contains({cs_val}, {field_expr}.ToString().ToLower());"
+                    "        Assert.Contains({cs_val}, {field_as_str}.ToLower());"
                 );
             }
         }
@@ -1150,7 +1206,7 @@ fn render_assertion(
                         .unwrap_or_else(|| json_to_csharp(val));
                     let _ = writeln!(
                         out,
-                        "        Assert.Contains({cs_val}, {field_expr}.ToString().ToLower());"
+                        "        Assert.Contains({cs_val}, {field_as_str}.ToLower());"
                     );
                 }
             }
@@ -1158,20 +1214,28 @@ fn render_assertion(
         "not_contains" => {
             if let Some(expected) = &assertion.value {
                 let cs_val = json_to_csharp(expected);
-                let _ = writeln!(out, "        Assert.DoesNotContain({cs_val}, {field_expr}.ToString());");
+                let _ = writeln!(out, "        Assert.DoesNotContain({cs_val}, {field_as_str});");
             }
         }
         "not_empty" => {
-            let _ = writeln!(
-                out,
-                "        Assert.False(string.IsNullOrEmpty({field_expr}?.ToString()));"
-            );
+            if field_needs_json_serialize {
+                let _ = writeln!(out, "        Assert.NotEmpty({field_expr});");
+            } else {
+                let _ = writeln!(
+                    out,
+                    "        Assert.False(string.IsNullOrEmpty({field_expr}?.ToString()));"
+                );
+            }
         }
         "is_empty" => {
-            let _ = writeln!(
-                out,
-                "        Assert.True(string.IsNullOrEmpty({field_expr}?.ToString()));"
-            );
+            if field_needs_json_serialize {
+                let _ = writeln!(out, "        Assert.Empty({field_expr});");
+            } else {
+                let _ = writeln!(
+                    out,
+                    "        Assert.True(string.IsNullOrEmpty({field_expr}?.ToString()));"
+                );
+            }
         }
         "contains_any" => {
             if let Some(values) = &assertion.values {
@@ -1179,7 +1243,7 @@ fn render_assertion(
                     .iter()
                     .map(|v| {
                         let cs_val = json_to_csharp(v);
-                        format!("{field_expr}.ToString().Contains({cs_val})")
+                        format!("{field_as_str}.Contains({cs_val})")
                     })
                     .collect();
                 let joined = checks.join(" || ");
@@ -1327,7 +1391,7 @@ fn render_assertion(
                     "is_error" => {
                         let _ = writeln!(
                             out,
-                            "        Assert.Throws<{exception_class}>(() => {{ {call_expr}; }});"
+                            "        Assert.ThrowsAny<{exception_class}>(() => {{ {call_expr}; }});"
                         );
                     }
                     "contains" => {
@@ -1406,6 +1470,28 @@ fn json_to_csharp(value: &serde_json::Value) -> String {
             let json_str = serde_json::to_string(value).unwrap_or_default();
             format!("\"{}\"", escape_csharp(&json_str))
         }
+    }
+}
+
+/// Convert enum values in a JSON object to lowercase to match C# [JsonPropertyName] attributes.
+/// The JSON deserialization uses JsonPropertyName("lowercase_value"), so fixture enum values
+/// (typically PascalCase like "Tildes") must be converted to lowercase ("tildes") for correct
+/// deserialization with JsonStringEnumConverter.
+fn normalize_csharp_enum_values(value: &serde_json::Value, enum_fields: &HashMap<String, String>) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut result = map.clone();
+            for (key, val) in result.iter_mut() {
+                if enum_fields.contains_key(key) {
+                    // This is an enum field; convert the string value to lowercase.
+                    if let Some(s) = val.as_str() {
+                        *val = serde_json::Value::String(s.to_lowercase());
+                    }
+                }
+            }
+            serde_json::Value::Object(result)
+        }
+        other => other.clone(),
     }
 }
 

@@ -14,7 +14,7 @@ use alef_core::config::ResolvedCrateConfig;
 use alef_core::hash::{self, CommentStyle};
 use alef_core::template_versions as tv;
 use anyhow::Result;
-use heck::{ToSnakeCase, ToUpperCamelCase};
+use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::path::PathBuf;
@@ -46,6 +46,7 @@ impl E2eCodegen for PhpCodegen {
         let class_name = overrides
             .and_then(|o| o.class.as_ref())
             .cloned()
+            .map(|cn| cn.split('\\').next_back().unwrap_or(&cn).to_string())
             .unwrap_or_else(|| extension_name.to_upper_camel_case());
         let namespace = overrides.and_then(|o| o.module.as_ref()).cloned().unwrap_or_else(|| {
             if extension_name.contains('_') {
@@ -202,13 +203,13 @@ fn render_composer_json(
     e2e_pkg_name: &str,
     e2e_autoload_ns: &str,
     pkg_name: &str,
-    _pkg_path: &str,
+    pkg_path: &str,
     pkg_version: &str,
     dep_mode: crate::config::DependencyMode,
 ) -> String {
-    let require_section = match dep_mode {
+    let (require_section, autoload_section) = match dep_mode {
         crate::config::DependencyMode::Registry => {
-            format!(
+            let require = format!(
                 r#"  "require": {{
     "{pkg_name}": "{pkg_version}"
   }},
@@ -218,16 +219,40 @@ fn render_composer_json(
   }},"#,
                 phpunit = tv::packagist::PHPUNIT,
                 guzzle = tv::packagist::GUZZLE,
-            )
+            );
+            (require, String::new())
         }
-        crate::config::DependencyMode::Local => format!(
-            r#"  "require-dev": {{
+        crate::config::DependencyMode::Local => {
+            let require = format!(
+                r#"  "require-dev": {{
     "phpunit/phpunit": "{phpunit}",
     "guzzlehttp/guzzle": "{guzzle}"
   }},"#,
-            phpunit = tv::packagist::PHPUNIT,
-            guzzle = tv::packagist::GUZZLE,
-        ),
+                phpunit = tv::packagist::PHPUNIT,
+                guzzle = tv::packagist::GUZZLE,
+            );
+            // For local mode, add autoload for the local package source.
+            // Extract the namespace from pkg_name (org/module) and map it to src/.
+            let pkg_namespace = pkg_name
+                .split('/')
+                .nth(1)
+                .unwrap_or(pkg_name)
+                .split('-')
+                .map(heck::ToUpperCamelCase::to_upper_camel_case)
+                .collect::<Vec<_>>()
+                .join("\\");
+            let autoload = format!(
+                r#"
+  "autoload": {{
+    "psr-4": {{
+      "{}\\": "{}/src/"
+    }}
+  }},"#,
+                pkg_namespace.replace('\\', "\\\\"),
+                pkg_path
+            );
+            (require, autoload)
+        }
     };
 
     format!(
@@ -235,7 +260,7 @@ fn render_composer_json(
   "name": "{e2e_pkg_name}",
   "description": "E2e tests for PHP bindings",
   "type": "project",
-{require_section}
+{require_section}{autoload_section}
   "autoload-dev": {{
     "psr-4": {{
       "{e2e_autoload_ns}": "tests/"
@@ -385,7 +410,7 @@ fn render_test_file(
     let _ = writeln!(out);
     let _ = writeln!(out, "declare(strict_types=1);");
     let _ = writeln!(out);
-    let _ = writeln!(out, "namespace Kreuzberg\\E2e;");
+    let _ = writeln!(out, "namespace {namespace}\\E2e;");
     let _ = writeln!(out);
 
     // Determine if any handle arg has a non-null config (needs CrawlConfig import).
@@ -757,6 +782,11 @@ fn render_test_method(
     // a function name, use it as-is without modification.
     if !has_override && call_config.r#async {
         function_name = format!("{function_name}_async");
+    }
+    // PHP wrapper classes use lowerCamelCase method names (e.g. getLanguage, downloadAll).
+    // Convert the Rust snake_case name only when no explicit override is provided.
+    if !has_override {
+        function_name = function_name.to_lower_camel_case();
     }
     let result_var = &call_config.result_var;
     let args = &call_config.args;
@@ -1232,13 +1262,22 @@ fn render_assertion(
     };
 
     // For string equality, trim trailing whitespace to handle trailing newlines.
-    let trimmed_field_expr = format!("trim({})", field_expr);
+    // Only apply trim() when the expected value is a string — calling trim() on int/bool
+    // throws TypeError in PHP 8.4+.
+    let trimmed_field_expr_for = |expected: &serde_json::Value| -> String {
+        if expected.is_string() {
+            format!("trim({})", field_expr)
+        } else {
+            field_expr.clone()
+        }
+    };
 
     match assertion.assertion_type.as_str() {
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let php_val = json_to_php(expected);
-                let _ = writeln!(out, "        $this->assertEquals({php_val}, {trimmed_field_expr});");
+                let effective_expr = trimmed_field_expr_for(expected);
+                let _ = writeln!(out, "        $this->assertEquals({php_val}, {effective_expr});");
             }
         }
         "contains" => {
@@ -1274,7 +1313,7 @@ fn render_assertion(
             let _ = writeln!(out, "        $this->assertNotEmpty({field_expr});");
         }
         "is_empty" => {
-            let _ = writeln!(out, "        $this->assertEmpty({trimmed_field_expr});");
+            let _ = writeln!(out, "        $this->assertEmpty({field_expr});");
         }
         "contains_any" => {
             if let Some(values) = &assertion.values {

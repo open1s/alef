@@ -559,7 +559,8 @@ impl Backend for RustlerBackend {
         // Wrapper functions for top-level API functions
         for func in &api.functions {
             let nif_fn_name = if func.is_async {
-                format!("{}_async", func.name.to_snake_case())
+                let s = func.name.to_snake_case();
+                if s.ends_with("_async") { s } else { format!("{s}_async") }
             } else {
                 func.name.to_snake_case()
             };
@@ -885,7 +886,14 @@ impl Backend for RustlerBackend {
   defp apply_visitor_callback(fun, args_json) do
     args = Jason.decode!(args_json)
     result = fun.(args)
-    if is_binary(result), do: result, else: "continue"
+    case result do
+      :continue -> "continue"
+      :skip -> "skip"
+      :preserve_html -> "preserve_html"
+      {{:custom, value}} -> to_string(value)
+      binary when is_binary(binary) -> binary
+      _ -> "continue"
+    end
   end
 
 "#
@@ -1023,7 +1031,8 @@ fn gen_nif_init(
         .filter(|f| !exclude_functions.contains(f.name.as_str()))
     {
         let func_name = if func.is_async {
-            format!("{}_async", func.name)
+            let n = func.name.as_str();
+            if n.ends_with("_async") { n.to_string() } else { format!("{n}_async") }
         } else {
             func.name.clone()
         };

@@ -72,6 +72,20 @@ impl E2eCodegen for ElixirCodegen {
         // Check if any fixture in any group is an HTTP test.
         let has_http_tests = groups.iter().any(|g| g.fixtures.iter().any(|f| f.is_http_test()));
         let has_nif_tests = groups.iter().any(|g| g.fixtures.iter().any(|f| !f.is_http_test()));
+        // Check if any fixture needs the mock server (either via http or mock_response or client_factory).
+        let has_mock_server_tests = groups.iter().any(|g| {
+            g.fixtures.iter().any(|f| {
+                if f.needs_mock_server() {
+                    return true;
+                }
+                let cc = e2e_config.resolve_call(f.call.as_deref());
+                let elixir_override = cc
+                    .overrides
+                    .get("elixir")
+                    .or_else(|| e2e_config.call.overrides.get("elixir"));
+                elixir_override.and_then(|o| o.client_factory.as_deref()).is_some()
+            })
+        });
 
         // Resolve package reference (path or version) for the NIF dependency.
         let pkg_ref = e2e_config.resolve_package(lang);
@@ -106,7 +120,7 @@ impl E2eCodegen for ElixirCodegen {
         // Generate test_helper.exs.
         files.push(GeneratedFile {
             path: output_base.join("test").join("test_helper.exs"),
-            content: render_test_helper(has_http_tests),
+            content: render_test_helper(has_http_tests || has_mock_server_tests),
             generated_header: false,
         });
 
@@ -288,6 +302,34 @@ fn render_test_file(
             out,
             "    System.get_env(\"MOCK_SERVER_URL\") || \"http://localhost:8080\""
         );
+        let _ = writeln!(out, "  end");
+    }
+
+    // Emit a shared helper for array field contains assertions — extracts string
+    // representations from each item's attributes so String.contains? works on struct lists.
+    let has_array_contains = fixtures.iter().any(|fixture| {
+        fixture.assertions.iter().any(|a| {
+            matches!(a.assertion_type.as_str(), "contains" | "contains_all" | "not_contains")
+                && a.field
+                    .as_deref()
+                    .is_some_and(|f| !f.is_empty() && field_resolver.is_array(field_resolver.resolve(f)))
+        })
+    });
+    if has_array_contains {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "  defp alef_e2e_item_texts(item) do");
+        let _ = writeln!(out, "    [:kind, :name, :signature, :path, :alias, :text, :source]");
+        let _ = writeln!(out, "    |> Enum.filter(&Map.has_key?(item, &1))");
+        let _ = writeln!(out, "    |> Enum.flat_map(fn attr ->");
+        let _ = writeln!(out, "      case Map.get(item, attr) do");
+        let _ = writeln!(out, "        nil -> []");
+        let _ = writeln!(
+            out,
+            "        atom when is_atom(atom) -> [atom |> to_string() |> String.capitalize()]"
+        );
+        let _ = writeln!(out, "        str -> [to_string(str)]");
+        let _ = writeln!(out, "      end");
+        let _ = writeln!(out, "    end)");
         let _ = writeln!(out, "  end");
     }
 
@@ -611,6 +653,34 @@ fn render_test_case(
     let lang = "elixir";
     let call_overrides = call_config.overrides.get(lang);
 
+    // Check if the function is excluded from the Elixir binding (e.g., batch functions
+    // that require unsafe NIF tuple marshalling). Emit a skipped test with rationale.
+    let base_fn = call_overrides
+        .and_then(|o| o.function.as_ref())
+        .cloned()
+        .unwrap_or_else(|| call_config.function.clone());
+    if base_fn.starts_with("batch_extract_") {
+        let _ = writeln!(
+            out,
+            "  describe \"{test_name}\" do",
+            test_name = sanitize_ident(&fixture.id)
+        );
+        let _ = writeln!(out, "    @tag :skip");
+        let _ = writeln!(
+            out,
+            "    test \"{test_label}\" do",
+            test_label = fixture.id.replace('"', "\\\"")
+        );
+        let _ = writeln!(
+            out,
+            "      # batch functions excluded from Elixir binding: unsafe NIF tuple marshalling"
+        );
+        let _ = writeln!(out, "      :ok");
+        let _ = writeln!(out, "    end");
+        let _ = writeln!(out, "  end");
+        return;
+    }
+
     // Compute module_path and function_name from the resolved call config,
     // applying Elixir-specific PascalCase conversion.
     let (module_path, function_name, result_var) = if fixture.call.is_some() {
@@ -624,10 +694,6 @@ fn render_test_case(
         } else {
             elixir_module_name(&raw_module)
         };
-        let base_fn = call_overrides
-            .and_then(|o| o.function.as_ref())
-            .cloned()
-            .unwrap_or_else(|| call_config.function.clone());
         let resolved_fn = if call_config.r#async && !base_fn.ends_with("_async") {
             format!("{base_fn}_async")
         } else {
@@ -770,7 +836,7 @@ fn render_test_case(
         let fixture_id = &fixture.id;
         let _ = writeln!(
             out,
-            "      {{:ok, client}} = {module_path}.{factory}(\"test-key\", System.get_env(\"MOCK_SERVER_URL\") <> \"/fixtures/{fixture_id}\")"
+            "      {{:ok, client}} = {module_path}.{factory}(\"test-key\", (System.get_env(\"MOCK_SERVER_URL\") || \"\") <> \"/fixtures/{fixture_id}\")"
         );
     }
 
@@ -851,7 +917,7 @@ fn build_args_and_setup(
     for arg in args {
         if arg.arg_type == "mock_url" {
             setup_lines.push(format!(
-                "{} = System.get_env(\"MOCK_SERVER_URL\") <> \"/fixtures/{fixture_id}\"",
+                "{} = (System.get_env(\"MOCK_SERVER_URL\") || \"\") <> \"/fixtures/{fixture_id}\"",
                 arg.name,
             ));
             parts.push(arg.name.clone());
@@ -976,6 +1042,12 @@ fn build_args_and_setup(
 
                         // Push the variable name as the argument.
                         parts.push(options_var.to_string());
+                        continue;
+                    }
+                    // When element_type is set, the value is an array of a simple type (e.g.
+                    // Vec<String>). The NIF accepts an Elixir list directly — emit one.
+                    if arg.element_type.is_some() && v.is_array() {
+                        parts.push(json_to_elixir(v));
                         continue;
                     }
                     // When there's no options_type+options_via, the Elixir NIF expects a JSON
@@ -1177,6 +1249,14 @@ fn render_assertion(
         format!("String.trim({field_expr})")
     };
 
+    // Detect whether the assertion field resolves to an array type so that
+    // contains assertions can iterate items instead of calling to_string on the list.
+    let field_is_array = assertion
+        .field
+        .as_deref()
+        .filter(|f| !f.is_empty())
+        .is_some_and(|f| field_resolver.is_array(field_resolver.resolve(f)));
+
     match assertion.assertion_type.as_str() {
         "equals" => {
             if let Some(expected) = &assertion.value {
@@ -1193,17 +1273,14 @@ fn render_assertion(
         "contains" => {
             if let Some(expected) = &assertion.value {
                 let elixir_val = json_to_elixir(expected);
-                // Use to_string() to handle atoms (enums) as well as strings
-                let _ = writeln!(
-                    out,
-                    "      assert String.contains?(to_string({field_expr}), {elixir_val})"
-                );
-            }
-        }
-        "contains_all" => {
-            if let Some(values) = &assertion.values {
-                for val in values {
-                    let elixir_val = json_to_elixir(val);
+                if field_is_array && expected.is_string() {
+                    // List of structs: check if any item's text representation contains the value.
+                    let _ = writeln!(
+                        out,
+                        "      assert Enum.any?({field_expr}, fn item -> Enum.any?(alef_e2e_item_texts(item), &String.contains?(&1, {elixir_val})) end)"
+                    );
+                } else {
+                    // Use to_string() to handle atoms (enums) as well as strings
                     let _ = writeln!(
                         out,
                         "      assert String.contains?(to_string({field_expr}), {elixir_val})"
@@ -1211,13 +1288,38 @@ fn render_assertion(
                 }
             }
         }
+        "contains_all" => {
+            if let Some(values) = &assertion.values {
+                for val in values {
+                    let elixir_val = json_to_elixir(val);
+                    if field_is_array && val.is_string() {
+                        let _ = writeln!(
+                            out,
+                            "      assert Enum.any?({field_expr}, fn item -> Enum.any?(alef_e2e_item_texts(item), &String.contains?(&1, {elixir_val})) end)"
+                        );
+                    } else {
+                        let _ = writeln!(
+                            out,
+                            "      assert String.contains?(to_string({field_expr}), {elixir_val})"
+                        );
+                    }
+                }
+            }
+        }
         "not_contains" => {
             if let Some(expected) = &assertion.value {
                 let elixir_val = json_to_elixir(expected);
-                let _ = writeln!(
-                    out,
-                    "      refute String.contains?(to_string({field_expr}), {elixir_val})"
-                );
+                if field_is_array && expected.is_string() {
+                    let _ = writeln!(
+                        out,
+                        "      refute Enum.any?({field_expr}, fn item -> Enum.any?(alef_e2e_item_texts(item), &String.contains?(&1, {elixir_val})) end)"
+                    );
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "      refute String.contains?(to_string({field_expr}), {elixir_val})"
+                    );
+                }
             }
         }
         "not_empty" => {

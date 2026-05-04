@@ -50,18 +50,35 @@ impl E2eCodegen for WasmCodegen {
         let client_factory = overrides.and_then(|o| o.client_factory.as_deref());
 
         // Resolve package config — defaults to a co-located pkg/ directory shipped
-        // by `wasm-pack build` next to the kreuzberg-wasm crate.
+        // by `wasm-pack build` next to the wasm crate.
+        // For projects with a core library name different from the package name,
+        // try both {config.name}-wasm and ts-pack-core-wasm (for tree-sitter-language-pack).
         let wasm_pkg = e2e_config.resolve_package("wasm");
         let pkg_path = wasm_pkg
             .as_ref()
             .and_then(|p| p.path.as_ref())
             .cloned()
-            .unwrap_or_else(|| format!("../../crates/{}-wasm/pkg", config.name));
+            .unwrap_or_else(|| {
+                let default_name = format!("../../crates/{}-wasm/pkg", config.name);
+                // Special case: tree-sitter-language-pack uses ts-pack-core-wasm
+                if config.name == "tree-sitter-language-pack" {
+                    "../../crates/ts-pack-core-wasm/pkg".to_string()
+                } else {
+                    default_name
+                }
+            });
         let pkg_name = wasm_pkg
             .as_ref()
             .and_then(|p| p.name.as_ref())
             .cloned()
-            .unwrap_or_else(|| module_path.clone());
+            .unwrap_or_else(|| {
+                // Default: derive from WASM crate name (config.name + "-wasm")
+                // wasm-pack transforms the crate name to the package name by replacing
+                // dashes with the crate separator in Cargo (e.g., kreuzberg-wasm -> kreuzberg_wasm).
+                // However, the published npm package might use the module name, which is typically
+                // the crate name without "-wasm". Fall back to the module path.
+                module_path.clone()
+            });
         let pkg_version = wasm_pkg
             .as_ref()
             .and_then(|p| p.version.as_ref())
@@ -207,7 +224,9 @@ impl E2eCodegen for WasmCodegen {
             );
 
             // Inject WASM initialization code for Node.js environments.
-            content = inject_wasm_init(&content, &pkg_name);
+            // Pass the WASM crate name (e.g., "html-to-markdown-wasm") instead of the core crate name.
+            let wasm_crate_name = format!("{}-wasm", config.name);
+            content = inject_wasm_init(&content, &pkg_name, &wasm_crate_name);
 
             files.push(GeneratedFile {
                 path: tests_base.join(filename),
@@ -262,14 +281,12 @@ fn render_package_json(
   "devDependencies": {{
     "{pkg_name}": "{dep_value}",
     "rollup": "{rollup}",
-    "vite-plugin-top-level-await": "{vite_plugin_top_level_await}",
     "vite-plugin-wasm": "{vite_plugin_wasm}",
     "vitest": "{vitest}"
   }}
 }}
 "#,
         rollup = tv::npm::ROLLUP,
-        vite_plugin_top_level_await = tv::npm::VITE_PLUGIN_TOP_LEVEL_AWAIT,
         vite_plugin_wasm = tv::npm::VITE_PLUGIN_WASM,
         vitest = tv::npm::VITEST,
     )
@@ -290,10 +307,9 @@ fn render_vitest_config(with_global_setup: bool, with_file_setup: bool) -> Strin
     format!(
         r#"{header}import {{ defineConfig }} from 'vitest/config';
 import wasm from 'vite-plugin-wasm';
-import topLevelAwait from 'vite-plugin-top-level-await';
 
 export default defineConfig({{
-  plugins: [wasm(), topLevelAwait()],
+  plugins: [wasm()],
   test: {{
     include: ['tests/**/*.test.ts'],
 {global_setup_line}{setup_files_line}  }},
@@ -375,58 +391,66 @@ fn render_tsconfig() -> String {
 
 /// Inject WASM initialization code for Node.js environments.
 ///
-/// Injects initSync using fs.readFileSync to load the WASM binary at the module
-/// level. This is necessary for Node.js test environments because the fetch-based
-/// initialization doesn't work.
-fn inject_wasm_init(content: &str, pkg_name: &str) -> String {
-    // Derive the wasm binary filename: strip @scope/ prefix, replace dashes with
-    // underscores, append _bg.wasm.  E.g. "@kreuzberg/liter-llm-wasm" → "liter_llm_wasm_bg.wasm".
-    let bare_name = pkg_name.rsplit('/').next().unwrap_or(pkg_name);
-    let wasm_filename = format!("{}_bg.wasm", bare_name.replace('-', "_"));
+/// Injects top-level await for the async init() function from wasm-pack.
+/// This allows the WASM module to be initialized before tests run.
+///
+/// # Arguments
+/// * `content` — the generated TypeScript test file content
+/// * `pkg_name` — the npm package name (e.g., "kreuzberg" or "@org/kreuzberg")
+/// * `_crate_name` — the Rust crate name (unused in async init pattern)
+fn inject_wasm_init(content: &str, pkg_name: &str, _crate_name: &str) -> String {
     // The TypeScript renderer generates single-quoted imports; match both styles for robustness.
     let from_marker_sq = format!("}} from '{pkg_name}';");
     let from_marker_dq = format!("}} from \"{pkg_name}\";");
     let from_marker = if content.contains(&from_marker_sq) {
-        from_marker_sq.clone()
+        from_marker_sq
     } else {
-        from_marker_dq.clone()
-    };
-    let new_from = if from_marker == from_marker_sq {
-        format!(", initSync }} from '{pkg_name}';")
-    } else {
-        format!(", initSync }} from \"{pkg_name}\";")
+        from_marker_dq
     };
 
-    if let Some(import_pos) = content.find("import {") {
-        if let Some(from_pos) = content[import_pos..].find(&from_marker) {
-            let full_from_pos = import_pos + from_pos + from_marker.len();
+    // Find the closing `} from "pkg_name";` marker, then search backward for the matching `import {`
+    // to avoid accidentally patching an earlier import statement (e.g. `import { ... } from "vitest"`).
+    if let Some(from_pos) = content.find(&from_marker) {
+        let full_from_pos = from_pos + from_marker.len();
+        // Search backward from from_pos to find the last `import {` or `import init, {` before it.
+        let before_from = &content[..from_pos];
+        if let Some(import_pos) = before_from
+            .rfind("import {")
+            .or_else(|| before_from.rfind("import init, {"))
+        {
             let import_section = &content[import_pos..full_from_pos];
 
-            // Already patched — nothing to do.
-            if import_section.contains("initSync") {
+            // Already patched (contains `import init`) — nothing to do.
+            if import_section.contains("import init,") {
                 return content.to_string();
             }
 
-            let new_import = import_section.replace(&from_marker, &new_from);
+            // wasm-pack exports `init` as the default export, not a named export.
+            // Transform `import { ... }` to `import init, { ... }` so the default
+            // export is bound and `await init()` works at the top level.
+            let new_import = import_section.replacen("import {", "import init, {", 1);
 
+            // Node.js fetch does not support file:// URLs, so we cannot call init() without
+            // arguments (which internally calls fetch on the .wasm file URL). Instead, read the
+            // binary via readFileSync and pass the buffer directly to init(), bypassing fetch.
+            // We resolve the .wasm path from the installed package directory by replacing the .js
+            // main entry extension. Dynamic imports avoid adding new static import statements that
+            // would require import-order adjustments.
             let init_code = format!(
-                r#"import fs from 'fs';
-import path from 'path';
-import {{ fileURLToPath }} from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const wasmPath = path.join(path.dirname(__filename), '../node_modules/{pkg_name}/{wasm_filename}');
-const wasmBuffer = fs.readFileSync(wasmPath);
-initSync({{ module: wasmBuffer }});
-"#
+                concat!(
+                    "await init(\n",
+                    "  (await import(\"node:fs\")).readFileSync(\n",
+                    "    (await import(\"node:module\"))\n",
+                    "      .createRequire(import.meta.url)\n",
+                    "      .resolve(\"{pkg_name}\")\n",
+                    "      .replace(/\\.js$/, \"_bg.wasm\"),\n",
+                    "  ),\n",
+                    ");\n",
+                ),
+                pkg_name = pkg_name,
             );
 
-            return content[..import_pos].to_string()
-                + &new_import
-                + "\n"
-                + &init_code
-                + "\n"
-                + &content[full_from_pos..];
+            return content[..import_pos].to_string() + &new_import + "\n" + &init_code + &content[full_from_pos..];
         }
     }
 

@@ -82,7 +82,12 @@ impl TraitBridgeGenerator for NapiBridgeGenerator {
 
         // Get the JS function from the object
         let js_args_exprs = build_napi_args(method);
-        let args_tuple_ty = unknown_tuple_type(js_args_exprs.len());
+        let inner_tuple_ty = unknown_tuple_type(js_args_exprs.len());
+        let args_tuple_ty = if js_args_exprs.is_empty() {
+            inner_tuple_ty.clone()
+        } else {
+            format!("napi::bindgen_prelude::FnArgs<{inner_tuple_ty}>")
+        };
 
         writeln!(
             out,
@@ -102,13 +107,12 @@ impl TraitBridgeGenerator for NapiBridgeGenerator {
         if js_args_exprs.is_empty() {
             writeln!(out, "let result = func.call(());").ok();
         } else {
-            // Pass args directly as tuple without intermediate variables
             let tuple_str = if js_args_exprs.len() == 1 {
                 format!("({},)", js_args_exprs[0])
             } else {
                 format!("({})", js_args_exprs.join(", "))
             };
-            writeln!(out, "let result = func.call({tuple_str});").ok();
+            writeln!(out, "let result = func.call(napi::bindgen_prelude::FnArgs::from({tuple_str}));").ok();
         }
 
         // Parse result
@@ -188,7 +192,12 @@ impl TraitBridgeGenerator for NapiBridgeGenerator {
 
         // Build the JS function call
         let js_args_exprs = build_napi_args(method);
-        let args_tuple_ty = unknown_tuple_type(js_args_exprs.len());
+        let inner_tuple_ty = unknown_tuple_type(js_args_exprs.len());
+        let args_tuple_ty = if js_args_exprs.is_empty() {
+            inner_tuple_ty.clone()
+        } else {
+            format!("napi::bindgen_prelude::FnArgs<{inner_tuple_ty}>")
+        };
 
         writeln!(
             out,
@@ -202,18 +211,19 @@ impl TraitBridgeGenerator for NapiBridgeGenerator {
         writeln!(out, "    }}").ok();
         writeln!(out, "}};").ok();
 
-        // Pass args directly without intermediate variables to avoid lifetime issues with env
         let tuple_str = if js_args_exprs.is_empty() {
             "()".to_string()
+        } else if js_args_exprs.len() == 1 {
+            format!("({},)", js_args_exprs[0])
         } else {
-            if js_args_exprs.len() == 1 {
-                format!("({},)", js_args_exprs[0])
-            } else {
-                format!("({})", js_args_exprs.join(", "))
-            }
+            format!("({})", js_args_exprs.join(", "))
         };
 
-        writeln!(out, "let result = func.call({tuple_str});").ok();
+        if js_args_exprs.is_empty() {
+            writeln!(out, "let result = func.call({tuple_str});").ok();
+        } else {
+            writeln!(out, "let result = func.call(napi::bindgen_prelude::FnArgs::from({tuple_str}));").ok();
+        }
         writeln!(out, "match result {{").ok();
         let err = spec.make_error(&format!(
             "format!(\"Plugin '{{}}' method '{}' failed: {{}}\", cached_name, e)",
@@ -711,9 +721,16 @@ fn gen_visitor_method_napi(
     writeln!(out, "            return {ret_ty}::Continue;").unwrap();
     writeln!(out, "        }}").unwrap();
 
-    // Get the JS function with the correct tuple arg type
+    // Get the JS function with the correct tuple arg type.
+    // Use FnArgs<(Unknown, ...)> for N>0 args so the macro-generated JsValuesTupleIntoVec
+    // impl is used, which correctly expands each element into a separate NAPI value.
     let arg_count = method.params.len();
-    let args_tuple_ty = unknown_tuple_type(arg_count);
+    let inner_tuple_ty = unknown_tuple_type(arg_count);
+    let args_tuple_ty = if arg_count == 0 {
+        inner_tuple_ty.clone()
+    } else {
+        format!("napi::bindgen_prelude::FnArgs<{inner_tuple_ty}>")
+    };
     writeln!(
         out,
         "        let func: napi::bindgen_prelude::Function<{args_tuple_ty}, napi::bindgen_prelude::Unknown> = match self.obj.get_named_property(\"{js_name}\") {{"
@@ -730,9 +747,7 @@ fn gen_visitor_method_napi(
     } else {
         // Bind env to a named variable so borrows from it outlive the statement.
         writeln!(out, "        let __env = self.env();").unwrap();
-        // Emit each arg as a let binding, then call with tuple
         for (i, expr) in js_args_exprs.iter().enumerate() {
-            // Replace __ENV__ placeholder with the bound variable
             let expr = expr.replace("self.env()", "__env");
             writeln!(out, "        let arg_{i}: napi::bindgen_prelude::Unknown = {expr};").unwrap();
         }
@@ -742,18 +757,38 @@ fn gen_visitor_method_napi(
         } else {
             format!("({})", tuple_args.join(", "))
         };
-        writeln!(out, "        let result = func.call({tuple_str});").unwrap();
+        // Wrap in FnArgs so each element is passed as a separate JavaScript argument.
+        writeln!(out, "        let result = func.call(napi::bindgen_prelude::FnArgs::from({tuple_str}));").unwrap();
     }
 
-    // Parse result
+    // Parse result.
+    // Strategy: only inspect {custom}/{error} properties when the value is a
+    // plain Object. coerce_to_object() succeeds on string primitives too (JS
+    // wraps them in a String object), so get_named_property("custom") on a
+    // string returns Ok(undefined), and coerce_to_string(undefined) yields
+    // the literal "undefined". Check the actual ValueType first.
     writeln!(out, "        match result {{").unwrap();
     writeln!(out, "            Err(_) => {ret_ty}::Continue,").unwrap();
     writeln!(out, "            Ok(val) => {{").unwrap();
-    writeln!(
-        out,
-        "                if let Ok(s) = val.coerce_to_string().and_then(|s| s.into_utf8()).and_then(|s| s.into_owned()) {{"
-    )
-    .unwrap();
+    writeln!(out, "                if val.get_type().ok() == Some(napi::bindgen_prelude::ValueType::Object) {{").unwrap();
+    writeln!(out, "                    if let Ok(obj) = val.coerce_to_object() {{").unwrap();
+    writeln!(out, "                        if let Ok(cv) = obj.get_named_property::<napi::bindgen_prelude::Unknown>(\"custom\") {{").unwrap();
+    writeln!(out, "                            if !matches!(cv.get_type().unwrap_or(napi::bindgen_prelude::ValueType::Undefined), napi::bindgen_prelude::ValueType::Undefined | napi::bindgen_prelude::ValueType::Null) {{").unwrap();
+    writeln!(out, "                                if let Ok(s) = cv.coerce_to_string().and_then(|s| s.into_utf8()).and_then(|s| s.into_owned()) {{").unwrap();
+    writeln!(out, "                                    return {ret_ty}::Custom(s);").unwrap();
+    writeln!(out, "                                }}").unwrap();
+    writeln!(out, "                            }}").unwrap();
+    writeln!(out, "                        }}").unwrap();
+    writeln!(out, "                        if let Ok(ev) = obj.get_named_property::<napi::bindgen_prelude::Unknown>(\"error\") {{").unwrap();
+    writeln!(out, "                            if !matches!(ev.get_type().unwrap_or(napi::bindgen_prelude::ValueType::Undefined), napi::bindgen_prelude::ValueType::Undefined | napi::bindgen_prelude::ValueType::Null) {{").unwrap();
+    writeln!(out, "                                if let Ok(s) = ev.coerce_to_string().and_then(|s| s.into_utf8()).and_then(|s| s.into_owned()) {{").unwrap();
+    writeln!(out, "                                    return {ret_ty}::Error(s);").unwrap();
+    writeln!(out, "                                }}").unwrap();
+    writeln!(out, "                            }}").unwrap();
+    writeln!(out, "                        }}").unwrap();
+    writeln!(out, "                    }}").unwrap();
+    writeln!(out, "                }}").unwrap();
+    writeln!(out, "                if let Ok(s) = val.coerce_to_string().and_then(|s| s.into_utf8()).and_then(|s| s.into_owned()) {{").unwrap();
     writeln!(out, "                    match s.to_lowercase().as_str() {{").unwrap();
     writeln!(out, "                        \"continue\" => {ret_ty}::Continue,").unwrap();
     writeln!(out, "                        \"skip\" => {ret_ty}::Skip,").unwrap();
@@ -767,26 +802,6 @@ fn gen_visitor_method_napi(
         "                        other => {ret_ty}::Custom(other.to_string()),"
     )
     .unwrap();
-    writeln!(out, "                    }}").unwrap();
-    writeln!(
-        out,
-        "                }} else if let Ok(obj) = val.coerce_to_object() {{"
-    )
-    .unwrap();
-    writeln!(out, "                    if let Ok(custom_val) = obj.get_named_property::<napi::bindgen_prelude::Unknown>(\"custom\") {{").unwrap();
-    writeln!(out, "                        if let Ok(s) = custom_val.coerce_to_string().and_then(|s| s.into_utf8()).and_then(|s| s.into_owned()) {{").unwrap();
-    writeln!(out, "                            {ret_ty}::Custom(s)").unwrap();
-    writeln!(out, "                        }} else {{").unwrap();
-    writeln!(out, "                            {ret_ty}::Continue").unwrap();
-    writeln!(out, "                        }}").unwrap();
-    writeln!(out, "                    }} else if let Ok(error_val) = obj.get_named_property::<napi::bindgen_prelude::Unknown>(\"error\") {{").unwrap();
-    writeln!(out, "                        if let Ok(s) = error_val.coerce_to_string().and_then(|s| s.into_utf8()).and_then(|s| s.into_owned()) {{").unwrap();
-    writeln!(out, "                            {ret_ty}::Error(s)").unwrap();
-    writeln!(out, "                        }} else {{").unwrap();
-    writeln!(out, "                            {ret_ty}::Continue").unwrap();
-    writeln!(out, "                        }}").unwrap();
-    writeln!(out, "                    }} else {{").unwrap();
-    writeln!(out, "                        {ret_ty}::Continue").unwrap();
     writeln!(out, "                    }}").unwrap();
     writeln!(out, "                }} else {{").unwrap();
     writeln!(out, "                    {ret_ty}::Continue").unwrap();
@@ -1159,15 +1174,25 @@ pub fn gen_options_field_bridge_function(
     let options_param = &func.params[options_param_idx];
     let options_name = &options_param.name;
 
-    // Check if the options parameter is already Optional
-    let is_param_optional = matches!(&options_param.ty, TypeRef::Optional(_));
+    // Bridge functions always treat the options param as optional: callers may pass
+    // undefined/null (no options) or an options object (with or without visitor).
+    // Even if the IR marks the param as non-optional (e.g. because has_default types
+    // get their Option<> stripped during IR parsing), we force Option<T> behavior here.
+    let is_param_optional = true;
 
-    // Build parameter list (options param stays as is, no special treatment in signature)
+    // Whether the IR already marks the options param as Optional<T>.
+    let ir_param_optional = matches!(&options_param.ty, TypeRef::Optional(_));
+
+    // Build parameter list; force the options param to Option<T> if the IR didn't already.
     let params_str = {
         let mut sig_parts = vec![];
-        for p in &func.params {
+        for (i, p) in func.params.iter().enumerate() {
             let ty = mapper.map_type(&p.ty);
-            sig_parts.push(format!("{}: {}", p.name, ty));
+            if i == options_param_idx && !ir_param_optional {
+                sig_parts.push(format!("{}: Option<{ty}>", p.name));
+            } else {
+                sig_parts.push(format!("{}: {ty}", p.name));
+            }
         }
         sig_parts.join(", ")
     };

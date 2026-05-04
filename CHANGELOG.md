@@ -7,6 +7,173 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.22] - 2026-05-04
+
+### Fixed
+
+- fix(e2e/wasm): `inject_wasm_init` now loads the WASM binary via `readFileSync` and passes the buffer directly to `init()`; Node.js `fetch` does not support `file://` URLs, so the previous `await init()` (no arguments) failed with `TypeError: fetch failed`.
+
+## [0.14.21] - 2026-05-04
+
+### Fixed
+
+- fix(e2e/go): remove `needs_json_stringify` from `needs_json` gating — `jsonString()` lives in `helpers_test.go` which has its own `encoding/json` import; individual test files no longer emit a spurious `import "encoding/json"` that the Go compiler rejects as unused.
+- fix(e2e/typescript): `json_object` args with array values (e.g. batch items) are no longer cast to the `options_type` — only non-array object args receive the interface cast.
+- fix(e2e/typescript): empty-object `json_object` args now emit `{} as OptionsType` (interface cast) instead of `new OptionsType()` (class instantiation); TypeScript options types are interfaces, not classes.
+- fix(e2e/csharp): `json_array_to_csharp_list` now handles typed class element types (e.g. `BatchBytesItem`) by emitting `JsonSerializer.Deserialize<T>(json, ConfigOptions)!` per element; previously fell through to `List<string>` which caused a compile error when the C# binding expects `List<T>`.
+
+- fix(e2e/wasm): `inject_wasm_init` now searches backward from `} from "pkg_name"` to locate the correct `import {` block; previously it matched the first `import {` in the file (the vitest import), corrupting the vitest import line.
+- fix(pyo3-backend): inject `from_json` staticmethod into the existing `#[pymethods]` block instead of emitting a second one; avoids requiring the `multiple-pymethods` pyo3 feature which is not enabled by default.
+- fix(napi-backend): visitor and plugin method calls with N>0 arguments now use `FnArgs::from(tuple)` instead of passing the raw tuple directly; the blanket `JsValuesTupleIntoVec` impl was treating a `(Unknown, Unknown)` tuple as a single NAPI value, causing all extra arguments to arrive as `undefined` in JavaScript callbacks.
+- fix(e2e/csharp): `equals` assertions on optional string fields now emit `field!.Trim()` (null-forgiving) instead of `field.Trim()` to suppress CS8602 nullable warnings.
+- fix(csharp-backend): typed error classes (e.g. `ErrorException`) now inherit from the library's generic fallback exception class (e.g. `TreeSitterLanguagePackException`) instead of `Exception` directly; `Assert.ThrowsAny<LibException>()` now correctly catches typed errors.
+- fix(csharp-backend): `TreeSitterLanguagePackException` (the generic fallback) gains `(string message)` and `(string message, Exception innerException)` constructors so derived error classes can call them without a numeric code.
+- fix(e2e/csharp): use `Assert.ThrowsAny<T>()` / `Assert.ThrowsAnyAsync<T>()` instead of exact `Assert.Throws<T>()` for `is_error` assertions; the base exception class now matches derived exception subclasses (e.g. `ErrorException` from `TreeSitterLanguagePackException`).
+- fix(e2e/csharp): `contains`, `contains_all`, `not_contains`, and `contains_any` assertions on list fields use `JsonSerializer.Serialize(field)` instead of `field.ToString()`; `List<T>.ToString()` returns the type name rather than the contents.
+- fix(e2e/csharp): `result_is_array = true` (simple list results such as `manifest_languages()`) now also serialize via `JsonSerializer.Serialize` for substring assertions, not `result.ToString()`.
+
+## [0.14.20] - 2026-05-04
+
+### Fixed
+
+- fix(rustler-backend): `gen_nif_async_function` no longer double-appends `_async` when the Rust function name already ends with `_async` (e.g. `embed_texts_async` → NIF was `embed_texts_async_async`); the generated NIF name now matches the Elixir native.ex stub.
+- fix(napi-backend): add `#![allow(unsafe_code)]` inner attribute to generated Node.js bindings; NAPI-RS bridge code for trait visitors emits unsafe blocks that were previously rejected by the workspace-level `-D unsafe_code` lint.
+- fix(e2e/wasm): `inject_wasm_init` now adds `init` as the **default** export (`import init, { ... }`) instead of a named export (`import { ..., init }`); wasm-pack exports `init` as a default export, so the named-import form produced `TypeError: init is not a function`.
+- fix(e2e/go): `contains`, `contains_all`, `not_contains`, and `contains_any` assertions on optional array fields no longer emit `jsonString(*field)` (invalid dereference of a Go slice); Go slices are nil-able value types, so `jsonString(field)` is emitted directly with the nil guard on the field unchanged.
+- fix(csharp-backend): `DefaultValue::EnumVariant` for fields whose C# type is `JsonElement` or `JsonElement?` (complex tagged-union enums) now emits `null` instead of `JsonElement.VariantName`, which does not exist in the .NET API.
+
+### Added
+
+- feat(pyo3-backend): generate `from_json(json_str: String) -> PyResult<Self>` staticmethod on all non-opaque struct types with serde and a core→binding `From` conversion. Deserializes via the core type to correctly handle fields with `#[serde(skip)]` (e.g. `Vec<Message>` in `ChatCompletionRequest`). Requires PyO3 ≥ 0.21 (multiple `#[pymethods]` blocks allowed by default).
+- feat(e2e/python): add `"from_json"` mode for `options_via`. When set, generates `OptionsType.from_json(json_str)` instead of a dict or kwargs, allowing typed construction from fixture JSON for types that cannot be constructed via kwargs.
+- feat(e2e/python): add `from_json_module` field to `CallOverride`. When set alongside `options_via = "from_json"`, the `options_type` is imported from this module (e.g., `liter_llm._internal_bindings`) instead of the main public module, supporting PyO3 native types whose `from_json()` exists on the native class only.
+- feat(e2e/python): add `async` field to `CallOverride`. When set, overrides the call-level `async` flag for Python tests only — useful when a binding returns a sync iterator from a call marked async at the call level (e.g., `chat_stream`).
+- fix(e2e/python): use `_alef_e2e_text().lower()` for `equals` assertions on enum fields instead of `.strip()`. PyO3 enum values do not have `.strip()` and their string representation may differ in case from the fixture assertion value.
+
+### Fixed
+
+- fix(e2e/python): resolve `options_type` and `options_via` per-fixture from the per-call Python override (`[crates.e2e.calls.X.overrides.python]`), falling back to the file-level global override. Previously only the global override was used, so per-call overrides had no effect.
+- fix(csharp-backend): `Optional<String>` return types — FFI returns a raw C string, not JSON-encoded; use `Marshal.PtrToStringUTF8` directly instead of `JsonSerializer.Deserialize`, which failed with raw strings not being valid JSON.
+- fix(csharp-backend): `Optional(_)` return types — null pointer means `None` (not found), not an FFI error; generate `return null` instead of `throw GetLastError()` / `throw new ExceptionName(...)` in both top-level methods and opaque type methods.
+- fix(java-backend): use `org.jspecify.annotations.Nullable` instead of `org.jetbrains.annotations.Nullable` in generated record types; aligns with the JSpecify annotations used elsewhere in the Java bindings.
+- fix(magnus-backend): skip `&mut self` methods when registering methods in `gen_module_init`; Magnus's `method!` macro doesn't support mutable receivers, causing a compile error.
+- fix(napi-backend): import `async_trait` when trait bridges are configured; the generated bridge code uses `#[async_trait::async_trait]` but the dependency was missing from the generated Cargo.toml.
+- fix(php-backend): allow `unsafe_code` in generated PHP bindings; `ext-php-rs` macros expand to unsafe blocks, causing clippy to reject with `-D warnings`.
+- fix(e2e/go): move `jsonString` helper into a dedicated `helpers_test.go` file emitted once per package, eliminating duplicate function definition errors when multiple test files needed it.
+- fix(e2e/go): `needs_fmt` calculation now checks `field_resolver.is_valid_for_result(field)` to avoid emitting an unused `fmt` import when an assertion references a field that doesn't exist on the result type.
+- fix(e2e/python): when a fixture argument is an array of objects and `element_type` is declared, construct typed instances (`ElementType(key=value, ...)`) instead of raw dict literals; matches the binding's type-safe API.
+- fix(scaffold/csharp): add `<Compile Include="../src/**/*.cs" />` to the generated `.csproj` so source files from the shared `src/` directory are included in the project build.
+- fix(scaffold/node): add `async-trait = "0.1"` to Node.js Cargo.toml scaffold when trait bridges are configured; the generated bridge code uses `#[async_trait::async_trait]` but the dependency was missing.
+- fix(rustler-backend): declare `visitor_owned_env` as `mut` so `send_and_clear` (which takes `&mut self`) compiles without E0596 borrow error.
+- fix(php-backend): use `!is_php_prop_scalar_with_enums` instead of `type_ref_has_named` when computing `has_named_params` in struct methods codegen, correctly gating named-param constructors on non-scalar fields.
+- fix(pyo3-backend): correct boolean logic in `is_native` computation in `gen_api_py` — options types are now excluded first, then native membership is checked, preventing options types from incorrectly landing in native imports.
+- fix(rustler-backend): replace double-nested `OwnedEnv::run` + `send_and_clear` with a single `send_and_clear` call in the trait bridge field function spawn closure, eliminating a double-borrow that caused BEAM message delivery failures.
+- fix(e2e/wasm): remove `vite-plugin-top-level-await` from generated WASM e2e `package.json` and vitest config; top-level await is natively supported in modern Vite/Vitest without the plugin.
+- fix(napi-backend): force `is_param_optional = true` in bridge functions so options parameters are always treated as `Option<T>` regardless of whether the IR marks them as non-optional.
+- fix(php-backend): add `#[serde(default)]` struct attribute when `has_serde` is enabled, so `from_json()` accepts partial JSON and missing fields use `Default` values instead of failing deserialization.
+- fix(php-backend): always emit `from_json` for has_default structs when `has_serde` is true, preventing broken `__construct` methods with invalid Rust enum defaults (e.g. `BrowserMode::Auto`) that don't exist in the PHP binding's string-mapped enum model.
+- fix(e2e/go): `is_empty` assertions on pointer-to-struct results now generate `if result != nil { ... }` instead of dereferencing and calling `len()` on a struct, which was both invalid and panicked on nil.
+- fix(csharp-backend): add `using System.Collections.Generic;` to generated opaque type source files when any method has a `Vec<T>` parameter or return type.
+- fix(csharp-backend): pass full set of opaque type names to `gen_opaque_handle` so that methods on one opaque type returning another opaque type (e.g. `LanguageRegistry::get_language` → `Language`) wrap the pointer with `new Language(ptr)` instead of incorrectly calling the non-existent `LanguageToJson` FFI.
+
+## [0.14.19] - 2026-05-04
+
+### Fixed
+
+- fix(scaffold/python): add `async-trait` dependency to Python Cargo.toml scaffold when trait bridges are configured.
+- fix(scaffold/php): add `async-trait` dependency to PHP Cargo.toml scaffold when trait bridges are configured.
+- fix(e2e/c): derive header name from `ffi.header_name` config and lib name from `ffi.lib_name` when package-level overrides are absent.
+- fix(e2e/go): fix array-assertion detection to correctly check `result_is_array` when no field is specified, without falling through to field-level `is_array` check.
+- fix(e2e/ruby): call `.to_s` before `.strip` on simple result fields; call `.to_s` before `not_to be_empty` for simple result fields.
+
+## [0.14.18] - 2026-05-04
+
+### Fixed
+
+- fix(scaffold/ffi): add `async-trait` dependency to FFI Cargo.toml scaffold when trait bridges are configured. When the config has trait bridges, the generated FFI `lib.rs` uses `#[async_trait::async_trait]` for trait bridge implementations, but the dependency was missing from the generated Cargo.toml, causing compilation errors.
+
+## [0.14.17] - 2026-05-04
+
+### Fixed
+
+- fix(scaffold/rustler): remove unused `futures-util` dependency from Rustler NIF Cargo.toml scaffold. When `has_async=true`, the dependency was added speculatively but the generated Rustler code never imports it, causing `cargo-machete` to flag it as unused.
+
+## [0.14.16] - 2026-05-04
+
+### Fixed
+
+- fix(scaffold): `alef all --clean` now force-regenerates scaffold files (Cargo.toml templates, gemspec, etc.) matching the behaviour of README and e2e file writes. Previously scaffold files were never overwritten by `--clean`, leaving stale content (e.g. removed `[lints]` section) on disk indefinitely.
+
+- fix(scaffold/php): downgrade `ext-php-rs` template version from `0.15.12` back to `0.15.4`. Version 0.15.12 introduced an `ext-php-rs-clang-sys` fork that conflicts with `clang-sys` when `kreuzberg-php` is a member of a shared Cargo workspace.
+
+- fix(pyo3): coerce enum fields in dict input before constructing dataclass. When a config dict (e.g. `ExtractionConfig`) contains an enum-typed field, the dict→dataclass path now converts the string value to the correct Python enum member before calling `DataClass(**value)`.
+
+- fix(rustler): extend visitor callback return handler to recognise all `CallbackAction` variants. Previously only `is_binary(result)` was checked; `:continue`, `:skip`, `:preserve_html`, and `{:custom, value}` tuples are now handled correctly.
+
+- fix(e2e/csharp): normalise enum field values to lowercase before serialising fixture input JSON. C# `JsonStringEnumConverter` emits lowercase names; passing PascalCase values (e.g. `"Tildes"`) from fixtures caused deserialization mismatches.
+
+- fix(e2e/elixir): include fixtures that use `client_factory` override when computing `has_mock_server_tests` in the test module header. Previously only fixtures that called `needs_mock_server()` were counted, causing the mock server setup to be omitted for client-factory fixtures.
+
+- fix(e2e/python): include fixtures that use a `client_factory` Python override when computing `has_http_fixtures` in `conftest.py`. Same root cause as the Elixir fix above.
+
+## [0.14.15] - 2026-05-04
+
+### Fixed
+
+- fix(e2e/go-codegen): exclude mock-only fixtures from `needs_pkg` import check. Mock fixtures with no real function calls were incorrectly triggering conditional imports.
+
+- fix(e2e/ruby-scaffold): remove `[lints] workspace = true` from excluded-workspace Magnus Cargo.toml. The lints section is inherited from workspace config, but packages/ruby/ext/kreuzberg_rb/ is excluded from the workspace, so `workspace = true` failed with "cannot find workspace root". Removed the lints section from the generated Cargo.toml template.
+
+- fix(e2e/php-codegen): strip namespace prefix from class names in use statements. When class override contains a namespace (e.g. `Kreuzberg\Kreuzberg`), extract just the class name to avoid triple-nested namespaces like `use Kreuzberg\Kreuzberg\Kreuzberg;`. Now correctly emits `use Kreuzberg\Kreuzberg;`.
+
+## [0.14.14] - 2026-05-04
+
+### Fixed
+
+- fix(java-backend): `Duration` fields map to boxed `Long` in Java; compact constructor defaults emitted as bare integer literals (e.g. `30000`) failed to compile because `int` does not auto-box to `Long`. Now appends `L` suffix so the literal is a `long` that Java auto-boxes correctly.
+
+- fix(magnus-backend): emit a `_refs: Vec<&str>` intermediate binding when a `Vec<String>` parameter is passed by reference to a core function expecting `&[&str]`. Previously the generated code passed `&Vec<String>` directly, which mismatches the `&[&str]` signature and fails to compile.
+
+- fix(rustler-backend): same `Vec<String>` → `&[&str]` refs intermediate for Rustler/Elixir bindings (mirrors the Magnus fix above).
+
+- fix(napi-backend): use `.into()` (`FnArgs`) when calling visitor JS callbacks with more than one argument. Single-argument calls are unaffected; multi-argument calls previously passed a raw tuple that NAPI-RS did not unpack correctly to JavaScript.
+
+- fix(cache): include alef binary identity (mtime + size) in `compute_lang_hash` and `compute_stage_hash` so locally rebuilt binaries always invalidate stale caches without requiring a version bump. Previously a rebuild with code changes would reuse the old cached output.
+
+- fix(e2e-elixir): rewrite `alef_e2e_item_texts` helper to use `Enum.flat_map` with a `case` expression instead of `Enum.map(fn attr -> item |> Map.get(attr) |> to_string() end)`. `to_string/1` raises `ArgumentError` on atom values (e.g. enum variants); the new form guards `is_atom` and capitalises separately.
+
+- fix(e2e-go): use `len(slice)` instead of `len(*slice)` for optional slice-typed fields in `not_empty`, `empty`, `min_elements`, and `max_elements` assertions. Go slice optionals are value types, not pointer-to-slice, so dereferencing them was a compile error.
+
+- fix(e2e-typescript): convert `{placeholder}` syntax to `${placeholder}` in `CustomTemplate` visitor method bodies so the emitted string is a valid JavaScript template literal.
+
+- fix(e2e-go): include fmt import when `needs_json_stringify` is true, since the `jsonString` helper uses `fmt.Sprint`. Previously tests with array field `contains` assertions failed to compile with "undefined: fmt".
+
+- fix(e2e-csharp): add missing `using static {namespace}.{class_name};` directive to test file headers so static method calls to the binding class resolve without full qualification.
+
+- fix(e2e-java): add `org.jetbrains:annotations:24.1.0` dependency to generated pom.xml. E2e tests use `@NotNull`/`@Nullable` annotations from this package.
+
+- fix(e2e-elixir): skip batch functions in generated tests with `@tag :skip`. Batch functions (`batch_extract_*`) are excluded from the Elixir binding due to unsafe NIF tuple marshalling; tests now emit a documented skip rather than failing to compile.
+
+## [0.14.13] - 2026-05-04
+
+### Fixed
+
+- fix(e2e-go): propagate call-level `result_is_array` to Go generator. Previously only Go-specific overrides were checked, so call-level `result_is_array = true` was ignored, causing `value := *result` dereference errors for slice return types like `[]string`.
+
+## [0.14.12] - 2026-05-04
+
+### Fixed
+
+- fix(pyo3): use `val.kind.into()` instead of `Default::default()` for data enum fields in `From` impls. Data enums (like `StructureKind`) were added to `opaque_names_set` which caused the conversion generator to treat their fields as opaque and emit `Default::default()`. A separate `conversion_opaque_set` now excludes data enum names so their fields convert correctly with `.into()`.
+
+- fix(e2e-ruby): use per-item text check for array field `contains` assertions. Previously `result.structure.to_s` produced an object-repr string that never matched the expected value. Now generates `array.any? { |item| alef_e2e_item_texts(item).any? { |t| t.include?(val) } }` using a shared helper method.
+
+- fix(e2e-elixir): use `Enum.any?` for array field `contains` assertions instead of `to_string` on list. `to_string/1` on an Elixir list raises `ArgumentError`; now generates a per-item traversal using a shared `alef_e2e_item_texts/1` helper.
+
+- fix(e2e-go): skip nil check and pointer dereference for `result_is_array` slice results. Go slice types (`[]string`) are not pointers, so the generated `if result == nil` check and `value := *result` dereference were compile errors. Array results now use `value := result` directly.
+
+- fix(magnus-backend): add `options_field` visitor bridge support. The Magnus Ruby backend now generates proper wrapper functions for trait bridges using `bind_via = "options_field"` binding style. Previously only `bind_via = "function_param"` was supported, causing e2e tests to fail when trying to pass a visitor as a secondary argument to functions like `convert(html, visitor)`.
+
 ## [0.14.11] - 2026-05-03
 
 ### Fixed

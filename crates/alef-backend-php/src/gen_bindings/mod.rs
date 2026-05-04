@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use crate::naming::php_autoload_namespace;
 use functions::{gen_async_function_as_static_method, gen_function_as_static_method};
 use helpers::{
-    gen_enum_tainted_from_binding_to_core, gen_serde_bridge_from, gen_tokio_runtime, has_enum_named_field,
+    gen_enum_tainted_from_binding_to_core, gen_tokio_runtime, has_enum_named_field,
     references_named_type,
 };
 use types::{
@@ -129,6 +129,7 @@ impl Backend for PhpBackend {
         // Build the inner module content (types, methods, conversions)
         let mut builder = RustFileBuilder::new().with_generated_header();
         builder.add_inner_attribute("allow(dead_code, unused_imports, unused_variables)");
+        builder.add_inner_attribute("allow(unsafe_code)");
         builder.add_inner_attribute("allow(clippy::too_many_arguments, clippy::let_unit_value, clippy::needless_borrow, clippy::map_identity, clippy::just_underscores_and_digits, clippy::unnecessary_cast, clippy::unused_unit, clippy::unwrap_or_default, clippy::derivable_impls, clippy::needless_borrows_for_generic_args, clippy::unnecessary_fallible_conversions)");
         builder.add_import("ext_php_rs::prelude::*");
 
@@ -401,14 +402,13 @@ impl Backend for PhpBackend {
                     &core_import,
                     &php_conv_config,
                 ));
-            } else if input_types.contains(&typ.name) && enum_tainted.contains(&typ.name) && has_serde {
-                // Enum-tainted types can't use field-by-field From (no From<String> for core enum),
-                // but when serde is available we bridge via JSON serialization round-trip.
-                builder.add_item(&gen_serde_bridge_from(typ, &core_import));
             } else if input_types.contains(&typ.name) && enum_tainted.contains(&typ.name) {
                 // Enum-tainted types: generate From with string->enum parsing for enum-Named
                 // fields, using first variant as fallback. Data-variant enum fields fill
                 // data fields with Default::default().
+                // Note: JSON roundtrip was previously used when has_serde=true, but that
+                // breaks on non-optional Duration fields (null != u64) and empty-string enum
+                // fields ("" is not a valid variant). Field-by-field conversion handles both.
                 builder.add_item(&gen_enum_tainted_from_binding_to_core(
                     typ,
                     &core_import,

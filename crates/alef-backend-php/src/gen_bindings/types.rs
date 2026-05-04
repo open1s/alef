@@ -129,22 +129,34 @@ pub(crate) fn gen_php_struct(
     // no automatic attribute; instead a `#[php(getter)]` method is generated separately in
     // `gen_struct_methods`.
     let field_attrs_fn = |field: &FieldDef| -> Vec<String> {
-        if is_php_prop_scalar_with_enums(&field.ty, enum_names) {
+        let mut attrs = if is_php_prop_scalar_with_enums(&field.ty, enum_names) {
             // Use php(rename) to keep snake_case naming consistent with getter properties.
             // Without this, ext-php-rs auto-converts to camelCase for #[php(prop)] fields.
             vec![format!("php(prop, name = \"{}\")", field.name)]
         } else {
             vec![]
+        };
+        // Non-optional Duration fields are stored as Option<i64> when has_serde is enabled
+        // (option_duration_on_defaults). When None, serde serializes them as JSON null, but
+        // the core Duration field uses a custom duration_ms deserializer that rejects null.
+        // Skip-serializing None ensures the field is omitted so the core uses its default.
+        if cfg.has_serde && matches!(field.ty, TypeRef::Duration) && !field.optional {
+            attrs.push("serde(skip_serializing_if = \"Option::is_none\")".to_string());
         }
+        attrs
     };
 
     if cfg.has_serde {
-        // Build a modified config that also derives Serialize + Deserialize.
+        // Build a modified config that also derives Serialize + Deserialize, and adds
+        // #[serde(default)] so from_json() works with partial JSON (missing fields use
+        // their Default values instead of failing deserialization).
         let mut extra_derives: Vec<&str> = cfg.struct_derives.to_vec();
         extra_derives.push("serde::Serialize");
         extra_derives.push("serde::Deserialize");
+        let mut serde_struct_attrs: Vec<&str> = effective_struct_attrs.to_vec();
+        serde_struct_attrs.push("serde(default)");
         let modified_cfg = RustBindingConfig {
-            struct_attrs: effective_struct_attrs,
+            struct_attrs: &serde_struct_attrs,
             field_attrs: cfg.field_attrs,
             struct_derives: &extra_derives,
             method_block_attr: cfg.method_block_attr,
@@ -173,18 +185,6 @@ pub(crate) fn gen_php_struct(
             ..*cfg
         };
         generators::gen_struct_with_per_field_attrs(typ, mapper, &modified_cfg, field_attrs_fn)
-    }
-}
-
-/// Return true if a TypeRef contains a Named type (another struct/class that
-/// ext-php-rs cannot deserialize from a PHP value as an owned parameter).
-pub(crate) fn type_ref_has_named(ty: &alef_core::ir::TypeRef) -> bool {
-    use alef_core::ir::TypeRef;
-    match ty {
-        TypeRef::Named(_) => true,
-        TypeRef::Optional(inner) | TypeRef::Vec(inner) => type_ref_has_named(inner),
-        TypeRef::Map(k, v) => type_ref_has_named(k) || type_ref_has_named(v),
-        _ => false,
     }
 }
 
@@ -249,28 +249,31 @@ fn gen_struct_methods_impl(
     impl_builder.add_attr("php_impl");
 
     if !typ.fields.is_empty() {
-        let has_named_params = typ.fields.iter().any(|f| type_ref_has_named(&f.ty));
-        if has_named_params {
-            if has_serde {
-                let constructor = "pub fn from_json(json: String) -> PhpResult<Self> {\n    \
-                     serde_json::from_str(&json)\n        \
-                     .map_err(|e| PhpException::default(e.to_string()))\n\
-                     }"
-                .to_string();
-                impl_builder.add_method(&constructor);
-            } else {
-                let constructor = format!(
-                    "pub fn __construct() -> PhpResult<Self> {{\n    \
-                     Err(PhpException::default(\"Not implemented: constructor for {} requires complex params\".to_string()))\n\
-                     }}",
-                    typ.name
-                );
-                impl_builder.add_method(&constructor);
-            }
+        let has_named_params = typ.fields.iter().any(|f| !is_php_prop_scalar_with_enums(&f.ty, enum_names));
+        // When has_serde and the struct has defaults, always emit from_json so callers can
+        // use partial JSON. PHP enum fields map to String in the binding; their Rust-native
+        // defaults (e.g. BrowserMode::Auto) are not valid in the generated binding code, so
+        // a PHP kwargs __construct would fail to compile for any struct with enum-typed fields.
+        let use_from_json = has_serde && (has_named_params || typ.has_default);
+        if use_from_json {
+            let constructor = "#[php(name = \"from_json\")]\npub fn from_json(json: String) -> PhpResult<Self> {\n    \
+                 serde_json::from_str(&json)\n        \
+                 .map_err(|e| PhpException::default(e.to_string()))\n\
+                 }"
+            .to_string();
+            impl_builder.add_method(&constructor);
+        } else if has_named_params {
+            let constructor = format!(
+                "pub fn __construct() -> PhpResult<Self> {{\n    \
+                 Err(PhpException::default(\"Not implemented: constructor for {} requires complex params\".to_string()))\n\
+                 }}",
+                typ.name
+            );
+            impl_builder.add_method(&constructor);
         } else {
             let map_fn = |ty: &alef_core::ir::TypeRef| mapper.map_type(ty);
             if typ.has_default {
-                // kwargs-style constructor: all fields optional with defaults
+                // kwargs-style constructor: all fields optional with defaults (no serde, no Named fields)
                 let config_method = alef_codegen::config_gen::gen_php_kwargs_constructor(typ, &map_fn);
                 impl_builder.add_method(&config_method);
             } else {
@@ -452,7 +455,7 @@ pub(crate) fn gen_flat_data_enum_methods(enum_def: &EnumDef, mapper: &PhpMapper)
     impl_builder.add_attr("php_impl");
 
     // from_json constructor so PHP can construct the value.
-    let from_json = "pub fn from_json(json: String) -> PhpResult<Self> {\n    \
+    let from_json = "#[php(name = \"from_json\")]\npub fn from_json(json: String) -> PhpResult<Self> {\n    \
         serde_json::from_str(&json)\n        \
         .map_err(|e| PhpException::default(e.to_string()))\n\
         }"
